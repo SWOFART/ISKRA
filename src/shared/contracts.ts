@@ -91,6 +91,7 @@ const mediaUrl = string(1, 2048).refine((v) => {
 export const PhotoSchema = object({
   id: UuidSchema, ordinal: number(1, 5, true), mediaUrl, expiresAt: TimestampSchema,
 });
+export type Photo = Infer<typeof PhotoSchema>;
 const gallery = (min: number) => array(PhotoSchema, min, 5).refine(
   (v) => new Set(v.map((p) => p.id)).size === v.length
     && v.every((p, i) => p.ordinal === i + 1), 'Photos must be unique and ordered from ordinal 1');
@@ -149,6 +150,15 @@ export const ViewerReportDetailSchema = object({ ...detailFields, viewer: Viewer
   'Permission requires an open operation');
 export const ReportDetailSchema = union(PublicReportDetailSchema, ViewerReportDetailSchema);
 export const ReportListSchema = object({ items: array(ReportSummarySchema, 0, 100), nextCursor: nullable(string(1, 512)) });
+export const ReportListQuerySchema = object({
+  city: string(1, 64).refine((v) => v === 'heilbronn', 'Unsupported city'),
+  route: nullable(RouteSchema),
+  needsVerification: boolean,
+  includeResolved: boolean,
+  limit: number(1, 100, true),
+  cursor: nullable(string(1, 128)),
+});
+export type ReportListQuery = Infer<typeof ReportListQuerySchema>;
 
 export const RetakeReasonSchema = enumeration([
   'INSUFFICIENT_EVIDENCE', 'DIFFERENT_SCENE', 'LITTER_REMAINING', 'HAZARD_REMAINING',

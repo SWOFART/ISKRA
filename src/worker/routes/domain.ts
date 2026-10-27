@@ -5,6 +5,8 @@ import { verifyFirebaseToken } from '../middleware/auth';
 import type { WorkerEnv } from '../middleware/context';
 import { ApiError } from '../middleware/errors';
 import { createMeRoutes } from './me';
+import { createReportRoutes } from './reports';
+import type { ReportMediaResolver } from '../services/report-context';
 
 const unavailable = () => {
   const policy = API_ERROR_POLICY.UNAVAILABLE;
@@ -13,13 +15,17 @@ const unavailable = () => {
 
 export interface DomainRouteDependencies {
   readonly database?: TransactionDatabase;
+  readonly reportMedia?: ReportMediaResolver;
   readonly verify?: typeof verifyFirebaseToken;
 }
 
 /** B-owned domain route mount. C mounts this facade under /api and injects runtime dependencies. */
-export function createDomainRoutes({ database, verify }: DomainRouteDependencies = {}) {
+export function createDomainRoutes({ database, reportMedia, verify }: DomainRouteDependencies = {}) {
   const routes = new Hono<WorkerEnv>();
-  if (database) routes.route('/', createMeRoutes({ database, verify }));
+  if (database) {
+    routes.route('/', createMeRoutes({ database, verify }));
+    routes.route('/', createReportRoutes({ database, media: reportMedia, verify }));
+  }
   else routes.post('/me/bootstrap', unavailable);
 
   return routes

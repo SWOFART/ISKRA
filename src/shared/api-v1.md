@@ -80,6 +80,14 @@ Conditional Yellow, Red and rewards routes are outside this P0 API candidate. Th
 
 `currentStage` identifies the primary UI focus; it is not the only open purpose. An unresolved report in `AWAITING_RESOLUTION` exposes `openVoteStages:["EXISTENCE","RESOLUTION"]`. Each `VoteRequest` names exactly one stage and uses its own key/semantic uniqueness `(reportId,stage,userId)`. The same resident may vote once at each stage if independently eligible; reporter/cleaner exclusions and prior-vote checks are stage-specific. Existence YES support remains uncapped until the report is `RESOLVED`; resolution YES remains bounded at 3.
 
+### Report reads
+
+- `GET /api/reports` defaults to `city=heilbronn`, `limit=50`, `needsVerification=false` and `includeResolved=false`. Optional filters are `route=GREEN|YELLOW|RED`, `needsVerification=true|false`, `includeResolved=true|false`, `limit=1..100` and the `cursor` returned by the previous page. Unknown or duplicate query parameters and unsupported cities return `INVALID_INPUT`; pagination is citywide and does not accept viewport bounds.
+- `needsVerification=true` returns citywide `AWAITING_EXISTENCE` and `AWAITING_RESOLUTION` reports. For authenticated viewers, a report remains visible while at least one open stage is still eligible: a prior existence vote does not hide a newly opened resolution stage, and a prior resolution vote does not hide continued existence support. `VERIFIED` reports are not mislabeled as awaiting their initial three confirmations, while their unresolved existence-support stage remains available in detail and ordinary list results.
+- `GET /api/reports/{id}` is public with optional Firebase authentication. The public projection includes support counts/timestamps and allowlisted author/cleaner identities. An authenticated projection adds stage-specific `canVote`/`hasVoted` hints and cleanup permission; it never includes vote choices or balances. Services must re-check permission and location inside the authoritative mutation transaction.
+- Detail photo URLs are supplied through C's `ReportMediaResolver` boundary from attached photo IDs only. A capability must be HTTPS, scoped, and unexpired; no object key or listing is part of the response. If runtime media resolution is not injected, detail returns `UNAVAILABLE` rather than fabricating a URL.
+- C reads cleanup analysis context through `ReportContextReader`; its PostgreSQL implementation returns only verified GREEN reports and hashes the ordered immutable photo IDs/content digests. Private measured locations and voter identities are not returned.
+
 | Ledger category | Credit condition | Amount | Impact treatment |
 |---|---|---:|---|
 | `REPORT_INITIAL` | First committed publication | +5 | Reporter earned; 15 remains pending toward that report's 20 total |
