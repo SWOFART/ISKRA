@@ -232,6 +232,23 @@ Rechecked on 2026-10-27 without provisioning resources, enabling billing/APIs, c
 
 Current [Gemini rate-limit documentation](https://ai.google.dev/gemini-api/docs/rate-limits) requires checking the actual project's active limits rather than inferring capacity from a key or a generic advertised tier. No model/version/quota is approved by these probes. Issue #8 remains open because the account/budget/domain/model requirements are incomplete. These blockers affect live provisioning and G1, not disposable local tests.
 
+### Recheck on 2026-10-28 — issue #8
+
+Read-only checks in the current workstation session reconfirmed the project and narrowed the setup blockers. No API was enabled, secret changed, resource created, or deployment run. For environment secrets, the CLI parsed only key names, the `DEPLOY_ENABLED` state, and presence booleans; it did not print or save secret values.
+
+| Probe | Verified result | Consequence |
+|---|---|---|
+| Google project metadata | `iskra-512914` is ACTIVE; project number `976498049675` | Project identity is confirmed. |
+| Secret Manager | API enabled; `iskra-staging-env` and `iskra-production-env` each have enabled version 1 | The environment records exist. |
+| Environment JSON shape | Both records contain only `DEPLOY_ENABLED="false"`; Cloudflare token/account ID, `APP_URL`, Gemini, media-signing, Firebase browser and MapTiler values are absent | This agrees with disabled deployment; app/staging and production are not configured. The existing deploy workflow skips build/deploy/smoke when disabled. Latest observed develop workflow run [40600990343](https://github.com/SWOFART/ISKRA/actions/runs/40600990343) completed its validation and skipped those deployment steps. |
+| Project billing state | `billingEnabled: true` | Billing is attached; the spending owner, cap/alert limits and teardown date remain unknown. This status does not approve new resource spend. |
+| Cloud SQL | Cloud SQL Admin API is disabled; listing reported `SERVICE_DISABLED` and offered activation | No instance inventory can be inferred. Do not enable the API or provision an instance until ownership, budget and network plan are confirmed. |
+| Cloudflare R2 | `wrangler r2 bucket list` returned error 10042 and asked to enable R2 | R2 is not available to this account session yet; no bucket is confirmed or created. Account-side activation remains required. |
+| Cloudflare Hyperdrive | `wrangler hyperdrive list` returned no configurations | There is no observed ISKRA Hyperdrive binding/configuration. No SQL connectivity or TLS check has run. |
+| Local CLI identities | Google Cloud CLI and Wrangler OAuth resolve to an existing collaborator account, separate from the GitHub commit identity configured in this checkout | This proves only the current collaborator session's read access. It is not the Google keyless CI identity or the product's Cloudflare deployment credential. No Cloudflare account ID or OAuth token is recorded here. |
+
+The app hostname, Firebase authorized product domain/provider state, restricted MapTiler origins, Gemini model/quota, spending cap and teardown remain unverified in this recheck. Firebase provider state in the preceding section is historical evidence from 2026-10-27, not a new check. Issue #8 remains open. The Cloudflare workflow's successful run must not be described as a deploy: the recorded deploy/build/smoke steps were skipped because Google configuration disabled deployment.
+
 ## Client/Worker integration — task 2.3 / issue #12
 
 Person C's integration branch includes A's exact client commit `399bbab4ea1a67ef1a2ed4a6b739d9b41c748225` from PR #75, preserving its author and client files. Review the combined client/integration candidate: it includes both sides of the task 2.1/2.3 handoff without requiring either incomplete foundation to merge first. If #75 merges separately, this PR's diff naturally narrows; any changed review base needs a fresh Gate A. C explicitly accepts and owns A's `jsx: preserve` configuration line, expands TS coverage to all client TSX files and adds Vite's CSS/import types. This resolves configuration coordination; it does not replace independent review or change #75's recorded FAIL verdict.
