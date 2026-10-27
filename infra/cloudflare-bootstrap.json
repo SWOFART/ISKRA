@@ -1,0 +1,17 @@
+{
+  "project_id": "iskra-512914",
+  "repository_id": "1435816128",
+  "workload_identity_provider": "projects/976498049675/locations/global/workloadIdentityPools/iskra-github/providers/github",
+  "environments": {
+    "staging": {
+      "branch": "develop",
+      "service_account": "iskra-ci-staging@iskra-512914.iam.gserviceaccount.com",
+      "secret": "iskra-staging-env"
+    },
+    "production": {
+      "branch": "main",
+      "service_account": "iskra-ci-production@iskra-512914.iam.gserviceaccount.com",
+      "secret": "iskra-production-env"
+    }
+  }
+}

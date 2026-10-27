@@ -26,11 +26,16 @@ The user-provided tunnel `c0c32852-fe5d-4a65-af4c-058cdf786627` is reserved for 
 - Pull requests and pushes to `main`/`develop` run repository checks and the deployment-check Worker tests/build. Application checks become mandatory when `package.json` is added: a lockfile, `typecheck`, `test:unit`, `build`, and project-local Wrangler are required.
 - Changes on `develop` can deploy to `staging` after CI passes and deployment is enabled. Until the root application exists, this deploys only the infrastructure-check Worker.
 - Production deployment is a manual **Deploy to Cloudflare** workflow run from `main`.
-- Deployment starts disabled (`CLOUDFLARE_DEPLOY_ENABLED=false`). A tunnel ID and a local Cloudflare sign-in do not authorize GitHub Actions.
+- All environment values and keys come from **Google Cloud Secret Manager** in project `iskra-512914`. GitHub settings contain no environment variables or secrets. Keyless Google federation is used by CI; `.env.example` contains key names only.
+- Deployment starts disabled in the Google configuration (`DEPLOY_ENABLED=false`). Actual values will be populated there later; a tunnel ID is not a deployment credential.
 - A passing CI or deployment-check Worker is not evidence of a working product application. See the [activation checklist](infra/runbook.md#activate-deployment).
 
 No Docker image build, container registry or image update pipeline is needed for the selected Workers deployment.
 
-## Next session
+## Git identity
 
-After repository/tooling setup, polish the final plan and split implementation between three people. Do not start product implementation or create the team split automatically during setup.
+Commits and pushes use **kapustazh**, with GitHub privacy email `51422901+kapustazh@users.noreply.github.com`. The earlier setup commits were rewritten at the user's request.
+
+## Current scope
+
+Deployment and CI/CD only. Product work and team coordination are handled separately; this setup does not assign people, split implementation tasks or start product features.

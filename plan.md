@@ -16,7 +16,8 @@ Build **ISKRA**, a mobile-first web application for the Green City Hackathon in 
 - **APPROVED DESIGN-SOURCE DECISION (2026-10-27):** use the team's Miro UX decisions and UI concepts as the primary UX/design starting point. Keep Villa Borghese as the sole external design reference. The other previously suggested Behance references and the visual recommendation derived from them have been removed.
 - **APPROVED REPOSITORY DECISION (2026-10-27):** [SWOFART/ISKRA](https://github.com/SWOFART/ISKRA) is the canonical repository; root `plan.md` is the implementation/documentation base. The remote initially contained only its MIT `LICENSE`, which is preserved. README, infrastructure runbook and GitHub Actions are part of the separately authorized setup; there is no product application manifest/source or migration yet. An isolated infrastructure-only Worker under `infra/deployment-check` is authorized solely to test Wrangler deployment; it does not implement the product.
 - **CONFIRMED HOSTING DECISION (2026-10-27):** Cloudflare hosts production through Workers, so it remains available when the developer computer is off. After clarifying the difference, this supersedes the temporary request for production hosting through a tunnel. Tunnel `c0c32852-fe5d-4a65-af4c-058cdf786627` is recorded for development previews; hostname/connector status are not verified and it is not a deployment credential.
-- **SETUP STOP POINT:** complete repository/CI wiring and local CLI installation only. Then polish this plan and divide implementation between **three people** in a subsequent session; do not begin product implementation or create a detailed team split now.
+- **CONFIRMED CONFIGURATION DECISION (2026-10-27):** Google Cloud project **`iskra-512914`** is the source for all environment values and application/deployment keys. Do not store them in GitHub settings. CI uses keyless Google Workload Identity Federation, fetches environment configuration from Secret Manager, and syncs runtime values into Cloudflare at deployment. Root `.env.example` contains key names with blank values only. Only the public authentication bootstrap identifiers are committed.
+- **CURRENT SCOPE (latest user instruction):** deployment and CI/CD only. Product implementation and team coordination are handled separately; do not split work between people or start product features in this task.
 
 ### Delivery target
 
@@ -97,6 +98,8 @@ flowchart LR
     SQL[Cloud SQL PostgreSQL\nrestricted network + verified TLS]
     AI[Gemini multimodal API]
     GCS[GCS private bucket\nalternative only]
+    GSM[Google Secret Manager\nenvironment and key source]
+    GID[Google Workload Identity Federation]
   end
   SPA -->|login| AUTH
   AUTH -->|ID token| SPA
@@ -107,6 +110,9 @@ flowchart LR
   API -.->|if storage decision changes| GCS
   MAP -->|origin-restricted public key| MT[MapTiler styles / tiles]
   GH[GitHub CI / approved release] -->|test + build + deploy| CF
+  GH -->|short-lived OIDC identity| GID
+  GID -->|environment-scoped access| GSM
+  GSM -->|deployment-time runtime copies| SEC
 ```
 
 Recommendations: one package manifest, one Worker deployment per environment, one PostgreSQL database per environment. No browser database access. Browser location, comments, filenames, AI output and bearer tokens all cross validation boundaries. SQL remains the authority for statuses, permissions and money-like points.
@@ -508,7 +514,7 @@ Browser Firebase SDK obtains ID token, Worker validates it with a Workers-compat
 
 ## 11. Google Cloud + Cloudflare deployment runbook
 
-Current repository-specific setup and activation instructions live in [infra/runbook.md](infra/runbook.md). The canonical source is [SWOFART/ISKRA](https://github.com/SWOFART/ISKRA). GitHub Actions deploys Workers; `develop` is the staging/test branch and `main` is production. The existing development tunnel is independent of production. No Docker image/registry/update pipeline is needed. Account IDs, custom domains, deployed bindings and credentials remain unset until selected and authorized.
+Current repository-specific setup and activation instructions live in [infra/runbook.md](infra/runbook.md). The canonical source is [SWOFART/ISKRA](https://github.com/SWOFART/ISKRA). GitHub Actions deploys Workers; `develop` is the staging/test branch and `main` is production. The existing development tunnel is independent of production. No Docker image/registry/update pipeline is needed. Project `iskra-512914`, keyless identity federation and disabled environment configuration records are configured. Product key values, custom domains and bindings remain pending; all environment values are sourced from Google rather than GitHub settings.
 
 ### Provisioning order and prerequisites
 
@@ -518,7 +524,7 @@ Current repository-specific setup and activation instructions live in [infra/run
 4. **Selected connectivity recommendation, to validate H0–H4:** Cloud SQL public endpoint restricted to the current documented Hyperdrive/Cloudflare source IP ranges, plus temporary named developer `/32` if needed. No `0.0.0.0/0`. Require authenticated encrypted database connections and certificate validation; verify origin CA/server identity settings against current Hyperdrive TLS support. Reject unverified TLS / `rejectUnauthorized:false`. Store origin credentials in Hyperdrive configuration, not browser or repository.
 5. [Cloudflare's Cloud SQL guide](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/postgres-database-providers/google-cloud-sql/) permits restricted ranges; use the authoritative [Hyperdrive networking guide](https://developers.cloudflare.com/hyperdrive/configuration/firewall-and-networking-configuration/) to record the actual current allowlist. This is a public-address design with shared Cloudflare source ranges, **not** private networking or a source identity guarantee. Credentials/TLS remain essential. Review IP-range changes and Cloud SQL allowlist quotas. If policy forbids this topology or certificate compatibility fails, timebox private Workers VPC/managed cloud connectivity feasibility; do not silently open the database or replace PostgreSQL. Any additional connector runs in cloud infrastructure, never a laptop tunnel. This fallback is a schedule risk, not an already verified configuration.
 6. Create Hyperdrive binding `HYPERDRIVE`, **disable query caching**, verify actual remote settings. [Caching is enabled by default](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/); read-after-write tests are an explicit deployment gate. Do not assume SQL writes invalidate all cached selects. Test `pg` with `nodejs_compat` and a pinned compatible Worker date using the [node-postgres integration](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/).
-7. Create private R2 bucket per environment, bind `PHOTOS`. Provision upload HMAC secret and Gemini key via Workers Secrets. Disable public bucket access. If GCS selected, replace this step with dedicated bucket IAM/service-account design and validated Worker signing, adding time to the estimate.
+7. Create private R2 bucket per environment, bind `PHOTOS`. Store upload HMAC secret and Gemini key in Google Secret Manager first; sync their runtime copies into Workers Secrets during deployment. Disable public bucket access. If GCS selected, replace this step with dedicated bucket IAM/service-account design and validated Worker signing, adding time to the estimate.
 8. Enable Firebase Google Sign-in, authorize exact local/staging/custom production domains and OAuth redirect behavior; test from the final hostname, including Safari. Enable email/password only if needed as fallback. Never use one environment's emulator token verifier for another.
 9. Configure Worker `ASSETS`, `HYPERDRIVE`, `PHOTOS`, nonsecret `vars`, `nodejs_compat`, `/api/*` routing and SPA fallback in `wrangler.jsonc`; bindings/secrets explicitly per named environment, not assumed inherited. Deploy static assets and API together; add Cloudflare custom-domain mapping and HTTPS.
 10. Set MapTiler style/key per environment with allowed HTTP origins. Local, staging and production keys and quotas are separate. Validate tiles from final domain; do not place a server key in the client to bypass restrictions.
@@ -533,19 +539,19 @@ Current repository-specific setup and activation instructions live in [infra/run
 | `VITE_API_BASE` | `/api` | `/api` | `/api` |
 | `HYPERDRIVE` | Supported local connection to dev SQL only | Staging binding, no cache | Prod binding, no cache |
 | `PHOTOS` | Local R2 emulation/dev bucket | Private demo bucket | Private prod bucket |
-| `GEMINI_API_KEY` | `.dev.vars`, ignored | Worker Secret | Separate Worker Secret |
-| `MEDIA_SIGNING_SECRET` | Ignored dev secret | Separate Worker Secret | Separate Worker Secret |
+| `GEMINI_API_KEY` | Google-sourced ignored local file | Google source → Worker Secret copy | Separate Google source → Worker Secret copy |
+| `MEDIA_SIGNING_SECRET` | Google-sourced ignored local file | Google source → Worker Secret copy | Separate Google source → Worker Secret copy |
 | `GEMINI_MODEL_ID` | Verified configured ID | Same tested ID | Explicitly validated ID |
 | RP/GPS/rate constants | Proposed defaults | Same defaults, documented demo | Confirmed policy before public launch |
 | `MIGRATION_DATABASE_URL` | Ignored shell/secret store | CI protected secret/job | Protected release-only secret/job |
-| Cloudflare deploy token/account ID | Developer login | GitHub environment credential | Restricted GitHub environment credential |
+| Cloudflare deploy token/account ID | Local human login / Google-sourced deployment config | Google Secret Manager → ephemeral CI process | Separate Google configuration → ephemeral CI process |
 
-Secrets never go in `.env.example`; placeholders only. Firebase client configuration is public project identification, not privileged Admin credentials.
+All environment values, including public build keys and non-secret app settings, come from Google Secret Manager. GitHub settings store no variables or secrets. `.env.example` contains key names and blank values only. Public bootstrap identifiers needed to authenticate to Google are committed separately. Browser client keys remain public in the built application even when sourced from Google.
 
 ### CI, migrations, rollback and recovery
 
 - Current GitHub PR/main/develop CI validates the documentation foundation and the isolated deployment-check Worker with Node tests and Wrangler dry-run. Once `package.json` exists, `package-lock.json`, project-local Wrangler and `typecheck`, `test:unit`, `build` scripts are mandatory and run without optional-script flags. Database implementation must add a real-PostgreSQL integration job before database-changing releases; that job does not exist during this documentation setup. No production mutation from PR jobs.
-- `develop` branch app/config changes: CI → staging deployment only after `CLOUDFLARE_DEPLOY_ENABLED=true`; until product code exists this may deploy only the infrastructure-check Worker. Production: manual workflow dispatch from `main`, using its own GitHub environment and application target. Environment branch policies restrict staging to `develop` and production to `main`. Deployment requires app code/config, environment-scoped token/account/URL, build and release-specific `/api/health` smoke. No CI token is configured initially; a skipped deploy is not a live application. The credentialed job rebuilds the same checked-out SHA with locked dependencies and selected public build variables. Backup/reviewed migration gates and full smoke tests are required before data-changing releases; they are not yet automated. GitHub Actions is the single pipeline; do not configure a second automatic Workers Builds deployment.
+- `develop` branch app/config changes: CI → staging deployment only after Google configuration sets `DEPLOY_ENABLED=true`; until product code exists this may deploy only the infrastructure-check Worker. Production: manual workflow dispatch from `main`, using its own GitHub environment and application target. Environment branch policies restrict staging to `develop` and production to `main`. Deployment uses Google Workload Identity Federation and environment-scoped Google configuration, followed by build and release-specific `/api/health` smoke. Initial Google configuration disables deployment; key values will be supplied later; a skipped deploy is not a live application. The credentialed job rebuilds the same checked-out SHA with locked dependencies and selected public build variables. Backup/reviewed migration gates and full smoke tests are required before data-changing releases; they are not yet automated. GitHub Actions is the single pipeline; do not configure a second automatic Workers Builds deployment.
 - Migration job connects from an explicitly allowed host or cloud-hosted migration runner. **ASSUMPTION:** if dynamic GitHub runner networking cannot be safely allowlisted by H4, a named operator executes the reviewed migration from a temporary `/32` connection, records migration checksum and removes the rule; CI still tests/builds/deploys. Never broaden network access just for CI.
 - No destructive migration auto-run at Worker startup. Use additive schema changes in the timebox, one migration writer (Backend/DB), backup before release. Avoid an automated schema rollback that destroys ledger rows.
 - Deploy smoke: guest map, authentication, secure upload, real AI, publish, vote and immediate read, duplicate retry, final payout, image access, direct SPA route and unknown `/api/*` JSON 404. Check prod build contains no demo bypass/routes or secrets.
@@ -554,7 +560,7 @@ Secrets never go in `.env.example`; placeholders only. Firebase client configura
 
 ## 12. Work breakdown, parallel delivery and critical path
 
-The next planning pass must adapt the work breakdown for the user-confirmed **three-person team**; detailed reassignment is intentionally deferred until plan polish. The estimates below are the earlier baseline, not a confirmed three-person commitment.
+The work breakdown below is retained from the original product plan for reference. Team coordination is handled separately; the current deployment/CI task does not assign people or revise this into a team split.
 
 Estimates are focused **person-hours**, excluding access delays. Baseline assumes four contributors with roughly 20–28 focused hours each within 48 elapsed hours, staggered rest, and short integration checkpoints. Actual pace determines P1 scope. Five people can split frontend map/camera and impact/rewards. With two people, combine Frontend+QA and Backend+AI+DevOps and cut P1 immediately; full P0 is high risk unless accounts/resources already work. Three people combine Backend/AI, retain separate frontend and QA/DevOps.
 
@@ -743,37 +749,13 @@ npm run deploy -- --env production
 
 Use `npm install` only to establish the initial lockfile; thereafter `npm ci` locally/CI. Planned scripts: `dev` = Vite with Cloudflare plugin; `typecheck` = TypeScript no-emit; unit/integration = separate Vitest configs; e2e = Playwright; `db:generate` = Drizzle generation; `db:migrate` = reviewed migration runner accepting explicit environment; `deploy` = pinned Wrangler deployment after build. Reset requires explicit sandbox guards, never an ordinary deploy step. Future secrets provisioning uses `wrangler secret put <NAME> --env <environment>` interactively or protected CI, without echoing values.
 
-### Proposed `.env.example` (public build-time values only)
+### Environment template and authoritative source
 
-```dotenv
-VITE_API_BASE=/api
-VITE_FIREBASE_API_KEY=<public-project-api-key>
-VITE_FIREBASE_AUTH_DOMAIN=<environment-auth-domain>
-VITE_FIREBASE_PROJECT_ID=<environment-project-id>
-VITE_FIREBASE_APP_ID=<public-app-id>
-VITE_MAPTILER_KEY=<origin-restricted-browser-key>
-VITE_MAP_STYLE_URL=<maptiler-style-url>
-```
+The actual root [`.env.example`](.env.example) lists deployment, public browser and server-runtime key **names only**, with blank values. Do not put proposed defaults or real values in that template. Proposed numeric product defaults remain explicitly labeled assumptions in section 15.
 
-### Proposed `.dev.vars.example` (local placeholders; real `.dev.vars` ignored)
+Environment values live in Google Secret Manager JSON configurations `iskra-staging-env` / `iskra-production-env` in project `iskra-512914`. Each value is a string and its name must be documented in `.env.example`. GitHub authenticates using Workload Identity Federation; no long-lived Google key or app/deployment settings are stored in GitHub. See [infra/runbook.md](infra/runbook.md) for the exact source, identity restrictions and activation procedure.
 
-```dotenv
-APP_ENV=dev
-FIREBASE_PROJECT_ID=<dev-project-id>
-GEMINI_API_KEY=<server-secret>
-GEMINI_MODEL_ID=<verified-multimodal-model-id>
-MEDIA_SIGNING_SECRET=<random-server-secret>
-VOTE_RADIUS_M=100
-MAX_GPS_ACCURACY_M=25
-LOCATION_MAX_AGE_SECONDS=60
-REPORTER_REWARD_RP=40
-GREEN_CLEANER_REWARD_RP=50
-PHOTO_MAX_BYTES=1048576
-AI_RATE_PER_MINUTE=5
-DEMO_DATA=false
-```
-
-The numeric values above are **ASSUMPTION / NEEDS CONFIRMATION**, except the specification's conceptual cleaner award. Yellow award is deliberately absent, Impact Score unset. Deployment values belong in Worker vars/secrets; `HYPERDRIVE`, `PHOTOS`, `ASSETS` are bindings, not strings copied into Vite env. Migration connection credentials live separately in the operator/CI secret environment.
+For local application development later, generate ignored `.env`/`.dev.vars` from the approved cloud source. At deployment, pass public `VITE_*` values to the browser build, runtime secrets to Cloudflare through a temporary private JSON secrets file, and deployment credentials only to the Wrangler process. Cloudflare copies are operational copies, not the source of truth. Do not create another independently edited secret store in GitHub.
 
 ### Exit gates
 
@@ -785,4 +767,4 @@ The numeric values above are **ASSUMPTION / NEEDS CONFIRMATION**, except the spe
 - [ ] **M5 — Demo-ready / target H42:** two rehearsals, genuine + labeled accelerated votes per stage, seed/reset checked, provider quotas/budget checked, fallback recording ready, version pinned and rollback steps recorded.
 - [ ] **M6 — H48 delivery:** working deployed Green path, team-readable setup/runbook, accurate limitations and demo labeling; list P1/P2 omissions. Do not mark incomplete live integrations as done based on fixtures.
 
-Original planning delivered only `plan.md`. The subsequent user-authorized setup adds the repository README, infrastructure runbook, ignore rules, GitHub Actions and a minimal deployment-check Worker; product application code, migrations, Google Cloud provisioning and product deployment remain future work. The separate infrastructure-check Worker has been deployed only to verify Wrangler delivery. Stop after setup, then polish the plan and prepare the three-person split.
+Original planning delivered only `plan.md`. The subsequent user-authorized setup adds the repository README, infrastructure runbook, ignore rules, GitHub Actions and a minimal deployment-check Worker; product application code, migrations, Google Cloud provisioning and product deployment remain future work. The separate infrastructure-check Worker has been deployed only to verify Wrangler delivery. Current task ends after deployment/CI setup; product work and team coordination are handled separately.

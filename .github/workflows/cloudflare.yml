@@ -14,6 +14,9 @@ on:
       - 'wrangler.*'
       - 'migrations/**'
       - 'infra/deployment-check/**'
+      - 'infra/cloudflare-bootstrap.json'
+      - '.env.example'
+      - '.github/scripts/**'
       - '.github/workflows/checks.yml'
       - '.github/workflows/cloudflare.yml'
   workflow_dispatch:
@@ -39,99 +42,116 @@ jobs:
     uses: ./.github/workflows/checks.yml
 
   deploy:
-    name: Deploy and smoke-test
+    name: Read Google configuration and deploy
     needs: checks
     if: >-
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
-      (github.event_name == 'workflow_dispatch' || vars.CLOUDFLARE_DEPLOY_ENABLED == 'true')
+      github.ref == 'refs/heads/develop' ||
+      (github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     concurrency:
       group: cloudflare-${{ inputs.environment || 'staging' }}
       cancel-in-progress: false
     environment:
       name: ${{ inputs.environment || 'staging' }}
-      url: ${{ vars.APP_URL }}
     env:
       DEPLOY_ENV: ${{ inputs.environment || 'staging' }}
-      CLOUDFLARE_ENV: ${{ inputs.environment || 'staging' }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      APP_URL: ${{ vars.APP_URL }}
-      VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
-      VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
-      VITE_FIREBASE_PROJECT_ID: ${{ vars.VITE_FIREBASE_PROJECT_ID }}
-      VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
-      VITE_MAPTILER_KEY: ${{ vars.VITE_MAPTILER_KEY }}
-      VITE_MAP_STYLE_URL: ${{ vars.VITE_MAP_STYLE_URL }}
-      VITE_API_BASE: /api
+      DEPLOY_TARGET: ${{ inputs.target || 'auto' }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
-      - name: Require deployment prerequisites
-        id: project
-        env:
-          DEPLOY_ENABLED: ${{ vars.CLOUDFLARE_DEPLOY_ENABLED }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          REQUESTED_TARGET: ${{ inputs.target }}
+      - name: Read non-secret Google authentication identifiers
+        id: bootstrap
         run: |
-          [[ "$DEPLOY_ENABLED" == true ]] || { echo '::error::Enable deployment only after completing infra/runbook.md.'; exit 1; }
-          expected_branch=refs/heads/develop
-          [[ "$DEPLOY_ENV" != production ]] || expected_branch=refs/heads/main
-          [[ "$GITHUB_REF" == "$expected_branch" ]] || { echo "::error::$DEPLOY_ENV must deploy from $expected_branch."; exit 1; }
-          target="$REQUESTED_TARGET"
-          if [[ -z "$target" ]]; then
-            target=deployment-check
-            [[ ! -f package.json ]] || target=application
-          fi
-          project=.
-          [[ "$target" != deployment-check ]] || project=infra/deployment-check
-          [[ "$DEPLOY_ENV" != production || "$target" == application ]] || { echo '::error::The infrastructure test Worker must never be deployed as production.'; exit 1; }
-          [[ -f "$project/package.json" && -f "$project/package-lock.json" ]] || { echo '::error::The selected deployment target and its lockfile must exist.'; exit 1; }
-          [[ -f "$project/wrangler.jsonc" || -f "$project/wrangler.json" || -f "$project/wrangler.toml" ]] || { echo '::error::Missing Wrangler project configuration.'; exit 1; }
-          [[ -n "$CLOUDFLARE_API_TOKEN" ]] || { echo '::error::Set the environment secret CLOUDFLARE_API_TOKEN.'; exit 1; }
-          [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || { echo '::error::Set the environment variable CLOUDFLARE_ACCOUNT_ID.'; exit 1; }
-          [[ "$APP_URL" == https://* && "$APP_URL" != *'?'* && "$APP_URL" != *'#'* ]] || { echo '::error::Set APP_URL to the deployed HTTPS origin without query or fragment.'; exit 1; }
-          echo "directory=$project" >> "$GITHUB_OUTPUT"
-          echo "target=$target" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          config = json.loads(Path('infra/cloudflare-bootstrap.json').read_text())
+          environment = config['environments'][os.environ['DEPLOY_ENV']]
+          assert os.environ['GITHUB_REF'] == 'refs/heads/' + environment['branch'], 'Wrong deployment branch'
+          assert os.environ['GITHUB_REPOSITORY_ID'] == config['repository_id'], 'Wrong repository'
+          outputs = {
+              'project_id': config['project_id'],
+              'provider': config['workload_identity_provider'],
+              'service_account': environment['service_account'],
+              'secret': environment['secret'],
+          }
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for name, value in outputs.items():
+                  output.write(f'{name}={value}\n')
+          PY
+
+      - name: Authenticate to Google Cloud without a stored key
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ steps.bootstrap.outputs.project_id }}
+          workload_identity_provider: ${{ steps.bootstrap.outputs.provider }}
+          service_account: ${{ steps.bootstrap.outputs.service_account }}
+
+      - name: Fetch environment values from Google Secret Manager
+        id: cloud
+        uses: google-github-actions/get-secretmanager-secrets@bc9c54b29fdffb8a47776820a7d26e77b379d262 # v3
+        with:
+          secrets: |
+            environment_json:${{ steps.bootstrap.outputs.project_id }}/${{ steps.bootstrap.outputs.secret }}
+
+      - name: Validate cloud configuration
+        id: config
+        env:
+          CLOUD_ENV_JSON: ${{ steps.cloud.outputs.environment_json }}
+        run: python3 .github/scripts/cloudflare_env.py prepare "$DEPLOY_ENV" "$DEPLOY_TARGET"
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: steps.config.outputs.enabled == 'true'
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: ${{ steps.project.outputs.directory }}/package-lock.json
 
       - name: Install locked dependencies
-        working-directory: ${{ steps.project.outputs.directory }}
-        run: npm ci
-
-      - name: Build for selected environment
-        working-directory: ${{ steps.project.outputs.directory }}
-        run: npm run build
-
-      - name: Deploy Worker and static assets
-        working-directory: ${{ steps.project.outputs.directory }}
+        if: steps.config.outputs.enabled == 'true'
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npm exec --no -- wrangler deploy --env "$DEPLOY_ENV" --var "RELEASE_SHA:$GITHUB_SHA"
+          SELECTED_TARGET: ${{ steps.config.outputs.target }}
+        run: |
+          project=.
+          [[ "$SELECTED_TARGET" != deployment-check ]] || project=infra/deployment-check
+          npm ci --prefix "$project"
+
+      - name: Build selected target
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          SELECTED_TARGET: ${{ steps.config.outputs.target }}
+        run: python3 .github/scripts/cloudflare_env.py build "$DEPLOY_ENV" "$SELECTED_TARGET"
+
+      - name: Deploy using Google-sourced Cloudflare credentials
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          SELECTED_TARGET: ${{ steps.config.outputs.target }}
+        run: python3 .github/scripts/cloudflare_env.py deploy "$DEPLOY_ENV" "$SELECTED_TARGET"
 
       - name: Smoke-test deployed release
-        run: |
-          curl --fail --silent --show-error --location \
-            --retry 5 --retry-all-errors --retry-delay 3 --max-time 15 \
-            "${APP_URL%/}/api/health?release=$GITHUB_SHA" \
-            | python3 -c 'import json, os, sys; data=json.load(sys.stdin); assert data.get("ok") is True, "Health check failed"; assert data.get("release") == os.environ["GITHUB_SHA"], "The expected release is not serving traffic"'
-
-      - name: Summarize deployment
+        if: steps.config.outputs.enabled == 'true'
         env:
-          DEPLOY_TARGET: ${{ steps.project.outputs.target }}
+          SELECTED_TARGET: ${{ steps.config.outputs.target }}
+        run: python3 .github/scripts/cloudflare_env.py smoke "$DEPLOY_ENV" "$SELECTED_TARGET"
+
+      - name: Remove temporary secret material
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/iskra-environment.json" "$RUNNER_TEMP/iskra-worker-secrets.json"
+
+      - name: Summarize delivery state
+        env:
+          DEPLOY_ENABLED: ${{ steps.config.outputs.enabled }}
+          SELECTED_TARGET: ${{ steps.config.outputs.target }}
         run: |
-          {
-            echo "Environment: $DEPLOY_ENV"
-            echo "Target: $DEPLOY_TARGET"
-            echo "Release: $GITHUB_SHA"
-            echo "Application: $APP_URL"
-            echo 'Deployment and release health check passed. Full Green-flow acceptance remains a separate milestone.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$DEPLOY_ENABLED" == true ]]; then
+            echo "Deployed $SELECTED_TARGET to $DEPLOY_ENV; release health check passed. Product acceptance is separate." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Google authentication and environment retrieval passed. Deployment is disabled in Google Cloud; no Cloudflare write occurred.' >> "$GITHUB_STEP_SUMMARY"
+          fi

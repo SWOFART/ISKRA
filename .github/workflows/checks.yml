@@ -66,6 +66,9 @@ jobs:
           npm test --prefix infra/deployment-check
           npm run build --prefix infra/deployment-check
 
+      - name: Check cloud configuration handling
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         if: steps.app.outputs.present == 'true'
         with:
