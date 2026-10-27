@@ -7,6 +7,7 @@ import {
   IdempotencyConflictError,
   lockAccounts,
   PostgresTransactionDatabase,
+  TransactionAbortedError,
 } from '../../../src/worker/db/client';
 import { withTestDatabase } from '../auth/postgres';
 
@@ -80,6 +81,27 @@ describe('PostgreSQL transaction primitives', () => {
        WHERE user_id = $1::text AND operation = $2::varchar AND key = $3::varchar`,
       [actorId, request.operation, request.key],
     )).rows[0].count).toBe(0);
+  }));
+
+  it('does not report success when a callback catches a SQL error and PostgreSQL rolls back at COMMIT', () => withTestDatabase(async (pool) => {
+    await installSchema(pool);
+    const actorId = 'caught-sql-error-user';
+    await createUser(pool, actorId);
+    const database = new PostgresTransactionDatabase(pool);
+
+    await expect(database.withTransaction(async (client) => {
+      await client.query('UPDATE users SET rp_balance = rp_balance + 5 WHERE id = $1::text', [actorId]);
+      try {
+        await client.query('SELECT 1 / 0');
+      } catch {
+        // Simulate a callback swallowing a query failure while PostgreSQL marks the transaction aborted.
+      }
+      return 'callback returned a value despite the aborted transaction';
+    })).rejects.toBeInstanceOf(TransactionAbortedError);
+
+    expect((await pool.query<{ rp_balance: number }>(
+      'SELECT rp_balance FROM users WHERE id = $1::text', [actorId],
+    )).rows[0].rp_balance).toBe(0);
   }));
 
   it('replays through a fresh canonical read, rejects conflicting payloads, and stores no old response body', () => withTestDatabase(async (pool) => {

@@ -26,6 +26,7 @@ export class PostgresTransactionDatabase implements TransactionDatabase {
   async withTransaction<T>(work: (client: CheckedOutClient) => Promise<T>): Promise<T> {
     const connection = await this.pool.connect();
     let transactionOpen = false;
+    let transactionEndedByPostgres = false;
     let discardConnection: Error | undefined;
 
     try {
@@ -43,12 +44,14 @@ export class PostgresTransactionDatabase implements TransactionDatabase {
       };
 
       const value = await work(client);
-      await connection.query('COMMIT');
+      const commit = await connection.query('COMMIT');
       transactionOpen = false;
+      transactionEndedByPostgres = true;
+      if (commit.command !== 'COMMIT') throw new TransactionAbortedError();
       return value;
     } catch (error) {
       if (!transactionOpen) {
-        discardConnection = asError(error);
+        if (!transactionEndedByPostgres) discardConnection = asError(error);
         throw error;
       }
 
@@ -67,6 +70,13 @@ export class PostgresTransactionDatabase implements TransactionDatabase {
     } finally {
       connection.release(discardConnection);
     }
+  }
+}
+
+export class TransactionAbortedError extends Error {
+  constructor() {
+    super('PostgreSQL rolled back the transaction instead of committing it.');
+    this.name = 'TransactionAbortedError';
   }
 }
 
