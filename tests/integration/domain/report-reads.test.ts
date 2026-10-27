@@ -146,9 +146,9 @@ describe('PostgreSQL report read projections', () => {
   it('applies citywide pending filters by the viewer stage and exposes only public projections', () =>
     withTestDatabase(async (pool) => {
       await installSchema(pool);
-      await Promise.all(['viewer', 'resolution-only-viewer', 'author-self', 'author-open', 'cleaner', 'author-cleanup', 'author-verified']
+      await Promise.all(['viewer', 'resolution-only-viewer', 'author-open', 'cleaner', 'author-cleanup', 'author-verified']
         .map((id) => createUser(pool, id, `Public ${id}`)));
-      const selfPending = await createReport(pool, 'author-self');
+      const selfPending = await createReport(pool, 'viewer');
       const openPending = await createReport(pool, 'author-open');
       const cleanupPending = await createReport(pool, 'author-cleanup', {
         status: 'AWAITING_RESOLUTION', existenceCount: 4, resolutionCount: 1,
