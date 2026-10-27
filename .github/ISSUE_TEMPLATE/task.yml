@@ -1,0 +1,36 @@
+name: Implementation task
+description: Define a focused feature, infrastructure, test or documentation task.
+title: 'chore: '
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome and scope
+      description: Link the relevant plan section and describe the smallest complete result.
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Plan priority
+      options:
+        - P0 — required Green scenario or delivery foundation
+        - P1 — secondary MVP work
+        - P2 — deferred product work
+        - Needs a priority decision
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance and verification
+      description: Use checkboxes for specific outcomes and describe how to verify them.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and open decisions
+      description: Link blocking issues or contracts. Mark unapproved choices as assumptions; do not include secret values.
+    validations:
+      required: false

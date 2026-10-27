@@ -10,6 +10,7 @@ This repository is the team's documentation and delivery base: **https://github.
 
 - [Implementation plan](plan.md): requirements, priorities, architecture, API/data contracts, risks and milestones.
 - [Infrastructure and CI/CD runbook](infra/runbook.md): tooling, environments, credentials and deployment activation.
+- [Contribution workflow](CONTRIBUTING.md): issues, branch names, PRs, checks and releases.
 - [Team Miro board](https://miro.com/app/board/uXjVEYikPLY=/): primary UX/design source.
 - [Villa Borghese](https://www.behance.net/gallery/230474273/Villa-Borghese-Visual-Identity-Wayfinding-Project): sole retained external design reference.
 
