@@ -1,9 +1,10 @@
 import { decode } from 'jpeg-js';
+import { POLICY } from '../../shared/contracts';
 import { ApiError } from '../middleware/errors';
 
 // shortcut: validation only; add authenticated upload/finalization after contracts freeze.
 export function validateJpeg(bytes: Uint8Array, contentType: string): { width: number; height: number } {
-  if (bytes.byteLength > 1_048_576) {
+  if (bytes.byteLength > POLICY.maxPhotoBytes) {
     throw new ApiError(413, 'PHOTO_TOO_LARGE', 'Photos must be at most 1 MiB.');
   }
   if (contentType !== 'image/jpeg' || bytes.length < 4
