@@ -7,7 +7,7 @@
 | Canonical repository | [SWOFART/ISKRA](https://github.com/SWOFART/ISKRA) |
 | Branches | `develop` for staging/testing; `main` for production |
 | Product specification | Root [plan.md](../plan.md) plus later confirmed policies in the [active OpenSpec change](../openspec/changes/build-iskra-hackathon-mvp/) |
-| Production hosting | Cloudflare Workers: React/Vite assets + Hono API |
+| Production hosting | Cloudflare Workers: Vite browser assets + Hono API; current shell is A's DOM implementation |
 | Google Cloud project | `iskra-512914` (project number `976498049675`) |
 | Environment/key source | Google Cloud Secret Manager; no GitHub settings variables or secrets |
 | Google authentication for CI | Workload Identity Federation, no service-account JSON key |
@@ -117,9 +117,9 @@ Branch: `codex/person-c-delivery`, based on `develop` at `f2287d1`. B remains th
 | Task | Evidence / remaining requirement |
 |---|---|
 | 1.4, partial | Read-only Firebase and Google configuration probes below; current Firebase/Workers documentation reviewed. Spending owner/cap/teardown, model/quota, map origins, isolated product resources and deployment credentials remain unverified/unconfigured. |
-| 2.3, partial | Root pinned package/lockfile, strict TypeScript, Vitest, Hono Worker, health/release and API JSON 404. Worker-only bundle; Vite/SPA/direct client navigation and B/C router integration require A's entry and B's frozen contracts/facade. Client paths return safe JSON 503 rather than fabricated UI. |
+| 2.3, local integration prepared | Root pinned package/lockfile, Vite client build, strict TS/TSX, Hono Worker with B's router facade, health/release, ASSETS/SPA fallback and API JSON 404. Browser checks cover direct client links; review/merge and live staging remain separate. |
 | 2.7, local evidence | RS256 signature verification using `jose`/Web Crypto, issuer/audience/subject/time checks, UID-only context and bounded key refresh tests. Real Firebase token on deployed Workers and real sign-in remain unverified. |
-| 2.9, partial | Safe JSON error envelope, server-generated request IDs, actual-byte body cap, mutation-origin guard, no-store/no-referrer and API security headers. B's shared validators/error mapping and live public/private route tests are pending. |
+| 2.9, middleware implemented | Safe JSON error envelope using B's shared validators/error mapping, server-generated request IDs, actual-byte body cap, mutation-origin guard, no-store/no-referrer and API security headers. Live domain/media privacy acceptance remains separate. |
 | 2.4 and 2.10 | The later independent harness section below supplies Playwright/real-PG infrastructure for 2.4. Product deployment (2.10), domain tests and client integration remain pending. |
 
 ### Interfaces supplied to A/B
@@ -231,3 +231,26 @@ Rechecked on 2026-10-27 without provisioning resources, enabling billing/APIs, c
 | Gemini / MapTiler | No populated model/key/map values in the environment records; model availability, quota and map-origin restrictions are unverified. |
 
 Current [Gemini rate-limit documentation](https://ai.google.dev/gemini-api/docs/rate-limits) requires checking the actual project's active limits rather than inferring capacity from a key or a generic advertised tier. No model/version/quota is approved by these probes. Issue #8 remains open because the account/budget/domain/model requirements are incomplete. These blockers affect live provisioning and G1, not disposable local tests.
+
+## Client/Worker integration — task 2.3 / issue #12
+
+Person C's integration branch includes A's exact client commit `399bbab4ea1a67ef1a2ed4a6b739d9b41c748225` from PR #75, preserving its author and client files. Review the combined client/integration candidate: it includes both sides of the task 2.1/2.3 handoff without requiring either incomplete foundation to merge first. If #75 merges separately, this PR's diff naturally narrows; any changed review base needs a fresh Gate A. C explicitly accepts and owns A's `jsx: preserve` configuration line, expands TS coverage to all client TSX files and adds Vite's CSS/import types. This resolves configuration coordination; it does not replace independent review or change #75's recorded FAIL verdict.
+
+The current shell uses DOM APIs rather than React. This integration reuses A's supplied entry unchanged, adds no UI framework and makes no new framework decision for future client work. It serves Map/My Impact/Rewards placeholders, not connected map, sign-in or report detail. Direct `/reports/:id` currently loads the shell with its existing Map fallback and retains the URL; report details remain A/B's later tasks.
+
+Commands:
+
+```bash
+npm ci
+npm run typecheck
+npm run test:unit
+npm run build
+npm run test:e2e
+npm run dev -- --local
+```
+
+`npm run build:client` uses pinned Vite to produce `dist/client`. `npm run build` then dry-runs Wrangler to `dist/worker`, outside the public asset directory. `npm run dev` rebuilds the client before starting the existing local Wrangler runtime; restart after client edits. There is no second dev server or HMR in this slice. Standalone Vite plus Wrangler Static Assets reuses the existing deploy command without adding the Cloudflare Vite plugin. Vite disables automatic `.env` loading (`envDir: false`); supply only approved Google-sourced `VITE_*` process values for the browser build. Server secrets are never explicitly substituted into browser code.
+
+Wrangler explicitly configures the `ASSETS` binding, SPA handling and Worker-first routing for local/staging/production. Every request passes through the Worker so `/api` and `/api/*` can never fall into HTML, even for document navigation. API CSP remains `default-src 'none'`. Public assets use same-origin script/style CSP without inline/eval permissions; future map tile/provider connections must update that policy deliberately. Asset responses retain their status/content type and the Worker security headers. Client POST requests are JSON 404, not a successful SPA mutation. Missing ASSETS fails closed with JSON 503. Health continues to report `applicationReady: false`.
+
+Local acceptance: 199 unit tests and seven Chromium checks pass, including rendered CSS/JS, direct `/`, `/impact`, `/rewards`, `/reports/123`, sign-in placeholders, mobile/keyboard/history navigation without camera/GPS requests, health and API errors. These supersede the earlier Worker-only status descriptions for this branch. Named-environment dry-runs verify asset bindings/configuration without a cloud write. No product deployment, physical-device acceptance, real sign-in, SQL, R2 or Gemini acceptance is implied. Staging activation remains #19/D10/D11 and production remains manual from main through the existing Google-sourced pipeline. Revert the integration commit and deploy a reviewed compatible release to roll back; no migration or data change is included.

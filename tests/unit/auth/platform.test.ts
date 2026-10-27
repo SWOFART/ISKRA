@@ -13,7 +13,7 @@ describe('Worker API boundary', () => {
     expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 
-  it('returns JSON 404s for unknown API routes and an honest missing-client response', async () => {
+  it('returns JSON 404s for unknown API routes and fails closed without the assets binding', async () => {
     const app = createApp();
     for (const path of ['/api/unknown', '/api', '/api/health/nope']) {
       const response = await app.request(path, {}, env);
@@ -23,6 +23,29 @@ describe('Worker API boundary', () => {
     const response = await app.request('/impact', {}, env);
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ error: { retryable: true } });
+  });
+
+  it('passes client requests to ASSETS while keeping API errors and mutations out of the SPA', async () => {
+    const fetchAssets = vi.fn(async (_request: Request) => new Response('<div id="root"></div>', {
+      headers: { 'Content-Type': 'text/html' },
+    }));
+    const app = createApp();
+    const bindings = { ...env, ASSETS: { fetch: fetchAssets } };
+    for (const path of ['/', '/impact', '/reports/123', '/assets/app.js']) {
+      const response = await app.request(path, {}, bindings);
+      expect(response.status).toBe(200);
+      expect(new URL(fetchAssets.mock.calls.at(-1)![0].url).pathname).toBe(path);
+      expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'self'");
+    }
+    for (const path of ['/api', '/api/unknown']) {
+      const response = await app.request(path, {}, bindings);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+      expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'none'");
+    }
+    const mutation = await app.request('/impact', { method: 'POST' }, bindings);
+    expect(mutation.status).toBe(404);
+    expect(fetchAssets).toHaveBeenCalledTimes(4);
   });
 
   it('uses a server request ID and redacts unknown errors without logging internals', async () => {
