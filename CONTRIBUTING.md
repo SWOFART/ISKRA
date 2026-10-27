@@ -14,7 +14,7 @@ Do not push feature work directly to `develop` or `main`. Do not force-push shar
 
 ## Required PR gates
 
-Use the [PR template](.github/pull_request_template.md) for every PR, including PRs opened through a CLI. Templates do not retroactively populate existing PRs, and a custom `--body-file` must retain the checklist. Keep incomplete gates unchecked and the PR draft; do not mark them satisfied merely because follow-up work is documented.
+Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) for every PR, including PRs opened through a CLI. Templates do not retroactively populate existing PRs, and a custom `--body-file` must retain the checklist. Keep incomplete gates unchecked and the PR draft; do not mark them satisfied merely because follow-up work is documented.
 
 1. **Scope and acceptance:** link existing task issues, record criteria and verify only what the change claims. Use `Related #N` for partial work and `Closes #N` only after the whole task is complete. B alone updates the canonical OpenSpec checklist after integrated evidence; A/C hand off through PRs.
 2. **Architecture/security/configuration:** verify the template's required checks, including OpenSpec ownership/contracts, safe data handling and Google-sourced configuration. Explain non-applicable guarantees explicitly; do not copy another project's build stack.
