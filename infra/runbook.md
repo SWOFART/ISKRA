@@ -87,7 +87,7 @@ npm run build --prefix infra/deployment-check
 python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 ```
 
-The initial local deployment, three Worker tests, live health/release checks, JSON 404/405 checks and initial GitHub CI passed. The original live health release predates the user-requested Git history rewrite. Google identity/configuration retrieval is tested separately after the keyless workflow is published. Actual automated Cloudflare deployment remains pending until key values are supplied later in Google Cloud.
+The initial local deployment, three Worker tests, live health/release checks, JSON 404/405 checks and initial GitHub CI passed. The original live health release predates the user-requested Git history rewrite. The [keyless develop workflow](https://github.com/SWOFART/ISKRA/actions/runs/40524377245) passed: Google OIDC authentication, Secret Manager retrieval, configuration validation and temporary-file cleanup all succeeded. The Cloudflare deployment step was correctly skipped because Google config disables deployment. CI also passed on both branches. Actual automated Cloudflare deployment remains pending until key values are supplied later in Google Cloud.
 
 ## Later activation — values stay in Google
 
