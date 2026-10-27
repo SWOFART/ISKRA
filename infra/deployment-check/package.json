@@ -1,0 +1,16 @@
+{
+  "name": "iskra-deployment-check",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test worker.test.js",
+    "build": "wrangler deploy --dry-run --env staging"
+  },
+  "devDependencies": {
+    "wrangler": "4.153.0"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "workerd": true
+  }
+}

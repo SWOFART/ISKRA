@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "iskra-deployment-check",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-27",
+  "env": {
+    "staging": {
+      "name": "iskra-develop-check",
+      "workers_dev": true,
+      "vars": {
+        "RELEASE_SHA": "local"
+      }
+    }
+  }
+}
