@@ -124,6 +124,19 @@ describe('execution, assessment and ledger distinctions', () => {
     expect(c.ViewerReportDetailSchema.safeParse({ ...fixtures.viewerReport,
       viewer: { ...fixtures.viewerReport.viewer, canSubmitCleanup: true } }).success).toBe(false);
   });
+  it.each([
+    { status: 'RESOLVED', resolutionYesCount: 0 },
+    { status: 'AWAITING_EXISTENCE', existenceYesCount: 8 },
+    { status: 'VERIFIED', resolutionYesCount: 1 },
+    { route: 'YELLOW', status: 'AWAITING_RESOLUTION' },
+    { existenceYesCount: 0, lastExistenceConfirmedAt: null },
+  ])('rejects contradictory list/Impact summaries %j', (change) => {
+    const summary = { ...fixtures.impact.items[0].report, ...change };
+    expect(c.ReportSummarySchema.safeParse(summary).success).toBe(false);
+    expect(c.ReportListSchema.safeParse({ items: [summary], nextCursor: null }).success).toBe(false);
+    expect(c.ImpactSchema.safeParse({ ...fixtures.impact,
+      items: [{ ...fixtures.impact.items[0], report: summary }] }).success).toBe(false);
+  });
 });
 
 describe('new-action location admission (not replay freshness)', () => {

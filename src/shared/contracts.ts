@@ -68,8 +68,17 @@ const summaryFields = {
   lastExistenceConfirmedAt: nullable(TimestampSchema), version: VersionSchema,
   updatedAt: TimestampSchema, isDemo: boolean,
 };
-export const ReportSummarySchema = object(summaryFields);
-export type ReportSummary = Infer<typeof ReportSummarySchema>;
+const reportSummaryShape = object(summaryFields);
+export type ReportSummary = Infer<typeof reportSummaryShape>;
+function consistentSummary(v: ReportSummary): boolean {
+  return (v.status === 'AWAITING_EXISTENCE' ? v.existenceYesCount < 3 && v.existenceVerifiedAt === null
+    : v.existenceYesCount >= 3 && v.existenceVerifiedAt !== null)
+    && (v.existenceYesCount === 0 ? v.lastExistenceConfirmedAt === null : v.lastExistenceConfirmedAt !== null)
+    && (v.status === 'RESOLVED' ? v.resolutionYesCount === 3
+      : v.status === 'AWAITING_RESOLUTION' ? v.resolutionYesCount < 3 : v.resolutionYesCount === 0)
+    && (!['AWAITING_RESOLUTION', 'RESOLVED'].includes(v.status) || v.route === 'GREEN');
+}
+export const ReportSummarySchema = reportSummaryShape.refine(consistentSummary, 'Inconsistent report lifecycle');
 const detailFields = {
   ...summaryFields, beforePhotos: gallery(1), afterPhotos: gallery(0), author: PublicIdentitySchema,
   cleaner: nullable(PublicIdentitySchema), currentStage: nullable(StageSchema),
@@ -81,12 +90,9 @@ function consistentDetail(v: Detail): boolean {
     : v.status === 'AWAITING_RESOLUTION' ? ['EXISTENCE', 'RESOLUTION'] : ['EXISTENCE'];
   const current = v.status === 'RESOLVED' ? null
     : v.status === 'AWAITING_RESOLUTION' ? 'RESOLUTION' : 'EXISTENCE';
-  return v.openVoteStages.length === expected.length && expected.every((s) => v.openVoteStages.includes(s))
+  return consistentSummary(v)
+    && v.openVoteStages.length === expected.length && expected.every((s) => v.openVoteStages.includes(s))
     && v.currentStage === current && v.coverPhotoId === v.beforePhotos[0].id
-    && (v.status === 'AWAITING_EXISTENCE' ? v.existenceYesCount < 3 && v.existenceVerifiedAt === null
-      : v.existenceYesCount >= 3 && v.existenceVerifiedAt !== null)
-    && (v.existenceYesCount === 0 ? v.lastExistenceConfirmedAt === null : v.lastExistenceConfirmedAt !== null)
-    && (v.status === 'RESOLVED' ? v.resolutionYesCount === 3 : v.resolutionYesCount < 3)
     && (['AWAITING_RESOLUTION', 'RESOLVED'].includes(v.status)
       ? v.route === 'GREEN' && v.afterPhotos.length > 0 && v.cleaner !== null
       : v.afterPhotos.length === 0 && v.cleaner === null && v.resolutionYesCount === 0);
