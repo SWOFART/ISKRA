@@ -5,13 +5,17 @@ import { ApiError, handleError } from './middleware/errors';
 import { apiSecurity } from './middleware/security';
 import { createHealthRoutes } from './routes/health';
 import { createDomainRoutes } from './routes/domain';
+import { createUploadRoutes } from './routes/uploads';
+import type { TransactionDatabase } from './db/client';
+import type { verifyFirebaseToken } from './middleware/auth';
 
-export function createApp() {
+export function createApp(dependencies: { database?: TransactionDatabase; verify?: typeof verifyFirebaseToken } = {}) {
   const app = new Hono<WorkerEnv>();
   app.use('*', apiSecurity);
   app.use('/api/*', boundedBody);
   app.route('/api', createHealthRoutes());
   app.route('/api', createDomainRoutes());
+  app.route('/api', createUploadRoutes(dependencies));
   app.notFound(async (c) => {
     if (c.req.path === '/api' || c.req.path.startsWith('/api/')) {
       throw new ApiError(404, 'NOT_FOUND', 'This API route does not exist.');
