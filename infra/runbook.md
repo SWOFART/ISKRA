@@ -10,7 +10,8 @@
 | Production hosting | Cloudflare Workers: React/Vite static assets + Hono API |
 | Development tunnel | `c0c32852-fe5d-4a65-af4c-058cdf786627`, supplied by the user |
 | Tunnel verification | Hostname, connector status and account ownership not independently verified |
-| CI/CD | GitHub Actions, with separate `staging` and `production` environments |
+| CI/CD | GitHub Actions, with separate `staging` and `production` environments; initial CI passed on both branches |
+| Live infrastructure test | [iskra-develop-check](https://iskra-develop-check.matvey-nesterenko.workers.dev/api/health), deployed with locally authenticated Wrangler; not the product |
 | Application status | Not implemented; an isolated deployment-check Worker exists under `infra/deployment-check`, with no product features |
 | Docker | Not needed for Workers; no image build or registry is configured |
 
@@ -22,7 +23,7 @@ Use `gcloud` to manage the approved Google Cloud services, `wrangler` to manage 
 
 Verified on 2026-10-27: Google Cloud SDK **590.0.1**, Wrangler **4.153.0**, cloudflared **2026.10.3**. Existing Docker CLI **29.9.1** was detected and left unchanged. Wrangler OAuth login was completed by the user and the single available Cloudflare account was verified. gcloud has no active account/project selected. A separate noninteractive Workers API token is still required for GitHub Actions; the local OAuth credential is not copied into GitHub. GitHub CLI is already authenticated and was used for repository setup.
 
-GitHub environments `staging` and `production` were created. Staging is restricted to `develop`, production to `main`. Repository variables record deployment as disabled and the provided development tunnel ID. The verified Cloudflare account ID is configured in each environment. The CI token and the final product hostname are still outstanding.
+GitHub environments `staging` and `production` were created. Staging is restricted to `develop`, production to `main`. Repository variables record deployment as disabled and the provided development tunnel ID. The verified Cloudflare account ID is configured in each environment. The staging `APP_URL` points to the verified infrastructure test Worker. The CI token and the final product hostname are still outstanding.
 
 ```bash
 gcloud version
@@ -98,6 +99,8 @@ wrangler deploy --env staging --var "RELEASE_SHA:$(git rev-parse HEAD)"
 ```
 
 For automatic GitHub deployment of this Worker, add `CLOUDFLARE_API_TOKEN` to the **staging environment**, set its `APP_URL` to the check Worker's verified HTTPS origin, and enable `CLOUDFLARE_DEPLOY_ENABLED=true`. The account ID is already configured. Then run **Deploy to Cloudflare** from `develop`, environment `staging`, target `deployment-check`. Check the run and its matching release at `/api/health`. A missing credential is an activation blocker, not an excuse to copy the local OAuth token into CI.
+
+Verified on the first setup release: three Node tests passed, Wrangler dry-run built successfully, GitHub CI passed on `main` and `develop`, and the deployed endpoint returned the expected Git SHA. Live GET `/api/reports` returned JSON 404 and POST `/api/health` returned 405. This was a **local OAuth-authenticated deployment**, not yet a successful GitHub deployment. Automatic deployment remains disabled until the environment token is provided and a GitHub deployment is verified.
 
 Keep the test Worker separate from the eventual application Worker names. When the root app is added, staging's `APP_URL` must be changed to the actual app origin before its automatic deployment is enabled; any attempt to smoke-test the wrong origin fails its release comparison.
 
