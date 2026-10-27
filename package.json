@@ -1,0 +1,26 @@
+{
+  "name": "iskra",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "wrangler dev --env=\"\"",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run",
+    "build": "wrangler deploy --dry-run --env=\"\" --outdir dist/worker"
+  },
+  "dependencies": {
+    "hono": "4.13.14",
+    "jose": "6.2.13"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261027.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5",
+    "wrangler": "4.153.0"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "workerd": true
+  }
+}

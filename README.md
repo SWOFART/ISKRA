@@ -9,6 +9,7 @@ This repository is the team's documentation and delivery base: **https://github.
 ## Start here
 
 - [Implementation plan](plan.md): requirements, priorities, architecture, API/data contracts, risks and milestones.
+- [Active OpenSpec change](openspec/changes/build-iskra-hackathon-mvp/): current approved policy refinements, owner boundaries and implementation tasks. Its later confirmed decisions supersede conflicting historical examples in `plan.md`.
 - [Infrastructure and CI/CD runbook](infra/runbook.md): tooling, environments, credentials and deployment activation.
 - [Contribution workflow](CONTRIBUTING.md): issues, branch names, PRs, checks and releases.
 - [Team Miro board](https://miro.com/app/board/uXjVEYikPLY=/): primary UX/design source.
@@ -16,7 +17,19 @@ This repository is the team's documentation and delivery base: **https://github.
 
 ## Current status
 
-The repository contains documentation, GitHub Actions and an infrastructure-only [deployment-check Worker](infra/deployment-check/). The product application and database migrations have not been implemented. The check Worker exposes only `/api/health` and explicitly reports `applicationReady: false`.
+Person C's first implementation slice adds a root Hono Worker, Firebase token middleware and safe API boundaries. Root `npm run build` bundles **only the Worker**; React/Vite, domain routes, database, media and AI integration remain pending. `/api/health` reports `applicationReady: false`, unknown API paths return JSON 404, and client paths return JSON 503 until A's entry is integrated.
+
+The infrastructure-only [deployment-check Worker](infra/deployment-check/) remains separate. Neither Worker health nor local tests prove a working Green flow.
+
+```bash
+npm ci
+npm run typecheck
+npm run test:unit
+npm run build
+npm run dev -- --local
+```
+
+The local Worker needs no credentials for health/404 checks. Authenticated routes will require Google-sourced `FIREBASE_PROJECT_ID` and real Firebase ID tokens; no auth emulator or signature bypass exists.
 
 Production will run on **Cloudflare Workers**, serving React/Vite assets and Hono `/api/*` routes. It must work when a developer's computer is off. Google Cloud SQL, Firebase Authentication and Gemini remain the planned services.
 
@@ -24,8 +37,8 @@ The user-provided tunnel `c0c32852-fe5d-4a65-af4c-058cdf786627` is reserved for 
 
 ## CI/CD
 
-- Pull requests and pushes to `main`/`develop` run repository checks and the deployment-check Worker tests/build. Application checks become mandatory when `package.json` is added: a lockfile, `typecheck`, `test:unit`, `build`, and project-local Wrangler are required.
-- Changes on `develop` can deploy to `staging` after CI passes and deployment is enabled. Until the root application exists, this deploys only the infrastructure-check Worker.
+- Pull requests and pushes to `main`/`develop` run repository checks, root typecheck/unit tests/Worker build and the separate deployment-check Worker tests/build. Real PostgreSQL and browser integration checks remain pending.
+- Changes on `develop` can deploy to `staging` after CI passes and deployment is enabled in Google. With the root manifest present, automatic target selection chooses the root Worker. Keep deployment disabled until the product prerequisites in the runbook are met; this foundation alone is incomplete.
 - Production deployment is a manual **Deploy to Cloudflare** workflow run from `main`.
 - All environment values and keys come from **Google Cloud Secret Manager** in project `iskra-512914`. GitHub settings contain no environment variables or secrets. Keyless Google federation is used by CI; `.env.example` contains key names only.
 - Deployment starts disabled in the Google configuration (`DEPLOY_ENABLED=false`). Actual values will be populated there later; a tunnel ID is not a deployment credential.
@@ -39,4 +52,4 @@ Commits and pushes use **kapustazh**, with GitHub privacy email `51422901+kapust
 
 ## Current scope
 
-Deployment and CI/CD only. Product work and team coordination are handled separately; this setup does not assign people, split implementation tasks or start product features.
+The user is Person C under the existing OpenSpec split. This branch implements the platform/auth foundation within C's file boundaries. A owns the client, B owns shared contracts/domain/SQL and the canonical OpenSpec checklist. C reports evidence and pending dependencies through the PR; this branch does not reassign people or mark partial tasks complete.
