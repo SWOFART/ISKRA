@@ -161,15 +161,10 @@ describe('PostgreSQL report read projections', () => {
         `INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m)
          VALUES ($1::uuid, 'EXISTENCE', 'viewer', 'NO', 100, 20)`, [cleanupPending.id],
       );
-      await pool.query(
-        `INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m)
-         VALUES ($1::uuid, 'RESOLUTION', 'resolution-only-viewer', 'NO', 100, 20)`, [cleanupPending.id],
-      );
-
       const media = createMediaResolver();
       const app = createApp(pool, media);
       const environment = { FIREBASE_PROJECT_ID: 'test-project' };
-      const pendingResponse = await app.request('/api/reports?city=heilbronn&needsVerification=true', {
+      const pendingResponse = await app.request('/api/reports?cityId=heilbronn&needsVerification=true&bbox=0,0,1,1', {
         headers: { Authorization: 'Bearer viewer' },
       }, environment);
       expect(pendingResponse.status).toBe(200);
@@ -181,11 +176,15 @@ describe('PostgreSQL report read projections', () => {
       expect(pendingIds).not.toContain(confirmed.id);
       expect(pending.items.every((item) => item.status !== 'RESOLVED')).toBe(true);
 
+      await pool.query(
+        `INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m)
+         VALUES ($1::uuid, 'RESOLUTION', 'resolution-only-viewer', 'NO', 100, 20)`, [cleanupPending.id],
+      );
       const priorResolution = await app.request('/api/reports?needsVerification=true', {
         headers: { Authorization: 'Bearer resolution-only-viewer' },
       }, environment);
       expect(new Set(ReportListSchema.parse(await priorResolution.json()).items.map((item) => item.id)))
-        .toContain(cleanupPending.id); // prior resolution vote does not hide continued existence support
+        .not.toContain(cleanupPending.id); // the confirmed existence stage is not a pending-verification item
 
       await pool.query(
         `INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m)
@@ -206,7 +205,7 @@ describe('PostgreSQL report read projections', () => {
         lastExistenceConfirmedAt: expect.any(String),
       });
       expect(ordinaryList.headers.get('cache-control')).toContain('no-store');
-      const authenticatedList = await app.request('/api/reports?route=GREEN', {
+      const authenticatedList = await app.request('/api/reports?routes=GREEN', {
         headers: { Authorization: 'Bearer viewer' },
       }, environment);
       expect(authenticatedList.status).toBe(200);
@@ -226,11 +225,21 @@ describe('PostgreSQL report read projections', () => {
       expect(media.calls.at(-1)).toEqual([
         { id: confirmed.beforePhotoIds[0], ordinal: 1, purpose: 'REPORT' },
       ]);
+      const viewerDetailResponse = await app.request(`/api/reports/${confirmed.id}`, {
+        headers: { Authorization: 'Bearer viewer' },
+      }, environment);
+      const viewerDetail = ViewerReportDetailSchema.parse(await viewerDetailResponse.json());
+      expect(viewerDetail.viewer.stages.EXISTENCE).toMatchObject({ canVote: true, hasVoted: false, reason: null });
 
-      const unsupportedCity = await app.request('/api/reports?city=stuttgart', {}, environment);
+      const emptyViewport = await app.request('/api/reports?bbox=0,0,1,1', {}, environment);
+      expect(ReportListSchema.parse(await emptyViewport.json()).items).toHaveLength(0);
+
+      const unsupportedCity = await app.request('/api/reports?cityId=stuttgart', {}, environment);
       expect(unsupportedCity.status).toBe(400);
       const unknownFilter = await app.request('/api/reports?viewport=49.14,9.22', {}, environment);
       expect(unknownFilter.status).toBe(400);
+      const invalidBounds = await app.request('/api/reports?bbox=malformed', {}, environment);
+      expect(invalidBounds.status).toBe(400);
     }));
 
   it('returns stage-specific viewer hints without vote choices and resolves all attached galleries', () =>
@@ -292,10 +301,19 @@ describe('PostgreSQL report read projections', () => {
   it('paginates by immutable publication order and provides cleanup context only for verified GREEN reports', () =>
     withTestDatabase(async (pool) => {
       await installSchema(pool);
-      await Promise.all(['author-one', 'author-two', 'author-three'].map((id) => createUser(pool, id)));
+      await Promise.all(['author-one', 'author-two', 'author-three', 'author-yellow-old', 'author-yellow-new']
+        .map((id) => createUser(pool, id)));
       const first = await createReport(pool, 'author-one', { beforePhotoCount: 2 });
       const second = await createReport(pool, 'author-two');
       const third = await createReport(pool, 'author-three');
+      const sameMillisecondOlder = await createReport(pool, 'author-yellow-old', { route: 'YELLOW' });
+      const sameMillisecondNewer = await createReport(pool, 'author-yellow-new', { route: 'YELLOW' });
+      await pool.query('UPDATE reports SET published_at = $2::timestamptz WHERE id = $1::uuid', [
+        sameMillisecondOlder.id, '2026-10-27T12:00:00.123100Z',
+      ]);
+      await pool.query('UPDATE reports SET published_at = $2::timestamptz WHERE id = $1::uuid', [
+        sameMillisecondNewer.id, '2026-10-27T12:00:00.123900Z',
+      ]);
       const context = new PostgresReportContextReader(new PostgresTransactionDatabase(pool));
       const verified = await createReport(pool, 'author-one', { status: 'VERIFIED', existenceCount: 3 });
 
@@ -323,5 +341,15 @@ describe('PostgreSQL report read projections', () => {
       expect(pageTwo.items).toHaveLength(1);
       expect(pageTwo.items[0].id).not.toBe(pageOne.items[0].id);
       expect([first.id, second.id, third.id, verified.id]).toContain(pageOne.items[0].id);
+
+      const precisePageOneResponse = await app.request('/api/reports?routes=YELLOW&limit=1', {}, environment);
+      const precisePageOne = ReportListSchema.parse(await precisePageOneResponse.json());
+      expect(precisePageOne.items[0].id).toBe(sameMillisecondNewer.id);
+      const precisePageTwoResponse = await app.request(
+        `/api/reports?routes=YELLOW&limit=1&cursor=${encodeURIComponent(precisePageOne.nextCursor!)}`,
+        {}, environment,
+      );
+      const precisePageTwo = ReportListSchema.parse(await precisePageTwoResponse.json());
+      expect(precisePageTwo.items.map((item) => item.id)).toEqual([sameMillisecondOlder.id]);
     }));
 });

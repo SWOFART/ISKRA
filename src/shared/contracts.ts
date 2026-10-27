@@ -151,10 +151,18 @@ export const ViewerReportDetailSchema = object({ ...detailFields, viewer: Viewer
 export const ReportDetailSchema = union(PublicReportDetailSchema, ViewerReportDetailSchema);
 export const ReportListSchema = object({ items: array(ReportSummarySchema, 0, 100), nextCursor: nullable(string(1, 512)) });
 export const ReportListQuerySchema = object({
-  city: string(1, 64).refine((v) => v === 'heilbronn', 'Unsupported city'),
-  route: nullable(RouteSchema),
+  cityId: string(1, 64).refine((v) => v === 'heilbronn', 'Unsupported city'),
+  bbox: nullable(string(1, 64).refine((v) => {
+    const coordinates = v.split(',');
+    if (coordinates.length !== 4 || coordinates.some((part) => !/^-?\d+(?:\.\d+)?$/.test(part))) return false;
+    const [west, south, east, north] = coordinates.map(Number);
+    return Number.isFinite(west) && Number.isFinite(south) && Number.isFinite(east) && Number.isFinite(north)
+      && west >= -180 && east <= 180 && west < east
+      && south >= -90 && north <= 90 && south < north;
+  }, 'Invalid bounding box')),
+  routes: nullable(array(RouteSchema, 1, 3).refine((v) => new Set(v).size === v.length, 'Duplicate routes')),
   needsVerification: boolean,
-  includeResolved: boolean,
+  resolved: boolean,
   limit: number(1, 100, true),
   cursor: nullable(string(1, 128)),
 });

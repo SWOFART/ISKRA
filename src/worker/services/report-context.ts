@@ -5,7 +5,6 @@ import {
   ReportListQuerySchema,
   ReportListSchema,
   ReportSummarySchema,
-  TimestampSchema,
   UuidSchema,
   ViewerReportDetailSchema,
   type Photo,
@@ -111,8 +110,11 @@ interface SummaryRow extends Record<string, unknown> {
   last_existence_confirmed_at: Date | string | null;
   version: number;
   updated_at: Date | string;
-  published_at: Date | string;
   is_demo: boolean;
+}
+
+interface ListRow extends SummaryRow {
+  published_at_cursor: string;
 }
 
 interface PhotoReferenceRow { id: string; ordinal: number; }
@@ -165,8 +167,11 @@ function parseCursor(value: string | null): Cursor | null {
   const delimiter = value.lastIndexOf('~');
   try {
     if (delimiter <= 0) throw new TypeError('Invalid report list cursor.');
+    const publishedAt = value.slice(0, delimiter);
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(publishedAt)
+      || !Number.isFinite(Date.parse(publishedAt))) throw new TypeError('Invalid report cursor timestamp.');
     return {
-      publishedAt: TimestampSchema.parse(value.slice(0, delimiter)),
+      publishedAt,
       id: UuidSchema.parse(value.slice(delimiter + 1)),
     };
   } catch {
@@ -174,10 +179,11 @@ function parseCursor(value: string | null): Cursor | null {
   }
 }
 
-function makeCursor(value: Date | string, id: string): string {
-  const timestamp = asTimestamp(value);
-  if (!timestamp) throw new TypeError('Database returned an invalid publication timestamp.');
-  return `${timestamp}~${id}`;
+function makeCursor(publishedAt: string, id: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(publishedAt)) {
+    throw new TypeError('Database returned an invalid publication timestamp.');
+  }
+  return `${publishedAt}~${id}`;
 }
 
 function pendingVerificationPredicate(actorParameter: string | null): string {
@@ -191,18 +197,10 @@ function pendingVerificationPredicate(actorParameter: string | null): string {
       ))
     OR
     (r.status = 'AWAITING_RESOLUTION'
-      AND (
-        (r.author_user_id <> ${actorParameter}
-          AND NOT EXISTS (
-            SELECT 1 FROM votes v WHERE v.report_id = r.id AND v.stage = 'EXISTENCE'
-              AND v.voter_user_id = ${actorParameter}
-          ))
-        OR
-        (COALESCE(cleanup.cleaner_user_id, '') <> ${actorParameter}
-          AND NOT EXISTS (
-            SELECT 1 FROM votes v WHERE v.report_id = r.id AND v.stage = 'RESOLUTION'
-              AND v.voter_user_id = ${actorParameter}
-          ))
+      AND COALESCE(cleanup.cleaner_user_id, '') <> ${actorParameter}
+      AND NOT EXISTS (
+        SELECT 1 FROM votes v WHERE v.report_id = r.id AND v.stage = 'RESOLUTION'
+          AND v.voter_user_id = ${actorParameter}
       ))
   )`;
 }
@@ -234,14 +232,23 @@ export class PostgresReportReadService {
 
   async list(query: ReportListQuery, viewerId?: string): Promise<ReturnType<typeof ReportListSchema.parse>> {
     const cursor = parseCursor(query.cursor);
-    const values: unknown[] = [query.city];
+    const values: unknown[] = [query.cityId];
     const parameter = (value: unknown) => {
       values.push(value);
       return `$${values.length}`;
     };
     const where = ['r.city_id = $1'];
-    if (!query.includeResolved) where.push("r.status <> 'RESOLVED'");
-    if (query.route) where.push(`r.route = ${parameter(query.route)}::report_route`);
+    if (!query.resolved) where.push("r.status <> 'RESOLVED'");
+    if (query.routes) where.push(`r.route = ANY(${parameter(query.routes)}::report_route[])`);
+    if (query.bbox && !query.needsVerification) {
+      const [west, south, east, north] = query.bbox.split(',').map(Number);
+      const westParameter = parameter(west);
+      const southParameter = parameter(south);
+      const eastParameter = parameter(east);
+      const northParameter = parameter(north);
+      where.push(`r.lng BETWEEN ${westParameter} AND ${eastParameter}
+        AND r.lat BETWEEN ${southParameter} AND ${northParameter}`);
+    }
     let actorParameter: string | null = null;
     if (query.needsVerification) {
       if (viewerId) actorParameter = parameter(viewerId);
@@ -253,10 +260,12 @@ export class PostgresReportReadService {
       where.push(`(r.published_at, r.id) < (${timestampParameter}::timestamptz, ${idParameter}::uuid)`);
     }
     const limitParameter = parameter(query.limit + 1);
-    const rows = await this.database.withTransaction(async (client) => client.query<SummaryRow>(
+    const rows = await this.database.withTransaction(async (client) => client.query<ListRow>(
       `SELECT r.id, r.route, r.status, r.lat, r.lng, cover.id AS cover_photo_id, r.description,
          r.existence_yes_count, r.resolution_yes_count, r.existence_verified_at,
-         r.last_existence_confirmed_at, r.version, r.updated_at, r.published_at, r.is_demo
+         r.last_existence_confirmed_at, r.version, r.updated_at, r.is_demo,
+         to_char(r.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+           AS published_at_cursor
        FROM reports r
        JOIN LATERAL (
          SELECT p.id FROM report_photos p
@@ -275,7 +284,7 @@ export class PostgresReportReadService {
     const last = pageRows.at(-1);
     return ReportListSchema.parse({
       items,
-      nextCursor: hasMore && last ? makeCursor(last.published_at, last.id) : null,
+      nextCursor: hasMore && last ? makeCursor(last.published_at_cursor, last.id) : null,
     });
   }
 
@@ -283,7 +292,7 @@ export class PostgresReportReadService {
     const rows = await this.database.withTransaction(async (client) => client.query<DetailRow>(
       `SELECT r.id, r.route, r.status, r.lat, r.lng, r.description, r.existence_yes_count,
          r.resolution_yes_count, r.existence_verified_at, r.last_existence_confirmed_at,
-         r.version, r.updated_at, r.published_at, r.is_demo, r.author_user_id,
+         r.version, r.updated_at, r.is_demo, r.author_user_id,
          author.nickname AS author_nickname, author.avatar_key AS author_avatar,
          cleanup.cleaner_user_id, cleaner.nickname AS cleaner_nickname,
          cleaner.avatar_key AS cleaner_avatar,

@@ -25,7 +25,7 @@ function parseBoolean(value: string | null, fallback: boolean): boolean | unknow
 
 function parseListQuery(url: string) {
   const params = new URL(url).searchParams;
-  const allowed = new Set(['city', 'route', 'needsVerification', 'includeResolved', 'limit', 'cursor']);
+  const allowed = new Set(['cityId', 'bbox', 'routes', 'needsVerification', 'resolved', 'limit', 'cursor']);
   for (const key of params.keys()) {
     if (!allowed.has(key) || params.getAll(key).length !== 1) throw invalidQuery();
   }
@@ -34,10 +34,11 @@ function parseListQuery(url: string) {
     : /^[1-9]\d{0,2}$/.test(limitValue) ? Number(limitValue) : limitValue;
   try {
     return ReportListQuerySchema.parse({
-      city: params.get('city') ?? 'heilbronn',
-      route: params.get('route'),
+      cityId: params.get('cityId') ?? 'heilbronn',
+      bbox: params.get('bbox'),
+      routes: params.has('routes') ? params.get('routes')!.split(',') : null,
       needsVerification: parseBoolean(params.get('needsVerification'), false),
-      includeResolved: parseBoolean(params.get('includeResolved'), false),
+      resolved: parseBoolean(params.get('resolved'), false),
       limit,
       cursor: params.get('cursor'),
     });
