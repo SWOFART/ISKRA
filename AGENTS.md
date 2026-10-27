@@ -8,3 +8,4 @@
 - Link an issue when one exists; check for duplicates before creating a requested issue. State acceptance criteria and verification clearly.
 - Open agent-created PRs as drafts targeting `develop`; release PRs go from `develop` to `main`. A human reviews and merges. Do not force-push or rewrite shared history without explicit user authorization.
 - Follow the existing deployment workflow. Do not import another repository's build stack or approval gates as unstated requirements.
+- The user explicitly requested Open Circuit's checklist/Gate A pattern. Preserve the full PR template when creating/updating a PR, follow CONTRIBUTING.md's required gates, and provide the filled `.github/prompts/gate-a-review.md` prompt for independent review. Gate A stays PENDING without an actual user-provided verdict; self-review is not independent evidence.
