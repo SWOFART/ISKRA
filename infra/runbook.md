@@ -231,3 +231,11 @@ Rechecked on 2026-10-27 without provisioning resources, enabling billing/APIs, c
 | Gemini / MapTiler | No populated model/key/map values in the environment records; model availability, quota and map-origin restrictions are unverified. |
 
 Current [Gemini rate-limit documentation](https://ai.google.dev/gemini-api/docs/rate-limits) requires checking the actual project's active limits rather than inferring capacity from a key or a generic advertised tier. No model/version/quota is approved by these probes. Issue #8 remains open because the account/budget/domain/model requirements are incomplete. These blockers affect live provisioning and G1, not disposable local tests.
+
+## Reviewed P0 PostgreSQL schema — issue 2.5
+
+`migrations/0001_p0_core.sql` is the additive P0 baseline. Its reviewed SHA-256 and the role separation are recorded in [`migrations/README.md`](../migrations/README.md). Verify the file checksum and a database backup before any persistent migration. Apply with the dedicated migration role in a controlled operator/release step; do not run DDL from Worker startup, PR CI credentials or the runtime role. A migration failure must stop the release before deploying code that requires the new schema.
+
+The schema enforces unique vote-stage participation, semantic reward references, report/cleanup analysis use and photo parent ordinals. It permits continued existence support beyond three, caps resolution confirmations at three, stores the first and latest existence confirmation separately, and uses a mutable unique analysis lease slot over non-unique attempt history. The v1 API uses one-based photo ordinals while the database stores zero-based ordinals; convert only in the adapter. Cleanup GPS is stored for private audit and must not enter public projections.
+
+The migration defines no Cloud SQL users, grants, network rules or credentials. The planned `iskra_runtime` and `iskra_migrator` names are role boundaries, not evidence that cloud identities exist; D10 verification and the real migration/backup rehearsal remain pending. PR integration tests apply the SQL only in generated disposable schemas. This work does not claim a live database migration, deployed transaction, or G1 acceptance.

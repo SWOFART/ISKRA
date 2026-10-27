@@ -1,0 +1,31 @@
+# PostgreSQL migrations
+
+`0001_p0_core.sql` is the reviewed P0 schema baseline. SQL migrations are the database schema authority; no ORM schema-push or Worker-startup migration is enabled. Once applied to any persistent database, a migration file is immutable. Follow-up schema changes use a new additive numbered file.
+
+## Migration inventory and checksums
+
+| Migration | SHA-256 |
+|---|---|
+| `0001_p0_core.sql` | `bae5a68906a6e4ba971d06a7cae1e02a3b989e81dba0d00551a3d6fb945aeaa8` |
+
+Verify a migration's checksum against this reviewed inventory before applying it. PowerShell: `Get-FileHash migrations/0001_p0_core.sql -Algorithm SHA256`. Linux/macOS: `sha256sum migrations/0001_p0_core.sql`. After review, record the verified checksum with the migration run and backup identity. Never edit an applied migration to make its checksum match; create a new migration instead.
+
+## Database roles and application boundary
+
+- **Migration role** (planned name `iskra_migrator`): owns the application schema and has the DDL rights needed to apply reviewed migrations. Use only from the controlled migration job/operator path after a verified backup and checksum check. It is never bound to the Worker.
+- **Runtime role** (planned name `iskra_runtime`): does not own the schema and has no `CREATE`, `ALTER`, or `DROP` rights. Grant only the table/sequence access required by the runtime. The runtime must not update or delete reward-ledger rows or cascade-delete reports and evidence.
+- **Integration-test role** (`iskra_test`): disposable loopback-only trust-auth identity used by CI/local PostgreSQL tests. It is not a product identity and must never receive Cloud SQL credentials.
+
+These names describe the required separation; this migration does not provision database roles or grant cloud privileges. D10 resource permissions and the real Cloud SQL identity remain unverified. Runtime and migration connection values must come from Google Secret Manager/Hyperdrive as documented in [the runbook](../infra/runbook.md); no values belong in this repository or GitHub settings.
+
+## P0 schema notes
+
+- `report_photos.ordinal` is zero-based (`0..4`) in SQL. The v1 response contract exposes one-based ordinals (`1..5`); adapters translate at the boundary.
+- `reports.existence_verified_at` is the first three-YES threshold time. `last_existence_confirmed_at` advances on each later accepted existence YES and is not a replacement for the first timestamp.
+- `ai_analyses` intentionally has no unique constraint on `(owner_user_id, kind, input_hash)`. `analysis_leases` has one mutable slot for that key and points to the current attempt, allowing a new attempt after expiry/failure without making an old result publishable.
+- A report's fixed `analysis_kind = REPORT` discriminator participates in a composite foreign key, so its analysis must belong to the report author and be a report analysis. Cleanup submissions similarly bind analysis owner and target report.
+- Cross-row lifecycle and voter-role rules (such as requiring a GREEN report before cleanup, or preventing self-votes) are checked in transaction services; SQL `CHECK` constraints only use columns from their own row.
+- Cleanup coordinates are private audit fields. Public report DTOs expose only the report point.
+- Conditional P1 tables and awards (missions, Red drafts and redemption/vouchers) are not part of this P0 migration.
+
+The migration contains no data backfill or destructive operation. The integration suite applies it only inside a generated disposable schema; no cloud database was migrated by this task.
