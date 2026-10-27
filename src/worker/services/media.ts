@@ -3,7 +3,7 @@ import { POLICY } from '../../shared/contracts';
 import { ApiError } from '../middleware/errors';
 
 // Check T.81 marker framing: the pixel decoder permits absent scans and ignores trailing data.
-function assertJpegStructure(bytes: Uint8Array): void {
+function inspectJpeg(bytes: Uint8Array): { width: number; height: number } {
   let offset = 2;
   let frame: { width: number; height: number; progressive: boolean; components: Map<number, { h: number; v: number }> } | undefined;
   const scanned = new Set<number>();
@@ -17,7 +17,7 @@ function assertJpegStructure(bytes: Uint8Array): void {
     const marker = bytes[offset++];
     if (marker === 0xd9) {
       if (!frame || offset !== bytes.length || scanned.size !== frame.components.size) return invalid();
-      return;
+      return { width: frame.width, height: frame.height };
     }
     if (marker === 0 || marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)
       || offset + 2 > bytes.length) invalid();
@@ -97,16 +97,17 @@ export function validateJpeg(bytes: Uint8Array, contentType: string): { width: n
   }
   let image;
   try {
-    assertJpegStructure(bytes);
+    const dimensions = inspectJpeg(bytes);
+    if (dimensions.width > 1600 || dimensions.height > 1600) {
+      throw new ApiError(413, 'PHOTO_TOO_LARGE', 'Resize the photo to at most 1600 pixels per side.');
+    }
     image = decode(bytes, {
       useTArray: true, formatAsRGBA: false, tolerantDecoding: false,
       maxResolutionInMP: 2.56, maxMemoryUsageInMB: 64,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(415, 'UNSUPPORTED_MEDIA', 'The JPEG photo is invalid or exceeds image limits.');
-  }
-  if (image.width > 1600 || image.height > 1600) {
-    throw new ApiError(413, 'PHOTO_TOO_LARGE', 'Resize the photo to at most 1600 pixels per side.');
   }
   return { width: image.width, height: image.height };
 }

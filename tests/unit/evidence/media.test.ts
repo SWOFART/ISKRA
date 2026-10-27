@@ -35,6 +35,18 @@ describe('standalone bounded JPEG validation', () => {
     }
   });
 
+  it('rejects unused entropy bytes before EOI and invalid final-byte padding', () => {
+    const valid = photo();
+    for (const suffix of [[0, 17], [255, 0]]) {
+      const extra = new Uint8Array([...valid.slice(0, -2), ...suffix, 255, 217]);
+      expect(() => validateJpeg(extra, 'image/jpeg')).toThrow();
+    }
+    const badPadding = valid.slice();
+    expect(badPadding.at(-3)! & 1).toBe(1);
+    badPadding[badPadding.length - 3] &= 0xfe;
+    expect(() => validateJpeg(badPadding, 'image/jpeg')).toThrow();
+  });
+
   it('rejects invalid segment lengths and scan selectors', () => {
     const valid = photo();
     const sos = valid.findIndex((value, index) => value === 0xff && valid[index + 1] === 0xda);
@@ -73,6 +85,7 @@ describe('standalone bounded JPEG validation', () => {
   it('accepts a 1600px side and rejects larger dimensions', () => {
     expect(validateJpeg(photo(1600, 1), 'image/jpeg')).toEqual({ width: 1600, height: 1 });
     expect(() => validateJpeg(photo(1601, 1), 'image/jpeg')).toThrow('1600 pixels');
+    expect(() => validateJpeg(photo(1601, 1600), 'image/jpeg')).toThrow('1600 pixels');
   });
 
   it('accepts the full selected 1600 by 1600 resolution', () => {
@@ -84,6 +97,6 @@ describe('standalone bounded JPEG validation', () => {
     const frame = bytes.findIndex((value, index) => value === 0xff && bytes[index + 1] === 0xc0);
     expect(frame).toBeGreaterThan(0);
     bytes.fill(0xff, frame + 5, frame + 9);
-    expect(() => validateJpeg(bytes, 'image/jpeg')).toThrow('invalid or exceeds image limits');
+    expect(() => validateJpeg(bytes, 'image/jpeg')).toThrow('1600 pixels');
   });
 });
