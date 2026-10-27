@@ -363,6 +363,36 @@
       }
     }
   },
+  "twoStageVoteRequests": [
+    {
+      "reportId": "11111111-1111-4111-8111-000000000001",
+      "idempotencyKey": "11111111-1111-4111-8111-000000000008",
+      "body": {
+        "stage": "EXISTENCE",
+        "choice": "YES",
+        "location": {
+          "lat": 49.14,
+          "lng": 9.22,
+          "accuracyM": 50,
+          "observedAt": "2026-10-27T11:59:00.000Z"
+        }
+      }
+    },
+    {
+      "reportId": "11111111-1111-4111-8111-000000000001",
+      "idempotencyKey": "11111111-1111-4111-8111-000000000010",
+      "body": {
+        "stage": "RESOLUTION",
+        "choice": "YES",
+        "location": {
+          "lat": 49.14,
+          "lng": 9.22,
+          "accuracyM": 50,
+          "observedAt": "2026-10-27T11:59:00.000Z"
+        }
+      }
+    }
+  ],
   "cleanupPending": {
     "cleanupId": "11111111-1111-4111-8111-000000000006",
     "status": "AWAITING_VERIFICATION",

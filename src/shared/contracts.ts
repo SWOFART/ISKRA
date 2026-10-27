@@ -1,6 +1,6 @@
 import { array, boolean, enumeration, literal, nullable, number, object, string, union, type Infer } from './schema';
 
-export const CONTRACT_REVISION = 'v1-candidate.1' as const;
+export const CONTRACT_REVISION = 'v1-candidate.2' as const;
 export const POLICY = Object.freeze({
   voteRadiusM: 150, cleanupRadiusM: 150, maxAccuracyM: 50, maxLocationAgeSeconds: 60,
   maxPinDisplacementM: 3, reporterTotalRp: 20, reporterInitialRp: 5,
@@ -41,9 +41,41 @@ export const ErrorCodeSchema = enumeration([
   'AI_TIMEOUT', 'UNAVAILABLE', 'INTERNAL_ERROR',
 ]);
 export type ErrorCode = Infer<typeof ErrorCodeSchema>;
+export const API_ERROR_POLICY = Object.freeze({
+  INVALID_INPUT: { httpStatus: 400, retryable: false },
+  UNAUTHENTICATED: { httpStatus: 401, retryable: false },
+  SELF_VOTE: { httpStatus: 403, retryable: false },
+  NOT_ELIGIBLE: { httpStatus: 403, retryable: false },
+  TOO_FAR: { httpStatus: 403, retryable: true },
+  FORBIDDEN: { httpStatus: 403, retryable: false },
+  NOT_FOUND: { httpStatus: 404, retryable: false },
+  ALREADY_VOTED: { httpStatus: 409, retryable: false },
+  STAGE_CLOSED: { httpStatus: 409, retryable: false },
+  IDEMPOTENCY_CONFLICT: { httpStatus: 409, retryable: false },
+  ANALYSIS_CONSUMED: { httpStatus: 409, retryable: false },
+  CLEANUP_ALREADY_SUBMITTED: { httpStatus: 409, retryable: false },
+  INSUFFICIENT_RP: { httpStatus: 409, retryable: false },
+  PRICE_CHANGED: { httpStatus: 409, retryable: false },
+  EXPIRED: { httpStatus: 410, retryable: true },
+  PHOTO_TOO_LARGE: { httpStatus: 413, retryable: false },
+  UNSUPPORTED_MEDIA: { httpStatus: 415, retryable: false },
+  LOCATION_INACCURATE: { httpStatus: 422, retryable: true },
+  LOCATION_STALE: { httpStatus: 422, retryable: true },
+  PIN_TOO_FAR: { httpStatus: 422, retryable: true },
+  AI_UNCERTAIN: { httpStatus: 422, retryable: true },
+  AI_REJECTED: { httpStatus: 422, retryable: true },
+  RATE_LIMITED: { httpStatus: 429, retryable: true },
+  AI_INVALID_OUTPUT: { httpStatus: 502, retryable: true },
+  AI_UNAVAILABLE: { httpStatus: 503, retryable: true },
+  DATABASE_UNAVAILABLE: { httpStatus: 503, retryable: true },
+  AI_TIMEOUT: { httpStatus: 504, retryable: true },
+  UNAVAILABLE: { httpStatus: 503, retryable: true },
+  INTERNAL_ERROR: { httpStatus: 500, retryable: false },
+} satisfies Record<ErrorCode, { httpStatus: number; retryable: boolean }>);
 export const ErrorSchema = object({
   code: ErrorCodeSchema, message: string(1, 500), requestId: UuidSchema, retryable: boolean,
-});
+}).refine((value) => API_ERROR_POLICY[value.code].retryable === value.retryable,
+  'Error retryability does not match the v1 policy');
 export const ErrorEnvelopeSchema = object({ error: ErrorSchema });
 export const PhotoIdsSchema = array(UuidSchema, 1, 5)
   .refine((v) => new Set(v).size === v.length, 'Photo IDs must be unique');

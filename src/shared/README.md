@@ -1,8 +1,9 @@
 # Shared P0 contracts
 
-Issue #6 / OpenSpec task 1.2; revision `v1-candidate.1`. These are executable contract candidates for A/B/C review, not a frozen G0 contract or live product implementation. B (@SuPuHe) owns this directory. Root configuration and mounts remain C-owned.
+Issue #6 / OpenSpec task 1.2, extended by issue #7 / task 1.3; revision `v1-candidate.2`. These are executable contract candidates for A/B/C review, not a frozen G0 contract or live product implementation. B (@SuPuHe) owns this directory. Root configuration and mounts remain C-owned. See the [API v1 handoff](api-v1.md) for endpoint, error, upload, location, internal-interface and RP rules; G0 remains pending A/C acknowledgment.
 
 - [contracts.ts](contracts.ts): policy constants, strict JSON runtime schemas and inferred TypeScript DTOs. Schema objects expose `parse(unknown)` and `safeParse(unknown)`; failures never coerce input, strip unknown fields or include input values in error text. This small dependency-free validator supports only the JSON shapes used here.
+- [api-v1.md](api-v1.md): the P0 API and internal contract handoff, including machine-matched HTTP/error retry policy. It remains a review candidate until A/C acknowledge it.
 - [location.ts](location.ts): measured distance and new-action admission. A valid fix is at most 60 seconds old, at most 50m reported accuracy and within 150m for voting/cleanup; the report pin may move at most 3m. Freshness is a server-clock operation check, not a property of a timeless DTO. Accepted operation replays and consumption of still-valid bound analyses skip new-action freshness. These helpers do not prove physical presence.
 - [p0.json](../../tests/fixtures/contracts/p0.json): synthetic `DEMO` examples for A/C. `demo.invalid` URLs and tokens are inert placeholders. Run them through the same exported schemas as actual responses. Never activate them as a production fallback or live acceptance evidence.
 
@@ -29,4 +30,4 @@ Reporter total is 20 per report (5 initial +15 final), cleaner 40 after resoluti
 
 New publication (`rpAwarded:5`) returns the initial committed AWAITING_EXISTENCE report with zero existence votes. A publication replay (`rpAwarded:0`) returns the current report/account snapshots, which may have advanced. The new-cleanup example starts resolution at 0/3; replaying cleanup may carry a later canonical report snapshot, with the same provisional amount and no actual payment.
 
-The schema records D01–D08 and required P0 DTOs. It does not implement JWT verification, SQL transactions, rate limits, photo decoding, analysis expiry/consumption, live provider calls, P1 missions/Red drafts/redemption, or G0 acknowledgment. Platform error codes UNAVAILABLE and INTERNAL_ERROR are included so current C envelopes can validate; #7 will publish their explicit HTTP/retry mapping alongside the planned codes.
+The schemas record D01–D08 and required P0 DTOs. They do not implement JWT verification, SQL transactions, rate limits, photo decoding, analysis expiry/consumption, live provider calls or conditional P1 routes. Platform errors `UNAVAILABLE` and `INTERNAL_ERROR` have explicit HTTP/retry policy alongside the planned codes. No live integration or G0 pass is claimed.

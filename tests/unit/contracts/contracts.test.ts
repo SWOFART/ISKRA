@@ -31,6 +31,14 @@ describe('P0 validating fixtures shared by A/B/C', () => {
     expect(detail.existenceYesCount).toBe(8);
     expect(detail.viewer.stages.EXISTENCE.canVote).toBe(true);
     expect(detail.viewer.stages.RESOLUTION.canVote).toBe(true);
+    expect(fixtures.twoStageVoteRequests).toHaveLength(2);
+    expect(fixtures.twoStageVoteRequests.map((entry) => entry.reportId)).toEqual([detail.id, detail.id]);
+    expect(fixtures.twoStageVoteRequests.map((entry) => entry.body.stage)).toEqual(detail.openVoteStages);
+    expect(new Set(fixtures.twoStageVoteRequests.map((entry) => entry.idempotencyKey)).size).toBe(2);
+    for (const entry of fixtures.twoStageVoteRequests) {
+      expect(c.UuidSchema.safeParse(entry.idempotencyKey).success).toBe(true);
+      expect(c.VoteRequestSchema.safeParse(entry.body).success).toBe(true);
+    }
   });
   it('keeps current balance independent from lifetime category earnings and pending RP', () => {
     const impact = c.ImpactSchema.parse(fixtures.impact);
@@ -42,6 +50,19 @@ describe('P0 validating fixtures shared by A/B/C', () => {
 });
 
 describe('strict JSON boundaries', () => {
+  it('maps each stable error to a valid HTTP status and enforces its retry policy', () => {
+    const validHttpStatuses = new Set([400, 401, 403, 404, 409, 410, 413, 415, 422, 429, 500, 502, 503, 504]);
+    for (const [code, policy] of Object.entries(c.API_ERROR_POLICY)) {
+      expect(c.ErrorCodeSchema.safeParse(code).success).toBe(true);
+      expect(validHttpStatuses.has(policy.httpStatus)).toBe(true);
+      const error = { code, message: 'Safe error', requestId: id, retryable: policy.retryable };
+      expect(c.ErrorSchema.safeParse(error).success).toBe(true);
+      expect(c.ErrorSchema.safeParse({ ...error, retryable: !policy.retryable }).success).toBe(false);
+    }
+    expect(c.API_ERROR_POLICY.LOCATION_INACCURATE).toEqual({ httpStatus: 422, retryable: true });
+    expect(c.API_ERROR_POLICY.AI_TIMEOUT).toEqual({ httpStatus: 504, retryable: true });
+    expect(c.API_ERROR_POLICY.INTERNAL_ERROR).toEqual({ httpStatus: 500, retryable: false });
+  });
   it.each(['PURPLE', '', null, 3])('rejects bad route %j', (route) => {
     expect(c.RouteSchema.safeParse(route).success).toBe(false);
   });
@@ -88,6 +109,19 @@ describe('strict JSON boundaries', () => {
 });
 
 describe('execution, assessment and ledger distinctions', () => {
+  it('keeps execution state, assessment outcome and RP accounting separate', () => {
+    expect(fixtures.analysisRunning.status).toBe('RUNNING');
+    expect(fixtures.analysisRunning).not.toHaveProperty('result');
+    expect(fixtures.reportAccepted.status).toBe('READY');
+    expect(fixtures.reportAccepted.result.decision).toBe('ACCEPT');
+    expect(fixtures.reportRetake.status).toBe('READY');
+    expect(fixtures.reportRetake.result.decision).toBe('RETAKE');
+    expect(fixtures.analysisFailed.status).toBe('FAILED');
+    expect(fixtures.impact.totals.balanceRp).toBe(-5);
+    expect(fixtures.impact.totals.earnedRp).toBe(60);
+    expect(fixtures.impact.reporter.pendingRp).toBe(15);
+    expect(fixtures.impact.cleaner.pendingRp).toBe(40);
+  });
   it('rejects route-bearing RETAKE and inconsistent ACCEPT safety', () => {
     const retake = fixtures.reportRetake.result;
     expect(c.ReportAssessmentSchema.safeParse({ ...retake, route: 'GREEN' }).success).toBe(false);
