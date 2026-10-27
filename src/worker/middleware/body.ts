@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { WorkerEnv } from './context';
 import { ApiError } from './errors';
+import { POLICY } from '../../shared/contracts';
 
 export const boundedBody = createMiddleware<WorkerEnv>(async (c, next) => {
   const reader = c.req.raw.body?.getReader();
@@ -12,8 +13,11 @@ export const boundedBody = createMiddleware<WorkerEnv>(async (c, next) => {
       const { done, value } = await reader.read();
       if (done) break;
       length += value.byteLength;
-      if (length > 1_048_576) {
-        throw new ApiError(413, 'INVALID_INPUT', 'Request body is too large.');
+      if (length > POLICY.maxPhotoBytes) {
+        if (c.req.header('Content-Type')?.split(';')[0].trim().toLowerCase() === 'image/jpeg') {
+          throw new ApiError(413, 'PHOTO_TOO_LARGE', 'Photo is too large.');
+        }
+        throw new ApiError(400, 'INVALID_INPUT', 'Request body is too large.');
       }
       chunks.push(value);
     }

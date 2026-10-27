@@ -1,15 +1,19 @@
 import type { Context } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { API_ERROR_POLICY, type ApiErrorHttpStatus, type ErrorCode } from '../../shared/contracts';
 import type { WorkerEnv } from './context';
 
 export class ApiError extends Error {
   constructor(
-    readonly status: ContentfulStatusCode,
-    readonly code: string,
+    readonly status: ApiErrorHttpStatus,
+    readonly code: ErrorCode,
     message: string,
-    readonly retryable = false,
+    readonly retryable: boolean = API_ERROR_POLICY[code].retryable,
   ) {
     super(message);
+    const policy = API_ERROR_POLICY[code];
+    if (status !== policy.httpStatus || retryable !== policy.retryable || !message || message.length > 500) {
+      throw new TypeError('API error must follow the shared v1 policy.');
+    }
   }
 }
 

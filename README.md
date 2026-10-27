@@ -17,7 +17,7 @@ This repository is the team's documentation and delivery base: **https://github.
 
 ## Current status
 
-Person C's first implementation slice adds a root Hono Worker, Firebase token middleware and safe API boundaries. Root `npm run build` bundles **only the Worker**; React/Vite, domain routes, database, media and AI integration remain pending. `/api/health` reports `applicationReady: false`, unknown API paths return JSON 404, and client paths return JSON 503 until A's entry is integrated.
+Person C's platform adds a root Hono Worker, Firebase token middleware and safe API boundaries using B's shared v1 error policy. B's domain facade is mounted and returns explicit JSON 503 for unfinished endpoints. Root `npm run build` bundles **only the Worker**; React/Vite, actual domain handlers/database, media and AI integration remain pending. `/api/health` reports `applicationReady: false`, unknown API paths return JSON 404, and client paths return JSON 503 until A's entry is integrated.
 
 The infrastructure-only [deployment-check Worker](infra/deployment-check/) remains separate. Neither Worker health nor local tests prove a working Green flow.
 
