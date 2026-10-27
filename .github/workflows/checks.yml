@@ -120,21 +120,25 @@ jobs:
           from pathlib import Path
           import subprocess
           import tempfile
+          import sys
+
+          sys.path.insert(0, ".github/scripts")
+          from check_failure_probe import validate_probe
 
           with tempfile.TemporaryDirectory() as folder:
               report = Path(folder) / "probe.json"
+              metadata = Path(folder) / "errors.json"
               result = subprocess.run(
-                  ["npm", "run", "test:integration", "--", "--reporter=json", f"--outputFile={report}"],
-                  env=os.environ | {"ISKRA_TEST_INJECT_FAILURE": "1"},
+                  ["npm", "run", "test:integration", "--", "--reporter=json",
+                   "--reporter=./tests/integration/auth/probe-reporter.ts", f"--outputFile={report}"],
+                  env=os.environ | {"ISKRA_TEST_INJECT_FAILURE": "1", "ISKRA_TEST_PROBE_METADATA": str(metadata)},
                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
               )
               data = json.loads(report.read_text()) if report.exists() else {}
-              failures = [a for suite in data.get("testResults", [])
-                          for a in suite.get("assertionResults", []) if a.get("status") == "failed"]
-              if (result.returncode != 1 or data.get("numFailedTests") != 1 or len(failures) != 1
-                      or failures[0].get("title") != "detects an intentionally violated SQL invariant"
-                      or not any("AssertionError: ISKRA_HARNESS_EXPECTED_FAILURE" in message
-                                 for message in failures[0].get("failureMessages", []))):
+              errors = json.loads(metadata.read_text()) if metadata.exists() else {}
+              try:
+                  validate_probe(result.returncode, data, errors)
+              except ValueError:
                   print(result.stdout)
                   raise SystemExit("Expected only the deliberate invariant assertion failure")
           print("Deliberately violated PostgreSQL invariant produced the expected failing test command.")
