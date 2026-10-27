@@ -1,5 +1,28 @@
 import { expect, test } from '@playwright/test';
 
+test('missing files stay 404 while generated JS and CSS load with their own content types', async ({ request }) => {
+  for (const path of ['/assets/missing.js', '/assets/missing.css', '/assets/missing', '/missing.ico']) {
+    for (const method of ['GET', 'HEAD']) {
+      const response = await request.fetch(path, { method, headers: { Accept: 'text/html' } });
+      expect(response.status(), `${method} ${path}`).toBe(404);
+      expect(response.headers()['x-content-type-options']).toBe('nosniff');
+      const body = await response.text();
+      expect(body).not.toContain('<div id="root">');
+      if (method === 'HEAD') expect(body).toBe('');
+    }
+  }
+  const html = await (await request.get('/')).text();
+  const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map((match) => match[1]);
+  expect(assets.some((path) => path.endsWith('.js'))).toBe(true);
+  expect(assets.some((path) => path.endsWith('.css'))).toBe(true);
+  for (const path of assets) {
+    const response = await request.get(path);
+    expect(response.status()).toBe(200);
+    expect(response.headers()['content-type']).toMatch(path.endsWith('.css') ? /text\/css/ : /(?:text|application)\/javascript/);
+    expect(response.headers()['x-content-type-options']).toBe('nosniff');
+  }
+});
+
 for (const [path, selected] of [
   ['/', 'Map'], ['/impact', 'My Impact'], ['/rewards', 'Rewards'], ['/reports/123', 'Map'],
 ]) {

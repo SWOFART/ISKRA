@@ -21,7 +21,16 @@ export function createApp() {
     }
     if (c.env.ASSETS) {
       c.header('Content-Security-Policy', "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
-      const response = await c.env.ASSETS.fetch(c.req.raw);
+      let response = await c.env.ASSETS.fetch(c.req.raw);
+      const path = c.req.path;
+      const fileRequest = path === '/assets' || path.startsWith('/assets/')
+        || path.slice(path.lastIndexOf('/') + 1).includes('.');
+      // shortcut: client routes are extensionless; revise fallback if dotted routes are introduced.
+      if (response.status === 404 && !fileRequest) {
+        const index = new URL(c.req.url);
+        index.pathname = '/';
+        response = await c.env.ASSETS.fetch(new Request(index, c.req.raw));
+      }
       return c.newResponse(response.body, response);
     }
     throw new ApiError(503, 'UNAVAILABLE', 'Client assets are unavailable.', true);
