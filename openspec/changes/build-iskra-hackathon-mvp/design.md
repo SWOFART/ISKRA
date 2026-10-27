@@ -1,0 +1,223 @@
+# Design
+
+## Context
+
+See `proposal.md` for motivation and the capability specs for behavior. All 788 lines of root `plan.md` were read. The root contains `README.md`, `infra/runbook.md`, ignore rules and two GitHub workflows. Only `infra/deployment-check` has a package, source and three Node tests. There is no root application manifest, `src/`, application test suite or migration. All paths below outside that existing setup are **future targets**, not discovered implementation.
+
+`openspec context/list` resolve the local repository root with schema `spec-driven`, no existing main specs and initially no active changes. The pre-existing untracked `.agents/` and `openspec/` are not product implementation. This operation creates only this change's planning artifacts.
+
+### Source reconciliation and authority
+
+| Source | Observation in this pass | Consequence |
+|---|---|---|
+| `plan.md` §§1–16 | Read completely; approved rules, recommendations and OPEN decisions are distinguished | Preserve its authority labels; a formal SHALL constrains a feature once admitted, not approval of its unresolved policy values |
+| `README.md`, `infra/runbook.md` | Read completely; product absent, local test deployment recorded, CI credential/product hostname outstanding | Reuse setup; do not repeat cloud provisioning or claim the product exists |
+| `.github/workflows/checks.yml` | Runs check-Worker tests/build; root app checks activate when manifest appears; no real-PG job | Root scaffold must provide lockfile/typecheck/test:unit/build; add PG acceptance before data-changing release |
+| `.github/workflows/cloudflare.yml` | Guarded staging/develop, manual production/main, health SHA comparison, deployment disabled by documented setup | Preserve one pipeline; app activation must update staging APP_URL away from check Worker |
+| Check Worker source/config/test | Health only, `applicationReady:false`, no data/AI bindings; Wrangler pinned in its own package | Preserve separately; do not convert it into the product or use its passing tests as app evidence |
+| Original `GREEN_CITY_CODEX_PROMPT_CREATE_PLAN_2026-10-27_EN.md` | Not found in searched local project tree | Rely on requirements attributed to it by `plan.md`; cannot independently verify original wording |
+| Optional `GREEN_CITY_PROJECT_CONTEXT_UPDATED_2026-10-23.md` | Not found locally, consistent with plan | Do not invent missing content |
+| Miro v2.0 and four concepts | Connected Miro found [the team board](https://miro.com/app/board/uXjVEYikPLY=/); read its v2.0 document and inspected all four image previews during reconciliation | Source access is no longer a blocker; exact final visual tokens remain revisable, and newer user decisions override historical example amounts/gallery controls |
+| Villa Borghese | Retained reference in plan §9, not independently re-read here | Supplemental inspiration only; no newly approved logo/palette |
+| GPS/R2 primary documentation | Reviewed [GPS.gov accuracy](https://www.gps.gov/gps-accuracy-0), [W3C Geolocation](https://www.w3.org/TR/geolocation/) and [R2 Worker bindings](https://developers.cloudflare.com/r2/get-started/workers-api/) | Informs the delegated proximity/storage choices; no guarantee of precise browser location or account-specific availability |
+| Live resources | Credentials, network/TLS, quotas, actual model availability, billable resource configuration and price remain unverified | C must check current official docs and account-specific facts at D10/D11 before configuring services |
+
+The plan/runbook setup stop point prohibited an automatic team split during setup. The current explicit request authorizes this planning and three-person split; application work and provisioning remain outside this turn. Plan §11's generic statement that account IDs remain unset is stale relative to the later setup runbook, which records a verified Cloudflare account and environment account IDs. Treat that as **recorded setup evidence**, not fresh verification; Google project, budget, final domain and GitHub token remain unresolved. The four-role estimates in plan §12 and §15 are historical, not a three-person commitment.
+
+**Confirmed follow-up, 2026-10-27:** the user resolved the previously OPEN product choices: 20 RP per report split 5+15, 40 per verified cleanup; same eligible verifiers across stages; existence voting continues until RESOLVED with +5 for each new accepted YES/NO; first valid cleanup submission is the sole pending candidate and is paid only after resolution verification; new cleanup GPS; separate reporter/cleaner statistics and per-category earnings; ACCEPT with route, RETAKE without route, separate technical failure; English/German and Heilbronn. GPS parameters and storage were delegated: select measured radius 150m, accuracy ≤50m, age ≤60s and private R2. These later decisions supersede conflicting historical recommendations in unchanged `plan.md`, including 40 reporter/50 cleaner examples and universal closure at the third YES. D01–D08 are resolved/selected, not blanket OPEN blockers. Implementation, roster assignment and runtime checks remain future tasks.
+
+## Goals / Non-Goals
+
+**Goals:** Give three people stable file boundaries and executable acceptance contracts; prove a real P0 Green loop before optional routes; keep all state, RP and notification invariants in one transactional authority; reuse the existing release pipeline.
+
+**Non-Goals:** Add services/repositories per role, replace the selected stack, create a second storage implementation, deliver P2 during the critical path, turn preliminary AI into evidence of authenticity, or claim browser GPS is tamper-proof. All OUT OF SCOPE entries in plan §2 remain excluded, including native/PWA-install flow, gallery upload, chat/reservations, municipal automation, real rewards, generalized badge engine and advanced antifraud infrastructure.
+
+## Decisions
+
+### 1. One product deployment and one SQL authority
+
+Use the plan's selected React/Vite SPA and Hono API in one Cloudflare Worker per environment; Cloud SQL PostgreSQL through Hyperdrive remains authoritative for identity linkage, report state, votes and RP. Retain Firebase browser auth, server JWT verification, Gemini and MapLibre/MapTiler. One root manifest/lockfile and one schema/migration writer avoid package and migration divergence. The check Worker's package remains separate.
+
+Select private R2 under the user's delegated media decision: the existing Worker can read/write it through a binding without adding another provider's service-account/signing path. SQL stores opaque photo IDs/object keys, not permanent bucket URLs; authenticated upload and short read capabilities stay on Worker routes, not a public bucket. GCS and a second storage implementation are excluded from this MVP. Root app/check-Worker packages remain separate. Separate frontend/backend services add deployment/CORS coordination; a laptop tunnel cannot satisfy hosting acceptance.
+
+### 2. Three streams with exclusive file ownership
+
+The split deliberately moves media/AI away from B's transaction workload. It differs from the old suggested Backend+AI combination because that would concentrate almost the entire critical path on one person. QA is shared: B proves domain races, A proves UI/device behavior, C owns cross-system acceptance and delivery. These are proposed implementation roles, not names or a staffing commitment.
+
+| Owner | Exclusive future files / responsibilities | Handoff and completion evidence |
+|---|---|---|
+| **A — resident client** | `src/client/**`, `tests/unit/client/**`, `tests/e2e/client/**`; shell, map, auth SDK, camera/GPS, sheets, flows, Impact, P1 UI | Contract-valid labeled fixtures, component assertions, real phone camera/login/GPS evidence, live endpoint integration and stale-response checks |
+| **B — domain, SQL and contract steward** | `src/shared/**`, `src/worker/db/{client,schema}.ts`, `migrations/**`, `drizzle.config.ts`, `src/worker/routes/{domain,reports,votes,cleanups,me,missions,rewards,red}.ts`, `src/worker/services/{publication,voting,rewards,cleanups,impact,report-context}.ts`, `tests/unit/domain/**`, `tests/unit/contracts/**`, `tests/integration/domain/**`, `tests/fixtures/contracts/**`, `scripts/{migrate,seed-demo,reset-demo,accelerate-demo}.ts` | Contract v1, schema constraints, atomic services, public projections, real-PG race/rollback/reconciliation evidence; sole migration and ledger writer |
+| **C — platform, identity middleware, evidence and acceptance** | Root `package.json`, `package-lock.json`, `index.html`, `vite.config.ts`, `tsconfig*.json`, `wrangler.jsonc`, Worker binding types/env definitions, `.env.example`, `.dev.vars.example`, test-runner configs, `.gitignore`, `.github/workflows/**`, `README.md`, `infra/runbook.md`, optional `infra/environments.md`; `src/worker/index.ts`, `middleware/**`, `routes/{evidence,health,uploads,photos,analysis}.ts`, `services/{media,gemini}.ts`, `db/evidence-store.ts`, `tests/{unit/evidence,unit/auth,integration/evidence,integration/auth,e2e/release}/**`, `tests/fixtures/{ai,photos}/**`, `scripts/smoke.ts` | Buildable scaffold, HTTPS/token/SQL runtime gate, media/AI APIs, real-PG/Worker/e2e harness and release evidence; maintain the existing check Worker separately |
+
+Unlisted paths require assigning an owner before editing. Every owner can request dependencies but only C changes the root manifest/lockfile; send one bounded dependency request with package purpose/version constraints. Only B changes shared schemas/types/migrations. Only C mounts routes in `src/worker/index.ts`; B adds domain endpoints through `routes/domain.ts`'s stable export. A owns UI entry files even when C creates root scaffold: C supplies build configuration and A supplies `src/client/main.tsx`/`App.tsx` in the first integration PR. B supplies the domain router and DB facade early; until live handlers exist, stubs return explicit unavailable/not-implemented JSON, never successful civic effects.
+
+Only B maintains this change's canonical `tasks.md` and shared planning contracts after review. A/C send completed task IDs, branch/commit, affected paths, exact interface changes, checks/evidence and blockers in a PR handoff; B updates checkboxes after the behavior is complete and integrated. Partial local work is reported as partial. This avoids three branches editing one tracking file. No messages, PRs or branches are actually created by this planning operation.
+
+### 3. Freeze contract v1 before dependent parallel work
+
+The following is the **technical contract to implement and freeze at G0/H2**, not existing code. B authors the single runtime schema/type definitions and valid fixtures; A and C review inputs/outputs against now-resolved D01–D08. Names/signatures remain engineering design decisions until the first contract commit; runtime gates D10/D11 still apply. Independent shell/build/schema work can start after a later implementation authorization without asking the product questions again.
+
+| Contract | Owner and consumer | Proposed v1 shape / invariant |
+|---|---|---|
+| Domain | B → A/C | Route GREEN/YELLOW/RED; status AWAITING_EXISTENCE/VERIFIED/AWAITING_RESOLUTION/RESOLVED; stage EXISTENCE/RESOLUTION; choice YES/NO; photo purpose REPORT/CLEANUP; photo state RESERVED/UPLOADED/ATTACHED; analysis RUNNING/READY/FAILED |
+| Coordinates/errors | B → all | Point `{lat,lng}`; Location `{lat,lng,accuracyM,observedAt}`; error `{error:{code,message,requestId,retryable}}`; bounded finite values, UTC timestamps, safe code → UX mapping |
+| Report list | B → A | Summary `{id,route,status,location:Point,coverPhotoId,description,existenceYesCount,resolutionYesCount,existenceVerifiedAt,lastExistenceConfirmedAt,version,updatedAt,isDemo}`; actual existence count can exceed three; cursor/limit `{items,nextCursor}` |
+| Detail/photo | B contract, C media, A consumer | Detail adds `beforePhotos`, `afterPhotos`, public `author`, nullable public `cleaner`, primary `currentStage` and `openVoteStages:Stage[]`; Photo `{id,ordinal,mediaUrl,expiresAt}`. Private `viewer:{stages:{EXISTENCE:{canVote,reason,hasVoted},RESOLUTION:{canVote,reason,hasVoted}},canSubmitCleanup}`. No private balances/choices in public DTO |
+| Identity | C verifies, B bootstraps, A supplies token | Verified UID in Worker request context only; neutral public identity `{id,nickname,avatar}`; account data owner-only |
+| Analysis | B schema, C producer, A consumer | Report result is ACCEPT `{decision,route,description,hazardLevel,safetyMessage,reason,confidence}` or RETAKE `{decision,reasonCode,reason,instruction}` with no route. Cleanup ACCEPT `{decision,sameScene:"LIKELY",appearsClean:true,hazardRemaining:false,reason,confidence}` or RETAKE reason/instruction. Envelope `{analysisId,status,result?,expiresAt,error?}`; RUNNING/READY/FAILED are execution states, ACCEPT/RETAKE are valid result states; reject extra properties |
+| Publication | B → A | Body `{analysisId,description}`; receipt `{report,rpAwarded,balance,balanceVersion}`; immutable stored analysis inputs establish route/media/location/config snapshots |
+| Vote | B → A | Body `{stage,choice,location}`; receipt `{voteId,replayed,rpAwarded,balance,balanceVersion,report}`; replay pays zero new RP and reads current canonical snapshots |
+| Cleanup | B → A/C | Analyze body `{reportId,photoIds,location:Location}` includes a newly acquired fix; submit `{analysisId}` consumes its bound inputs; receipt `{cleanupId,status,provisionalRp:40,report}`; provisional amount never updates balance |
+| Impact/notifications | B → A | Owner response `{reporter:{created,inProgress,resolved,earnedRp,pendingRp},cleaner:{submitted,pending,verified,earnedRp,pendingRp},verification:{acceptedVotes,confirmedReports,earnedRp},totals:{earnedRp,balanceRp},impactScore:null,impactScoreState:"NOT_CONFIGURED",balanceVersion,items:[{report,roles,lastUpdatedAt}],nextCursor}`; owner-only notification list/read acknowledgment |
+| Upload/read | B schema, C producer, A consumer | Ticket `{photoId,uploadUrl,expiresAt,maxBytes}` then authenticated bounded JPEG PUT; result `{photoId,state:"UPLOADED"}`. Expiring read capability only for published photo or authenticated owner |
+| Internal evidence boundary | B/C | C persists analysis/photo state through `db/evidence-store.ts` using B schema/client. B consumes unexpired READY+ACCEPT and attaches photos within B's transaction. C reads `{reportId,route,status,beforePhotoIds,beforeEvidenceHash,reportLocation,description}` through B's report-context facade; binding uses immutable before-evidence hash, not a report version that changes with support votes |
+| Runtime boundary | C → B | C owns binding types/auth middleware and mounts `createDomainRoutes` (B) and `createEvidenceRoutes` (C); B exports one checked-out-client transaction API/type consumed by evidence persistence |
+| Demo boundary | B service, C harness | Operator CLI invokes the same vote transaction with explicit sandbox provenance and checks environment/database/report; no public router includes CLI or a demo auth bypass |
+
+`beforePhotos/afterPhotos` and private `balanceVersion` make underspecified details of plan §7 concrete. **Technical recommendation:** add monotonic account `balance_version` incremented under the same account lock for ledger mutations, and expose it only with owner balance data. Report `version` cannot order balances changed by votes on different reports. Alternative request cancellation alone is insufficient for concurrent out-of-order mutation replies. B owns the schema/fixture adjustment; this is an implementation recommendation, not a newly approved RP policy.
+
+#### API inventory and ownership
+
+All paths below are beneath `/api`; bearer auth applies unless marked public. Body schemas are strict, timestamps UTC, IDs UUID except verified UID. `Idempotency-Key` is required for analysis, publication, votes, cleanup and redemption; the same operation retains the same key through retries. Detail/private JSON uses `Cache-Control:no-store`; auth-aware responses cannot be shared-cache entries.
+
+| Owner | Endpoints and boundary |
+|---|---|
+| C, P0 | Public `GET /health → {ok,release}`; authenticated `POST /uploads`, `PUT /uploads/:id/content?ticket=…`; scoped `GET /photos/:id/content?token=…`; `POST /ai/analyze-report`, `POST /ai/analyze-cleanup`, owner-only `GET /ai/analyses/:id` |
+| B, P0 | `POST /me/bootstrap`; public/optional-auth `GET /reports`, `GET /reports/:id`; `POST /reports`; `POST /reports/:id/votes`; `POST /reports/:id/cleanups`; owner-only `GET /me/impact`, `GET /me/notifications`, `PATCH /me/notifications/:id` |
+| B, conditional P1 Yellow | `POST /reports/:id/mission {startsAt,meetingLocation,meetingLabel}`; `POST /missions/:id/join {}`; public/optional-auth `GET /missions/:id`; organizer `PATCH /missions/:id {announcement}` |
+| B, conditional P1 Red | `POST /reports/:id/red-draft {}`; owner `PATCH /reports/:id/red-draft {draftText}`; `POST /reports/:id/red-sent {declaredSent:true}`. Optional model draft helper is C's service, not another public AI authority |
+| B, conditional P1 Rewards | Public `GET /rewards/catalog`; `POST /rewards/:id/redeem {confirmedCostRp}`; owner `GET /me/vouchers` |
+
+Detailed fields/success codes remain as plan §7 plus the approved refinements above. `GET /reports` validates `cityId=heilbronn`, bbox/routes/cursor/limit; unsupported cities are rejected. Default excludes resolved. Needs-verification covers Heilbronn regardless of bbox and includes thresholds still awaiting initial existence/resolution verification; confirmed existence alone is not a missing-verification item, even though support remains available on the active map. Exclude only stages the caller already voted in; one prior stage vote cannot hide an eligible later stage. P2 profiles, attendance/results and push remain unavailable.
+
+Freeze the plan's stable error codes: INVALID_INPUT, UNAUTHENTICATED, SELF_VOTE, NOT_ELIGIBLE, TOO_FAR, FORBIDDEN, NOT_FOUND, ALREADY_VOTED, STAGE_CLOSED, IDEMPOTENCY_CONFLICT, ANALYSIS_CONSUMED, CLEANUP_ALREADY_SUBMITTED, INSUFFICIENT_RP, PRICE_CHANGED, EXPIRED, PHOTO_TOO_LARGE, UNSUPPORTED_MEDIA, LOCATION_INACCURATE, LOCATION_STALE, PIN_TOO_FAR, AI_UNCERTAIN, AI_REJECTED, RATE_LIMITED, AI_INVALID_OUTPUT, AI_UNAVAILABLE, DATABASE_UNAVAILABLE and AI_TIMEOUT. Freeze code/HTTP mapping and retry rules from plan §7. Fixtures must validate through exactly the same schemas as Worker responses.
+
+Any contract change is one B-authored PR containing affected shared types, fixtures, migration if required and explicit consumer notes. Obtain A/C acknowledgment for affected consumers before merge; changes do not silently appear in shared files. Label a temporary adapter/fixture, give it an expiry integration gate and never count it as live acceptance.
+
+### 4. Transaction boundaries and database ownership
+
+B adapts plan §5's tables: users, reports, report_photos, ai_analyses, cleanup_submissions, votes, reward_ledger, notifications, idempotency_keys, plus SQL analysis_leases for per-input attempt coordination. Conditional P1 adds missions/participants, red_requests, catalog/vouchers. Store UTC times, integer RP, finite coordinates, report/account versions and reward snapshots `reporter_total_rp=20,initial_rp=5,cleaner_rp=40`. Enforce one accepted cleanup per report and unique vote triple/semantic ledger refs. Existence YES count is nonnegative with no upper bound; resolution count stays 0..3. Store first existence verification time separately from latest accepted existence YES time. No stored Impact Score.
+
+Cleanup analysis context and the accepted cleanup row retain the newly measured lat/lng, accuracy and observation time for validation/audit; public DTOs expose the report point, not the cleaner's precise fix. Lease/result payloads remain owner-only. If generated analysis text uses a requested output locale, include `outputLocale:en|de` in the analysis request/hash; switching interface language does not silently regenerate or invalidate an already reviewed result. Precise GPS stays in trusted server context and is not needed in the model prompt.
+
+Use one checked-out `pg` client for every transaction, including Drizzle. Publication consumes owned READY+ACCEPT/photos once and credits 5 RP, regardless of 1–5 photo count. For voting: authenticate/validate request shape, lock report, resolve existing vote/idempotency replay first, then apply freshness/proximity/admission to a genuinely new vote. This prevents an accepted replay with an old fix being rejected. Insert new vote and +5 ledger ref, increment YES only for YES, then perform threshold effects once. Third existence YES sets VERIFIED/first timestamp and one notification; later existence votes update support/count/version only, preserving AWAITING_RESOLUTION if already there. Third resolution YES sets RESOLVED/cleanup VERIFIED, credits reporter 15 and cleaner 40, closes both vote admissions and creates one author notification. Sorted UID account locks, same-account summed deltas/separate role refs and unexpected-ledger-conflict rollback remain mandatory. Retry bounded deadlocks with the original key.
+
+Existence admission is open for every unresolved report, including VERIFIED and AWAITING_RESOLUTION; resolution admission is only for AWAITING_RESOLUTION. `currentStage` means primary UI focus, not the sole admitting stage: RESOLUTION is primary during cleanup review and `openVoteStages` includes both. Permissions/self-exclusions remain per stage. Two existence YES racing from 2 both succeed to total 4 with +5 each and one threshold notification; two resolution YES racing from 2 yield one third vote/+5 and one STAGE_CLOSED. A support-vote/final-resolution race serializes: support accepted before resolution earns +5, a new vote after resolution fails. Replays of accepted votes always repay zero.
+
+Latest confirmation time is a monotonic server-accepted timestamp from a new existence YES, never the client GPS observation time. Preserve the first threshold timestamp permanently, update latest time without regression under races, and expose recency without inventing automatic expiry, reopening or a new popularity-ranking algorithm.
+
+First valid cleanup submission wins under report lock, after AI+new-GPS validation; no replacement/second round or reservation is introduced. Candidate confirmation grants only pending 40, actual payment waits for three resolution YES. The loser's unattached uploads expire after 24h or can be discarded; do not attach them or create an automatic draft. Recheck live state/candidate availability at consume time. New support votes must not invalidate an otherwise valid cleanup assessment bound to unchanged before-photo hashes and captured location.
+
+Keep model/object transfer/push outside SQL transactions. For analysis, a unique SQL lease/slot keyed by `(owner,kind,input_hash)` points to the current analysis attempt; lock that slot briefly to reuse active/unexpired work or allocate a fresh UUID after expiry/failure. Do not put permanent uniqueness on that triple in the attempt table. Finalization checks the current lease/attempt before writing, so a late old provider reply cannot overwrite a newer attempt. Expired attempt IDs never regain publishability. Same-key retry identifies the old operation; an explicit new attempt uses a new key, and fresh location is reacquired if stale. Duplicate provider cost after crash is possible, duplicate publication/RP is not. No queue or asynchronous counter pipeline. Counts reconcile to YES rows and balances to append-only ledger; conditional redemption locks account/price before one debit/voucher.
+
+### 4a. Location, AI outcomes and role metrics
+
+**Delegated location selection:** `VOTE_RADIUS_M=150`, `CLEANUP_RADIUS_M=150`, `MAX_GPS_ACCURACY_M=50`, `LOCATION_MAX_AGE_SECONDS=60`. Accept a new vote/cleanup fix if measured distance ≤150m, accuracy ≤50m and age ≤60s; do not retain the old `distance+accuracy≤100` formula or promise exact physical position. Use high-accuracy acquisition with cached fixes disabled; capture a new fix for each report/cleanup session and refresh it if it ages out. Server rejects future/nonfinite timestamps/coordinates and validates ≤3m pin displacement. At report analysis, validate capture-fix freshness; at cleanup analysis validate its new fix/proximity and bind it to immutable inputs. Do not reapply 60s freshness to consumption of a valid analysis during a legitimate preview. Browser GPS remains untrusted; verify boundary/recovery on real city devices before release. GPS.gov explains building blockage/reflections; 150/50/60 is an engineering MVP choice, not a GPS standard or anti-spoofing guarantee.
+
+**AI outcomes:** execution READY can contain ACCEPT or RETAKE. REPORT ACCEPT requires route, bounded description, hazard level/message, reason/confidence; RETAKE has only reasonCode/reason/instruction, never route. Blurred/insufficient evidence → RETAKE; visible plausible hazard → ACCEPT+RED with warning. Technical failures use FAILED/safe error and allow reanalysis of retained photos. CLEANUP ACCEPT requires same scene LIKELY, clean=true, hazard=false; otherwise RETAKE reasons distinguish insufficient framing/different scene, litter remaining and hazard remaining. Explain recapture, safe completion before recapture, or do-not-handle warning accordingly; do not turn a discovered hazard into instructions to clean it. Only READY+ACCEPT can publish/submit. Retake/error cannot award points, replace route or bypass resident verification. Schemas reject extraneous fields, GREEN+hazard and inconsistent cleanup. Keep prompts localized to the requested interface language where generating text; language selection alone never silently rewrites already authored evidence.
+
+**Role metrics:** reporter counts own created reports, unresolved/resolved and credited REPORT_INITIAL/REPORT_FINAL earnings; cleaner counts accepted submitted/pending/verified cleanup rows and credited CLEANUP earnings. Verification shows accepted YES+NO row count, distinct report IDs with the resident's accepted YES, and VOTE earnings; two YES stages on one report count as two votes/10 RP but one confirmed report. Pending reporter remainder/cleaner amount is separate from earned RP. Total earned sums positive category credits, while balance sums all signed ledger deltas, including purchases. A self-cleaner retains both role statistics (20+40) and one de-duplicated history row. In-progress/Completed grouping uses report lifecycle; a completed vote on a pending report is labeled as a completed action within a pending report.
+
+### 5. Client consistency and UX integration
+
+A builds from the now-accessible Miro v2.0/four concept previews and plan §9 reconciliation: light map, white rounded panels, documentary photos, green actions; exact final tokens/logo remain revisable. Heilbronn is the only MVP city, so omit the multi-city selector while retaining `cityId` validation for the API. P0 supports `en` and `de` dictionaries under A's `src/client/**`, a language selector, browser-language initialization/fallback English and local locale preference. All status/safety/error/success text is localized; English exact messages in the historical plan are canonical meanings with German equivalents. Language switch preserves report state and never silently translates resident-authored descriptions/drafts. Keep three tabs, real loading and no invented safety certificate.
+
+Show existence threshold as `min(yesCount,3)/3`, actual YES total and latest confirmation separately. During AWAITING_RESOLUTION, resolution controls are primary and clearly labeled existence support is secondary; derive enabled state per `viewer.stages`, not a single `canVote`. A support vote must not appear to verify cleanup. In My Impact, P0 includes reporter/cleaner statistics and verification earnings; only richer tabs/rows remain P1. Purchase balance and lifetime earned totals have separate labels.
+
+Client fixtures are local/development-only and visibly labeled; a build destined for live acceptance cannot silently activate fixture transport after API failure. A initially works against B's validating fixture transport while C probes media/AI and B implements SQL services. Real hookup replaces the transport at G1/G2 without changing DTOs. Freeze that explicit switch in root build configuration owned by C.
+
+Cancel or discard requests issued before a mutation; compare report `version` per report and private `balanceVersion` per account, invalidate all affected projections, and never award optimistically. Ignore lower-version replies. Keep voting sheet open, disable repeated actions in flight and show +5 only for a newly accepted vote. Replays show current snapshots, not historical saved balances. Proposed five-second polling for open sheets/notifications pauses hidden tabs and refetches on focus; no sockets. Retain only unsent previews and operation keys in memory, not auto-saved report drafts.
+
+### 6. Async execution, dependencies and integration gates
+
+Use three feature branches from the same reviewed `develop` base (suggested names `feat/iskra-client`, `feat/iskra-domain`, `feat/iskra-evidence-platform`). One repo and one deployable app. Each PR states stable task IDs, contract revision, dependencies/expected commit, checks and remaining blockers. B owns contract/schema merges; C owns the integration/deploy queue; each owner updates their branch with the merged contract base. No whole-branch force overwrite, opportunistic edits to another owner's files or long hidden divergence. CI + explicit contract acknowledgment replaces the need to be online simultaneously.
+
+| Gate / target | Entry dependencies and deliverable | Owner / unblock effect |
+|---|---|---|
+| **G0 / M0, H0–H2** | Encode already resolved/selected D01–D08, name roster/budget/access owners and review v1 schemas/errors/router/DB facades; no repeat product-approval interview | B steward, all review; shell/schema/build work can start after separate implementation authorization |
+| **G1 / M1, H4** | Root app builds and deploys HTTPS; verified Firebase token, SQL transaction through safe Hyperdrive, cache off, selected private storage binding; release SHA correct | C integrates, B supplies DB, A supplies UI entry; unlock real evidence/API hookup |
+| **Evidence checkpoint, H6–H10** | Live phone camera/GPS, owned upload/read, one/five report images and up-to-ten cleanup model images validated | C evidence/AI, A phone capture, B schema; unlock publication/cleanup input path |
+| **G2 / M2, H18** | Real phone → media → AI → publish/5 RP → three existence YES plus a fourth support vote; NO/retry/access cases pass | B transaction + A UI + C deployed check; unlock cleanup integration |
+| **G3 / M3, H28** | New cleanup GPS → before/after AI → accepted candidate → resolution +15/+40 → notifications/role Impact; self-clean, differentiated races and stale-response checks pass | All provide evidence; only then admit P1 by actual capacity |
+| **G4 / M4, H36** | Mandatory security/PG/device matrix passes, custom domain real, chosen P1 tested or explicitly cut | C release evidence; feature freeze, no new features |
+| **G5 / M5, H42** | Two rehearsals, genuine+marked accelerated votes, guarded reset, rollback notes, quota/budget checks, fallback recording | C coordinates, B operator scripts, A presentation devices |
+| **M6, H48** | Working P0 release, handoff/runbook and omissions disclosed; buffer/on-call fixes only | All; unmet real Green means incomplete delivery, not a fixture substitute |
+
+Dependency graph: G0 contract → parallel A shell/capture, B schema/domain and C runtime/media/AI → G1/Evidence → G2 publication/existence → G3 cleanup/resolution/Impact → G4 acceptance → G5 rehearsal → M6. B can write publication/vote tests against analysis contracts before C's live model works; C can probe model and media with controlled fixtures before B's whole domain is ready; neither substitute closes a real gate.
+
+Estimated P0 focused effort, **not a delivery promise**: A about 23–28h including bilingual UI, B about 28–34h including continued-vote/role metrics, C about 27–35h including evidence-location/attempt checks, plus rehearsal and access delays. These supersede the earlier estimates; three people remain a capacity risk. B/C are the critical-path bottleneck. Stagger rest/handoffs, do not treat 48 elapsed hours as 48 working hours per person, and admit P1 only from observed throughput.
+
+### 7. Conditional backlog, cuts and completion semantics
+
+P0 covers plan §1 DoD with the explicit newer user decisions taking precedence for amount, continued votes, languages/city, cleanup GPS and role statistics. Conditional P1 retains Yellow create/join/update, Red draft/copy/sent, demo catalog/redemption/vouchers and richer Impact presentation. Mandatory role/earning statistics and bilingual UI cannot be cut as P1 polish. Optional checkboxes remain blocked until M3 plus capacity admission; a cut requires coherent reviewed scope edits and is never marked implemented by omission. P0 delivery can pass while uncut P1 tasks keep the change incomplete. P2 has no implementation checkbox here.
+
+| Trigger | Action |
+|---|---|
+| H4 safe networking/runtime blocked | C+B swarm the named blocker; A stays on labeled fixtures, C's model probe can run independently; do not replace stack or weaken TLS/networking |
+| H18 no publication/existence | Remove P1 from current delivery intent and abandon P2 spikes; preserve all P0 work |
+| H28 no real Green | Continue P0 only; optional panels show honest deferred states or marked examples |
+| H36 feature freeze | Drop animation/extra polish and unproven optional work; optional AI Red generation can become a marked factual template; no profiles/badges/push/Yellow attendance |
+| Any hard-rule failure | Block release; never cut JWT checks, atomic ledger/uniques, ownership/privacy, camera-only input, safety or truthful provenance |
+
+P2 carry-forward: profiles/settings and accurate public histories; seeded badge progress without a generalized engine; Yellow attendance freeze/nonparticipant verification/equal awards only after reward policy; optional web-push feasibility/opt-in/durable delivery with no RP/vote/badge push; wider hardening. Privacy retention must be decided before a real uncontrolled public pilot. Fixtures remain controlled demo data.
+
+## Risks / Trade-offs
+
+- [B/C capacity and external-account delays] → Contract-first work, distributed test ownership, early real probes, checkpoints and strict P1 cuts; three-person capacity is a risk, not an estimate adjustment that guarantees success.
+- [Later policy changes alter behavior/schema] → D01–D08 are now resolved/selected; encode confirmed decisions, and revise affected contracts/tests before accepting a later change.
+- [Cloud SQL/Hyperdrive certificate/network mismatch] → Verify current official compatibility, restricted documented source ranges and validated TLS by H4; never all-IP ingress or unverified certificates. Any cloud connector must itself be cloud-hosted and separately reviewed.
+- [Worker JWT/image/pg runtime compatibility] → Pin versions only after deployed runtime probes; provider docs, one/five/ten-image tests and actual key rotation checks are prerequisites, not assumed facts.
+- [Browser location can be spoofed or inaccurate near buildings] → Initial 150m measured radius/50m accuracy/60s age plus new cleanup fix; test outdoor devices, retain minimal private audit and never claim GPS proof or silently relax limits.
+- [Public report photos can expose people] → Controlled demo framing, EXIF stripping, bounded capabilities and no raw media/token logging; published guest photos are not confidential just because the bucket is private.
+- [Private response/counter/account staleness] → no-store, Hyperdrive query cache disabled, monotonic report/account versions and delayed-response tests.
+- [Demo tools or fixture routes reach production] → Operator-only scripts, environment/database/report provenance assertions and bundle/API absence checks.
+- [Original source brief remains unavailable; concepts can conflict with newer choices] → Attribute original brief rules to plan.md, use the connected Miro doc/previews and apply the newer confirmed RP/vote/language rules. Final visual tokens remain revisable.
+
+## Migration Plan
+
+1. After a new implementation request, encode already-confirmed decisions without asking again, name A/B/C and spending authority and satisfy the remaining runtime gates. Freeze B's v1 contract PR; C owns root config/lockfile, A client entry, B router/DB facade. Integrate immediately.
+2. Revalidate the runbook's existing account/environment facts. Select Google project, budget, teardown date, final domain, Firebase provider and current Gemini model. Do not provision or spend from this planning request.
+3. B creates additive reviewed schema/migrations with separate runtime and migration roles. C verifies safe network/TLS and one real transaction with query caching disabled. Use allowed cloud runner or named temporary /32 operator migration; never broaden access for CI. Record checksum/backup, never auto-push schema on boot.
+4. C wires explicit per-environment ASSETS/HYPERDRIVE/PHOTOS (private R2), runtime secrets and public build values. Keep dev/demo/prod DB, bucket and Firebase identities isolated. Configure initial reporter 20/5, cleaner 40 and 150m/50m/60s policies; new cleanup GPS is required. No emulator/demo bypass in production.
+5. Extend existing checks with real isolated PostgreSQL integration and Worker/e2e acceptance. Set root scripts from plan §16 (`dev`, `typecheck`, `test:unit`, `test:integration`, `build`, `db:generate`, `db:migrate`, `deploy`, `smoke`, `test:e2e`, `demo:seed`, `demo:reset`); B owns DB/demo scripts, C owns manifest wiring. These scripts do not yet exist.
+6. Move staging APP_URL to the actual product origin, keep check Worker separate, provide narrow environment deploy credentials, and enable guarded staging only after G1 prerequisites are real. Verify same-SHA health plus real G2/G3 flows; health alone is insufficient. Production stays manual from main; final custom domain and phone tests remain release gates.
+7. Rehearse reset/seed/acceleration with sandbox-only credentials. Roll back compatible Worker code if needed while preserving ledger/data; database restore uses a separate verified database and controlled binding switch. Mark restore rehearsal unverified if not actually performed.
+
+## Decision Gates
+
+Status reflects the user's confirmed follow-up on 2026-10-27 and delegated engineering selections. RESOLVED/SELECTED decisions do not need renewed product approval; their implementation and validation remain checklist work. Only remaining OPEN/UNVERIFIED prerequisites block the affected actions, and explicit scope/dependency/admission gates still apply.
+
+| ID / owner / deadline | Current decision/status | Remaining condition |
+|---|---|---|
+| **D01 — B/A, H2 implementation** | SELECTED under delegated choice: measured vote/cleanup radius 150m, accuracy ≤50m, age ≤60s; new cleanup fix required; ≤3m pin edit remains | Implement numeric boundaries and test real phones; no old distance-plus-accuracy rule or automatic fallback |
+| **D02 — B, H2 contract** | RESOLVED: 20 RP per report regardless of 1–5 photos; 5 at publish/15 after resolution; cleaner 40 after resolution; verifier +5 per accepted YES/NO | Encode snapshots, exact payouts and category earnings; no monetary policy question remains |
+| **D03 — C, H2 config** | SELECTED under delegated media choice: private R2 with Worker-mediated upload/read, opaque SQL object IDs | D10 account/resource prerequisites plus runtime media validation |
+| **D04 — B, H2 contract** | RESOLVED: same resident can vote once in each stage if independently eligible | Implement stage-specific uniqueness/self-role checks and genuine roster tests |
+| **D05 — B/A, H2 contract** | RESOLVED: existence stays open until RESOLVED, including after third YES; new eligible YES/NO earns +5; resolution closes at third YES | Encode dual-stage admission, uncapped existence count, last-confirmation timestamp, one-time threshold effects and differentiated races |
+| **D06 — B, H2 schema** | RESOLVED: first valid accepted cleanup is sole pending candidate, no replacement or reservation; 40 paid after three resolution YES | Atomic uniqueness/conflict UI, loser upload expiry and no early award |
+| **D07 — C/B, H2 schema** | RESOLVED: report ACCEPT has route, RETAKE has no route; insufficient evidence retake, plausible hazard RED; technical error retries photos; cleanup AI never pays/resolves | Runtime/schema/prompt tests and D10/D11 model support |
+| **D08 — B/A, H2 contract** | RESOLVED: separate reporter/cleaner statistics, created/cleaned/confirmed reports and RP earned per category; verification activity separate from two role summaries | Implement ledger-derived earned versus balance/pending, distinct confirmation count and multi-role history |
+| **D09 — A, H2/localization; final visual review later** | RESOLVED: English/German and Heilbronn only; Miro doc/four previews accessed. OPEN: final palette/type/spacing/icons/logo | P0 bilingual implementation is required; exact visual tokens can evolve without blocking contract/build work |
+| **D10 — budget owner + C, H0–H4** | UNVERIFIED: Google project/permissions/billing cap/teardown, app domain, GitHub token, Firebase setup, model/quota, map origins, PG/TLS/Hyperdrive route | Billable provisioning, live integration/deployment; local auth or health-check history does not pass this gate |
+| **D11 — C/B, H4–H6** | SELECTED engineering defaults under delegation: JPEG ≤1MiB/1600px, 5min upload/read tickets, 30min accepted analysis, orphan cleanup after 24h; provisional 20s call/45s total, AI 5/min, paging 100, polling 5s, generic receipts 24h | Verify limits/model/runtime and multi-instance rate enforcement; preserve semantic financial uniqueness permanently; document incompatible settings before change |
+| **D12 — Product, before relevant extension** | OPEN: published-photo retention before uncontrolled pilot, Yellow award before P2, Impact Score formula before real scoring | Public pilot and those P2/scoring extensions only; do not block controlled P0 demo by inventing policies |
+
+## Acceptance Traceability
+
+| Plan requirement | Spec / owner | Evidence to attach at gate |
+|---|---|---|
+| §1 DoD HTTPS and two phones | delivery-operations; C/A | G1 deployment + G4 final-domain Android/iOS real-device record |
+| Guest map, tabs and filters | city-report-map; A/B | Heilbronn-wide/stage filter cases and both locale flows |
+| Login/camera/1–5 photos/location | resident-identity, camera-evidence; A/C | Real capture, new cleanup fix, 150/50/60 and 3m boundaries, access failures |
+| Every-photo AI, immutable route | report-analysis; C/B | One/five/ten-image calls, route-less RETAKE, separate failure, expiry reanalysis and immutable-before binding |
+| Publish 5/20 once | green-report-lifecycle; B/A | One/five photos same award, retry and ledger reconciliation |
+| Three YES, continued support, NO +5 | verification-ledger; B | Count-2 existence race →4, resolution race →3, replay with old fix, no repeated threshold effects |
+| No reservation, pending cleanup, self-clean | green-report-lifecycle; B/A/C | Two-candidate and self-clean tests, exact gratitude/pending UI |
+| Final +15/+40, role earnings/galleries | verification-ledger, personal-impact, city-report-map; B/A | G3 real cycle, self-clean 20+40, earned-vs-balance purchase test and independent galleries |
+| Immediate consistent views | city-report-map, personal-impact; A/B | Delayed-report and delayed-balance tests plus refetch evidence |
+| Required author messages | personal-impact; B/A | Exactly-once transition notification/read tests |
+| Genuine and accelerated demo | delivery-operations; C/B | Three-authenticated-resident genuine run plus separately marked acceleration rehearsal |
+| §13 full critical security/transaction matrix | all P0 specs; C coordinates | Test report mapped to named scenarios; manual browser cases recorded separately |
+
+Plan §13 cases are assigned in `tasks.md` with newer user-approved policy expectations replacing historical universal-closure/old-amount assumptions. Tests remain proposed deliverables; no application test, service provisioning or implementation ran during this planning update.
