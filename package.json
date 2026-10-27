@@ -2,7 +2,9 @@
   "name": "iskra",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "wrangler dev --env=\"\"",
     "typecheck": "tsc --noEmit",
@@ -11,7 +13,8 @@
   },
   "dependencies": {
     "hono": "4.13.14",
-    "jose": "6.2.13"
+    "jose": "6.2.13",
+    "jpeg-js": "0.4.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261027.1",
