@@ -116,6 +116,13 @@ describe('execution, assessment and ledger distinctions', () => {
     expect(c.PublicationReceiptSchema.safeParse({ ...fixtures.publication, report: fixtures.viewerReport }).success).toBe(false);
     expect(c.PublicationReceiptSchema.safeParse({ ...fixtures.publication, rpAwarded: 0, report: fixtures.viewerReport }).success).toBe(true);
     expect(fixtures.cleanupPending.report.resolutionYesCount).toBe(0);
+    expect(c.CleanupReceiptSchema.safeParse({ ...fixtures.cleanupPending, report: fixtures.publication.report }).success).toBe(false);
+    expect(c.CleanupReceiptSchema.safeParse({ ...fixtures.cleanupPending,
+      report: { ...fixtures.viewerReport, status: 'RESOLVED', resolutionYesCount: 3, currentStage: null,
+        openVoteStages: [], viewer: { stages: {
+          EXISTENCE: { canVote: false, reason: 'STAGE_CLOSED', hasVoted: false },
+          RESOLUTION: { canVote: false, reason: 'STAGE_CLOSED', hasVoted: false },
+        }, canSubmitCleanup: false } } }).success).toBe(true);
   });
   it('rejects contradictory lifecycle and permissions', () => {
     expect(c.PublicReportDetailSchema.safeParse({ ...fixtures.publicReport, currentStage: 'EXISTENCE' }).success).toBe(false);

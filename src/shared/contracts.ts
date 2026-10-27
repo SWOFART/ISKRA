@@ -171,7 +171,7 @@ export const VoteReceiptSchema = object({
 }).refine((v) => v.replayed ? v.rpAwarded === 0 : v.rpAwarded === 5, 'Replay cannot repay');
 export const CleanupReceiptSchema = object({
   cleanupId: UuidSchema, status: literal('AWAITING_VERIFICATION'), provisionalRp: literal(40), report: ViewerReportDetailSchema,
-});
+}).refine((v) => ['AWAITING_RESOLUTION', 'RESOLVED'].includes(v.report.status), 'Receipt requires an accepted cleanup');
 export const ImpactRoleSchema = enumeration(['REPORTER', 'CLEANER', 'VERIFIER']);
 export const ImpactSchema = object({
   reporter: object({ created: count, inProgress: count, resolved: count, earnedRp: count, pendingRp: count }),
