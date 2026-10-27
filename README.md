@@ -31,13 +31,15 @@ npm run dev -- --local
 
 The local Worker needs no credentials for health/404 checks. Authenticated routes will require Google-sourced `FIREBASE_PROJECT_ID` and real Firebase ID tokens; no auth emulator or signature bypass exists.
 
+Person C's [test harness](infra/runbook.md#disposable-postgresql-and-browser-harness--task-24) adds `npm run test:integration` against disposable loopback PostgreSQL and `npm run test:e2e` against a local Worker/Chromium. These prove test infrastructure and platform boundaries; domain transactions, client flows and real Green acceptance still need A/B integration.
+
 Production will run on **Cloudflare Workers**, serving React/Vite assets and Hono `/api/*` routes. It must work when a developer's computer is off. Google Cloud SQL, Firebase Authentication and Gemini remain the planned services.
 
 The user-provided tunnel `c0c32852-fe5d-4a65-af4c-058cdf786627` is reserved for development previews; it is not the production hosting target or a Workers deployment credential. Its hostname and connector status have not been verified.
 
 ## CI/CD
 
-- Pull requests and pushes to `main`/`develop` run repository checks, root typecheck/unit tests/Worker build and the separate deployment-check Worker tests/build. Real PostgreSQL and browser integration checks remain pending.
+- Pull requests and pushes to `main`/`develop` run repository checks, root typecheck/unit tests/Worker build, disposable PostgreSQL tests plus a failure-detection probe, local Worker/Chromium smoke and the separate deployment-check Worker tests/build. No production credentials are used by these tests.
 - Changes on `develop` can deploy to `staging` after CI passes and deployment is enabled in Google. With the root manifest present, automatic target selection chooses the root Worker. Keep deployment disabled until the product prerequisites in the runbook are met; this foundation alone is incomplete.
 - Production deployment is a manual **Deploy to Cloudflare** workflow run from `main`.
 - All environment values and keys come from **Google Cloud Secret Manager** in project `iskra-512914`. GitHub settings contain no environment variables or secrets. Keyless Google federation is used by CI; `.env.example` contains key names only.

@@ -14,6 +14,18 @@ jobs:
     name: Repository and application checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
+        env:
+          POSTGRES_USER: iskra_test
+          POSTGRES_DB: iskra_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U iskra_test -d iskra_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -91,12 +103,57 @@ jobs:
         if: steps.app.outputs.present == 'true'
         run: npm run build
 
+      - name: Real PostgreSQL integration tests
+        if: steps.app.outputs.present == 'true'
+        env:
+          TEST_DATABASE_URL: postgres://iskra_test@127.0.0.1:5432/iskra_test
+        run: npm run test:integration
+
+      - name: Prove a violated database invariant fails the test command
+        if: steps.app.outputs.present == 'true'
+        env:
+          TEST_DATABASE_URL: postgres://iskra_test@127.0.0.1:5432/iskra_test
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import tempfile
+
+          with tempfile.TemporaryDirectory() as folder:
+              report = Path(folder) / "probe.json"
+              result = subprocess.run(
+                  ["npm", "run", "test:integration", "--", "--reporter=json", f"--outputFile={report}"],
+                  env=os.environ | {"ISKRA_TEST_INJECT_FAILURE": "1"},
+                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+              )
+              data = json.loads(report.read_text()) if report.exists() else {}
+              failures = [a for suite in data.get("testResults", [])
+                          for a in suite.get("assertionResults", []) if a.get("status") == "failed"]
+              if (result.returncode != 1 or data.get("numFailedTests") != 1 or len(failures) != 1
+                      or failures[0].get("title") != "detects an intentionally violated SQL invariant"
+                      or not any("AssertionError: ISKRA_HARNESS_EXPECTED_FAILURE" in message
+                                 for message in failures[0].get("failureMessages", []))):
+                  print(result.stdout)
+                  raise SystemExit("Expected only the deliberate invariant assertion failure")
+          print("Deliberately violated PostgreSQL invariant produced the expected failing test command.")
+          PY
+
+      - name: Install Chromium
+        if: steps.app.outputs.present == 'true'
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Local Worker browser smoke
+        if: steps.app.outputs.present == 'true'
+        run: npm run test:e2e
+
       - name: Summarize checks
         env:
           APP_PRESENT: ${{ steps.app.outputs.present }}
         run: |
           if [[ "$APP_PRESENT" == true ]]; then
-            echo 'Repository checks, typecheck, unit tests and build passed. This workflow does not deploy.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Repository checks, typecheck, unit tests, build, disposable PostgreSQL tests/failure probe and local Worker browser smoke passed. No product deployment or real Green acceptance is claimed.' >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'Repository checks passed. Application checks were not run because application code is not present. No deployment occurred.' >> "$GITHUB_STEP_SUMMARY"
           fi
