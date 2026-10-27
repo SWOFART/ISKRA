@@ -102,7 +102,8 @@ export const VotePermissionReasonSchema = enumeration([
   'UNAUTHENTICATED', 'SELF_VOTE', 'ALREADY_VOTED', 'STAGE_CLOSED', 'NOT_ELIGIBLE',
 ]);
 const permission = object({ canVote: boolean, reason: nullable(VotePermissionReasonSchema), hasVoted: boolean })
-  .refine((v) => v.canVote ? v.reason === null && !v.hasVoted : v.reason !== null, 'Inconsistent permission');
+  .refine((v) => (v.canVote ? v.reason === null && !v.hasVoted : v.reason !== null)
+    && (v.reason !== 'ALREADY_VOTED' || v.hasVoted), 'Inconsistent permission');
 export const ViewerSchema = object({
   stages: object({ EXISTENCE: permission, RESOLUTION: permission }), canSubmitCleanup: boolean,
 });

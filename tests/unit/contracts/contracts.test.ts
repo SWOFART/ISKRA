@@ -123,6 +123,9 @@ describe('execution, assessment and ledger distinctions', () => {
     expect(c.PublicReportDetailSchema.safeParse({ ...fixtures.publicReport, openVoteStages: ['RESOLUTION'] }).success).toBe(false);
     expect(c.ViewerReportDetailSchema.safeParse({ ...fixtures.viewerReport,
       viewer: { ...fixtures.viewerReport.viewer, canSubmitCleanup: true } }).success).toBe(false);
+    expect(c.ViewerSchema.safeParse({ ...fixtures.viewerReport.viewer,
+      stages: { ...fixtures.viewerReport.viewer.stages,
+        EXISTENCE: { canVote: false, reason: 'ALREADY_VOTED', hasVoted: false } } }).success).toBe(false);
   });
   it.each([
     { status: 'RESOLVED', resolutionYesCount: 0 },
