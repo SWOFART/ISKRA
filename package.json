@@ -6,6 +6,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "postinstall": "node .github/scripts/strict_jpeg_decoder.mjs",
     "dev": "wrangler dev --env=\"\"",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
@@ -15,7 +16,8 @@
   },
   "dependencies": {
     "hono": "4.13.14",
-    "jose": "6.2.13"
+    "jose": "6.2.13",
+    "jpeg-js": "0.4.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261027.1",
