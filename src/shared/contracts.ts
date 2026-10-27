@@ -199,10 +199,18 @@ export const ReportAnalysisRequestSchema = object({
   photoIds: PhotoIdsSchema, comment: string(0, 1000), measuredLocation: LocationSchema,
   pin: PointSchema, cityId: literal('heilbronn'), outputLocale: LocaleSchema,
 });
+/** Immutable non-photo input snapshot kept in ai_analyses.context; ordered IDs are in photo_ids. */
+export const ReportAnalysisContextSchema = object({
+  comment: string(0, 1000), measuredLocation: LocationSchema,
+  pin: PointSchema, cityId: literal('heilbronn'), outputLocale: LocaleSchema,
+});
 export const CleanupAnalysisRequestSchema = object({
   reportId: UuidSchema, photoIds: PhotoIdsSchema, location: LocationSchema, outputLocale: LocaleSchema,
 });
-export const PublishRequestSchema = object({ analysisId: UuidSchema, description: string(1, 1000) });
+export const PublishRequestSchema = object({
+  analysisId: UuidSchema,
+  description: string(1, 1000).refine((value) => value.trim().length > 0, 'Description must not be blank'),
+});
 export const VoteRequestSchema = object({ stage: StageSchema, choice: ChoiceSchema, location: LocationSchema });
 export const CleanupRequestSchema = object({ analysisId: UuidSchema });
 const uploadFields = { mimeType: literal('image/jpeg'), byteSize: number(1, POLICY.maxPhotoBytes, true), ordinal: number(1, 5, true) };

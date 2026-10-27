@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
-import { ReportListQuerySchema, UuidSchema } from '../../shared/contracts';
+import { PublishRequestSchema, ReportListQuerySchema, UuidSchema } from '../../shared/contracts';
 import { ContractError } from '../../shared/schema';
 import type { TransactionDatabase } from '../db/client';
-import { optionalAuth, verifyFirebaseToken } from '../middleware/auth';
+import { optionalAuth, requireAuth, verifyFirebaseToken } from '../middleware/auth';
 import type { WorkerEnv } from '../middleware/context';
 import { ApiError } from '../middleware/errors';
+import { parseJsonBody } from '../middleware/validation';
+import { PostgresReportPublicationService } from '../services/publication';
 import { PostgresReportReadService, type ReportMediaResolver } from '../services/report-context';
 
 export interface ReportRouteDependencies {
@@ -15,6 +17,7 @@ export interface ReportRouteDependencies {
 }
 
 const invalidQuery = () => new ApiError(400, 'INVALID_INPUT', 'The report query is invalid.');
+const invalidPublicationKey = () => new ApiError(400, 'INVALID_INPUT', 'The publication request is invalid.');
 
 function parseBoolean(value: string | null, fallback: boolean): boolean | unknown {
   if (value === null) return fallback;
@@ -50,6 +53,7 @@ function parseListQuery(url: string) {
 
 export function createReportRoutes({ database, media, verify = verifyFirebaseToken }: ReportRouteDependencies) {
   const reader = new PostgresReportReadService(database, media);
+  const publisher = new PostgresReportPublicationService(database, media);
   return new Hono<WorkerEnv>()
     .get('/reports', optionalAuth(verify), async (c) => {
       const query = parseListQuery(c.req.url);
@@ -64,5 +68,15 @@ export function createReportRoutes({ database, media, verify = verifyFirebaseTok
       if (!detail) throw new ApiError(404, 'NOT_FOUND', 'Report not found.');
       c.header('Cache-Control', 'no-store');
       return c.json(detail, 200);
+    })
+    .post('/reports', requireAuth(verify), async (c) => {
+      const actorId = c.get('identity')?.uid;
+      if (!actorId) throw new ApiError(401, 'UNAUTHENTICATED', 'Sign in to continue.');
+      const key = UuidSchema.safeParse(c.req.header('Idempotency-Key'));
+      if (!key.success) throw invalidPublicationKey();
+      const input = await parseJsonBody(c, PublishRequestSchema);
+      const result = await publisher.publish(actorId, key.data, input);
+      c.header('Cache-Control', 'no-store');
+      return c.json(result.receipt, result.responseStatus);
     });
 }
