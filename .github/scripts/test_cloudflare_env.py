@@ -7,7 +7,7 @@ import subprocess
 import sys
 import unittest
 
-from cloudflare_env import validate_config, write_private_json
+from cloudflare_env import deployment_summary, validate_config, validate_health, write_private_json
 
 
 class CloudConfigurationTests(unittest.TestCase):
@@ -69,9 +69,49 @@ class CloudConfigurationTests(unittest.TestCase):
             subprocess.run([sys.executable, ".github/scripts/cloudflare_env.py", "prepare",
                             "staging", "application"], env=env, check=True, capture_output=True)
             runtime = json.loads((Path(directory) / "iskra-worker-secrets.json").read_text())
+            outputs = (Path(directory) / "outputs").read_text()
             self.assertEqual(runtime["GEMINI_API_KEY"], "sample-gemini-key")
+            self.assertIn("app_url=https://example.test\n", outputs)
+            self.assertNotIn("sample-token", outputs)
             for name in ("CLOUDFLARE_API_TOKEN", "MIGRATION_DATABASE_URL", "VITE_MAPTILER_KEY"):
                 self.assertNotIn(name, runtime)
+
+    def test_disabled_deployment_does_not_publish_an_app_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "outputs"
+            env = os.environ | {
+                "CLOUD_ENV_JSON": '{"DEPLOY_ENABLED":"false"}', "RUNNER_TEMP": directory,
+                "GITHUB_OUTPUT": str(output),
+            }
+            subprocess.run([sys.executable, ".github/scripts/cloudflare_env.py", "prepare",
+                            "staging", "application"], env=env, check=True, capture_output=True)
+            self.assertNotIn("app_url=", output.read_text())
+            self.assertFalse((Path(directory) / "iskra-environment.json").exists())
+
+    def test_deployment_summary_links_only_after_exact_release_health_passes(self):
+        summary = deployment_summary(
+            "true", "application", 'https://iskra.test/?x=" onclick="bad', "abc123", "success",
+        )
+        self.assertIn('href="https://iskra.test/?x=&quot; onclick=&quot;bad"', summary)
+        self.assertIn("`abc123`", summary)
+        self.assertIn("Exact-release health check: PASS", summary)
+        self.assertIn("no Cloudflare write occurred", deployment_summary("false", "application", "", "", ""))
+        self.assertIn("no app link", deployment_summary("true", "application", "https://iskra.test", "abc", "failure"))
+        self.assertIn("no APP_URL", deployment_summary("true", "application", "", "abc", "success"))
+
+    def test_application_smoke_rejects_infrastructure_worker_at_same_release(self):
+        health = {
+            "ok": True, "service": "iskra-deployment-check",
+            "applicationReady": False, "release": "abc123",
+        }
+        with self.assertRaisesRegex(ValueError, "infrastructure-check Worker"):
+            validate_health(health, "application", "abc123")
+
+    def test_application_smoke_accepts_product_health_identity(self):
+        validate_health(
+            {"ok": True, "applicationReady": False, "release": "abc123"},
+            "application", "abc123",
+        )
 
     def test_secret_file_is_private_and_cannot_be_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:

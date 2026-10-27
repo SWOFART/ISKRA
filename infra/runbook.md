@@ -69,6 +69,24 @@ Each CI service account can read only its own configuration secret. It can neith
 
 When enabled, the job installs locked dependencies, builds, deploys, then verifies the exact Git release through `/api/health`. Staging uses `develop`; production requires a manual run from `main` with target `application`. The infrastructure test can never be the production target. Deployment jobs have only `contents: read` and `id-token: write`; actions are pinned and no secret values are passed between jobs or uploaded as artifacts.
 
+## Product staging deployment on `develop`
+
+The product Worker is `iskra-staging`. The staging environment now enables its own `workers.dev` route; production remains private to its future hostname configuration. The URL `https://iskra-develop-check.matvey-nesterenko.workers.dev` is a separate health-check Worker (`iskra-deployment-check`) and must not be used as the product `APP_URL`.
+
+**ASSUMPTION for review:** based on that existing account subdomain and the configured Worker name, the product staging origin should be `https://iskra-staging.matvey-nesterenko.workers.dev`. This exact product URL is not live or verified yet. Confirm it after the first authorized product deploy; store the confirmed origin as `APP_URL` in `iskra-staging-env` in Google Secret Manager.
+
+The existing workflow already deploys the application from `develop`: on relevant pushes, `auto` selects the root application because `package.json` exists. A manual run must select branch `develop`, environment `staging`, target `application` (the form's default target is the infrastructure check). After a successful release-health check, the workflow run summary shows a direct link to the deployed origin, target and exact release SHA. No link is shown as live when deployment is disabled or its health check fails. The summary link appears on the Actions run attached to the merged commit; it does not turn this Worker into a fully accepted Green release.
+
+Activation sequence:
+
+1. In `iskra-staging-env`, configure `DEPLOY_ENABLED="true"`, `CLOUDFLARE_ACCOUNT_ID`, a least-privilege `CLOUDFLARE_API_TOKEN`, the confirmed `APP_URL`, and `APP_ENV="staging"`. Keep the token only in Google Secret Manager. The existing workflow validates these before any Cloudflare write.
+2. Add the exact staging origin to Firebase Authentication's authorized domains and to the MapTiler key's allowed origins. Confirm the Firebase redirect and map load on that origin.
+3. Add the application values listed in `.env.example` to the same Google configuration. The application deploy validator currently requires Gemini key/model, media-signing key, Firebase project ID and the Firebase/MapTiler browser keys.
+4. Configure and verify the product's private R2 and Hyperdrive/Cloud SQL bindings before claiming G1 or a functioning report flow. They are not present in this Worker configuration today.
+5. Run **Deploy to Cloudflare** from `develop` with environment `staging` and target `application`, then check the release link in the workflow summary and confirm `/api/health` reports the same SHA. Later relevant merges to `develop` repeat this staging deployment automatically.
+
+Until these Google-sourced values and runtime bindings are configured, merges to `develop` run CI and the Cloudflare workflow records a skipped deployment. The app's current health deliberately says `applicationReady: false`; neither a successful workflow nor a Workers URL alone passes M1/G1.
+
 ### Google → Cloudflare flow
 
 - **Deployment credential:** read `CLOUDFLARE_API_TOKEN` and account ID from the Google configuration, provide them only to the Wrangler deployment process. The token never becomes a Worker runtime secret or browser value.
