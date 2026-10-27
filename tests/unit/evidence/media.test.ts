@@ -1,4 +1,5 @@
 import { encode } from 'jpeg-js';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { validateJpeg } from '../../../src/worker/services/media';
 
@@ -18,9 +19,51 @@ describe('standalone bounded JPEG validation', () => {
   it('rejects MIME forgery, marker-only data, truncation and trailing content', () => {
     const valid = photo();
     for (const bytes of [new TextEncoder().encode('not a JPEG'), new Uint8Array([255, 216, 255, 217]),
-      valid.slice(0, -10), new Uint8Array([...valid, 1, 2])]) {
+      valid.slice(0, -10), new Uint8Array([...valid, 1, 2]),
+      new Uint8Array([...valid, 0, 17, 255, 217]), new Uint8Array([...valid, ...valid])]) {
       expect(() => validateJpeg(bytes, 'image/jpeg')).toThrow();
     }
+  });
+
+  it('rejects a frame with no scan, an empty scan and truncated entropy before EOI', () => {
+    const valid = photo();
+    const sos = valid.findIndex((value, index) => value === 0xff && valid[index + 1] === 0xda);
+    const scanStart = sos + 2 + ((valid[sos + 2] << 8) | valid[sos + 3]);
+    expect(sos).toBeGreaterThan(0);
+    for (const end of [sos, scanStart, scanStart + 1]) {
+      expect(() => validateJpeg(new Uint8Array([...valid.slice(0, end), 255, 217]), 'image/jpeg')).toThrow();
+    }
+  });
+
+  it('rejects invalid segment lengths and scan selectors', () => {
+    const valid = photo();
+    const sos = valid.findIndex((value, index) => value === 0xff && valid[index + 1] === 0xda);
+    for (const [at, value] of [[5, 1], [sos + 4, 0], [sos + 5, 99]]) {
+      const bytes = valid.slice(); bytes[at] = value;
+      expect(() => validateJpeg(bytes, 'image/jpeg')).toThrow();
+    }
+  });
+
+  it('rejects a scan that omits frame components', () => {
+    const valid = photo();
+    const sos = valid.findIndex((value, index) => value === 0xff && valid[index + 1] === 0xda);
+    const scanStart = sos + 2 + ((valid[sos + 2] << 8) | valid[sos + 3]);
+    const oneComponentScan = [255, 218, 0, 8, 1, valid[sos + 5], valid[sos + 6], 0, 63, 0];
+    const bytes = new Uint8Array([...valid.slice(0, sos), ...oneComponentScan, ...valid.slice(scanStart)]);
+    expect(() => validateJpeg(bytes, 'image/jpeg')).toThrow();
+  });
+
+  it.each(['progressive', 'grayscale', 'restart'])('accepts a synthetic %s JPEG', (kind) => {
+    const bytes = readFileSync(new URL(`../../fixtures/photos/${kind}.jpg`, import.meta.url));
+    expect(validateJpeg(bytes, 'image/jpeg')).toEqual(kind === 'restart'
+      ? { width: 16, height: 16 } : { width: 2, height: 3 });
+  });
+
+  it('rejects a scan truncated before its required restart intervals', () => {
+    const bytes = readFileSync(new URL('../../fixtures/photos/restart.jpg', import.meta.url));
+    const firstRestart = bytes.findIndex((value, index) => value === 0xff && bytes[index + 1] === 0xd0);
+    expect(firstRestart).toBeGreaterThan(0);
+    expect(() => validateJpeg(new Uint8Array([...bytes.slice(0, firstRestart), 255, 217]), 'image/jpeg')).toThrow();
   });
 
   it('enforces the byte cap before decoding', () => {
