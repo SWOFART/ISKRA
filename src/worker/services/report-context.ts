@@ -13,7 +13,7 @@ import {
   type ReportSummary,
   type Stage,
 } from '../../shared/contracts';
-import type { TransactionDatabase } from '../db/client';
+import type { CheckedOutClient, TransactionDatabase } from '../db/client';
 import { ApiError } from '../middleware/errors';
 
 /** Minimal private context C needs to bind cleanup analysis to the before evidence. */
@@ -117,9 +117,9 @@ interface ListRow extends SummaryRow {
   published_at_cursor: string;
 }
 
-interface PhotoReferenceRow { id: string; ordinal: number; }
+export interface PhotoReferenceRow { id: string; ordinal: number; }
 
-interface DetailRow extends SummaryRow {
+export interface DetailRow extends SummaryRow {
   author_user_id: string;
   author_nickname: string;
   author_avatar: string;
@@ -130,6 +130,13 @@ interface DetailRow extends SummaryRow {
   after_photos: PhotoReferenceRow[];
   viewer_existence_voted: boolean;
   viewer_resolution_voted: boolean;
+}
+
+/** Database-only report view captured inside a caller's transaction before media signing. */
+export interface ReportDetailSnapshot {
+  readonly row: DetailRow;
+  readonly beforeRefs: readonly AttachedPhotoReference[];
+  readonly afterRefs: readonly AttachedPhotoReference[];
 }
 
 interface Cursor {
@@ -302,7 +309,17 @@ export class PostgresReportReadService {
   }
 
   async getDetail(reportId: string, viewerId?: string) {
-    const rows = await this.database.withTransaction(async (client) => client.query<DetailRow>(
+    const snapshot = await this.database.withTransaction((client) =>
+      this.getDetailSnapshot(client, reportId, viewerId));
+    return snapshot ? this.projectDetailSnapshot(snapshot, viewerId) : null;
+  }
+
+  async getDetailSnapshot(
+    client: CheckedOutClient,
+    reportId: string,
+    viewerId?: string,
+  ): Promise<ReportDetailSnapshot | null> {
+    const rows = await client.query<DetailRow>(
       `SELECT r.id, r.route, r.status, r.lat, r.lng, r.description, r.existence_yes_count,
          r.resolution_yes_count, r.existence_verified_at, r.last_existence_confirmed_at,
          r.version, r.updated_at, r.is_demo, r.author_user_id,
@@ -329,13 +346,19 @@ export class PostgresReportReadService {
        LEFT JOIN users cleaner ON cleaner.id = cleanup.cleaner_user_id
        WHERE r.id = $1::uuid`,
       [reportId, viewerId ?? null],
-    ));
+    );
     const row = rows.rows[0];
     if (!row) return null;
     const beforeRefs = row.before_photos.map((photo) => ({ ...photo, purpose: 'REPORT' as const }));
     const afterRefs = row.after_photos.map((photo) => ({ ...photo, purpose: 'CLEANUP' as const }));
     const references: AttachedPhotoReference[] = [...beforeRefs, ...afterRefs];
     if (!references.length) throw new TypeError('Published report has no attached before photos.');
+    return { row, beforeRefs, afterRefs };
+  }
+
+  async projectDetailSnapshot(snapshot: ReportDetailSnapshot, viewerId?: string) {
+    const { row, beforeRefs, afterRefs } = snapshot;
+    const references: readonly AttachedPhotoReference[] = [...beforeRefs, ...afterRefs];
     if (!this.media) {
       throw new ApiError(503, 'UNAVAILABLE', 'Report photos are not available yet.');
     }

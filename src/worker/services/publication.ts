@@ -15,7 +15,11 @@ import {
   type TransactionDatabase,
 } from '../db/client';
 import { ApiError } from '../middleware/errors';
-import { PostgresReportReadService, type ReportMediaResolver } from './report-context';
+import {
+  PostgresReportReadService,
+  type ReportDetailSnapshot,
+  type ReportMediaResolver,
+} from './report-context';
 
 interface AnalysisLookup extends Record<string, unknown> {
   id: string;
@@ -59,6 +63,7 @@ interface PublishedReceiptState {
   readonly rpAwarded: 0 | 5;
   readonly balance: number;
   readonly balanceVersion: number;
+  readonly reportSnapshot: ReportDetailSnapshot;
 }
 
 function invalidStoredAnalysis(): never {
@@ -254,6 +259,8 @@ export class PostgresReportPublicationService {
             [analysis.id],
           );
           if (consumed.rows.length !== 1) analysisConsumed();
+          const reportSnapshot = await this.reports.getDetailSnapshot(client, reportId, actorId);
+          if (!reportSnapshot) throw new Error('Published report disappeared before transaction commit.');
 
           return {
             value: {
@@ -261,6 +268,7 @@ export class PostgresReportPublicationService {
               rpAwarded: 5 as const,
               balance: balance.rp_balance,
               balanceVersion: balance.version,
+              reportSnapshot,
             },
             receipt: { resourceId: reportId, responseStatus: 201 },
           };
@@ -273,11 +281,14 @@ export class PostgresReportPublicationService {
           );
           if (!report.rows[0]) notFound();
           const balance = await currentBalance(client, actorId);
+          const reportSnapshot = await this.reports.getDetailSnapshot(client, report.rows[0].id, actorId);
+          if (!reportSnapshot) notFound();
           return {
             reportId: report.rows[0].id,
             rpAwarded: 0 as const,
             balance: balance.rp_balance,
             balanceVersion: balance.version,
+            reportSnapshot,
           };
         },
       );
@@ -288,8 +299,7 @@ export class PostgresReportPublicationService {
       throw error;
     }
 
-    const report = await this.reports.getDetail(execution.value.reportId, actorId);
-    if (!report) notFound();
+    const report = await this.reports.projectDetailSnapshot(execution.value.reportSnapshot, actorId);
     if (execution.responseStatus !== 201) {
       throw new Error('Publication idempotency receipt has an unexpected response status.');
     }

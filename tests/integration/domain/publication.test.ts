@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import { PublicationReceiptSchema } from '../../../src/shared/contracts';
-import { PostgresTransactionDatabase } from '../../../src/worker/db/client';
+import { PostgresTransactionDatabase, type TransactionDatabase } from '../../../src/worker/db/client';
 import type { WorkerEnv } from '../../../src/worker/middleware/context';
 import { handleError } from '../../../src/worker/middleware/errors';
 import { apiSecurity } from '../../../src/worker/middleware/security';
@@ -108,11 +108,15 @@ function createMediaResolver(): ReportMediaResolver {
   };
 }
 
-function createApp(pool: Pool, media?: ReportMediaResolver) {
+function createApp(
+  pool: Pool,
+  media?: ReportMediaResolver,
+  database: TransactionDatabase = new PostgresTransactionDatabase(pool),
+) {
   const app = new Hono<WorkerEnv>();
   app.use('*', apiSecurity);
   app.route('/api', createDomainRoutes({
-    database: new PostgresTransactionDatabase(pool),
+    database,
     reportMedia: media,
     verify: async (token) => ({ uid: token }),
   }));
@@ -227,6 +231,47 @@ describe('PostgreSQL report publication', () => {
       expect(conflict.status).toBe(409);
       expect(await conflict.json()).toMatchObject({ error: { code: 'IDEMPOTENCY_CONFLICT' } });
       expect((await counts(pool))).toMatchObject({ reports: 1, ledger: 1, balance: 5, attached: 2 });
+    }));
+
+  it('returns the committed initial snapshot when a vote verifies the report before response projection', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      await createUser(pool, actorOne);
+      const analysis = await createAnalysis(pool);
+      const base = new PostgresTransactionDatabase(pool);
+      let transitioned = false;
+      const database: TransactionDatabase = {
+        async withTransaction(work) {
+          const value = await base.withTransaction(work);
+          if (!transitioned) {
+            transitioned = true;
+            await pool.query(
+              `UPDATE reports SET status = 'VERIFIED', existence_yes_count = 3,
+                 existence_verified_at = now(), last_existence_confirmed_at = now(),
+                 version = version + 1, updated_at = now()
+               WHERE analysis_id = $1::uuid`,
+              [analysis.id],
+            );
+          }
+          return value;
+        },
+      };
+      const app = createApp(pool, createMediaResolver(), database);
+      const key = crypto.randomUUID();
+      const response = await publish(app, actorOne, analysis.id, key);
+      expect(response.status).toBe(201);
+      const receipt = PublicationReceiptSchema.parse(await response.json());
+      expect(receipt).toMatchObject({
+        rpAwarded: 5,
+        report: { status: 'AWAITING_EXISTENCE', existenceYesCount: 0 },
+      });
+      expect((await pool.query<{ status: string }>(
+        'SELECT status FROM reports WHERE analysis_id = $1::uuid', [analysis.id],
+      )).rows[0].status).toBe('VERIFIED');
+      const replay = PublicationReceiptSchema.parse(
+        await (await publish(app, actorOne, analysis.id, key)).json(),
+      );
+      expect(replay).toMatchObject({ rpAwarded: 0, report: { status: 'VERIFIED', existenceYesCount: 3 } });
     }));
 
   it('rejects invalid, unowned, expired, consumed and demo analyses without partial effects', () =>
