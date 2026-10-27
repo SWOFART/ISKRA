@@ -83,16 +83,16 @@ async function createReport(pool: Pool, options: ReportOptions = {}) {
         + "VALUES ($1::uuid, $2::text, 'CLEANUP', 'READY', $3::uuid, $4::varchar, '[]'::jsonb, '{}'::jsonb, '{}'::jsonb, now() + interval '15 minutes')",
       [cleanupAnalysisId, cleaner, id, 'vote-cleanup-' + id],
     );
-    await pool.query(
+    const cleanupResult = await pool.query<{ id: string }>(
       'INSERT INTO cleanup_submissions (report_id, cleaner_user_id, analysis_id, status, lat, lng, accuracy_m, captured_location_at, verified_at) '
         + "VALUES ($1::uuid, $2::text, $3::uuid, $4::cleanup_status, $5::double precision, $6::double precision, 10, $7::timestamptz, "
-        + 'CASE WHEN $4 = \'VERIFIED\' THEN $7::timestamptz ELSE NULL END)',
+        + 'CASE WHEN $4 = \'VERIFIED\' THEN $7::timestamptz ELSE NULL END) RETURNING id',
       [id, cleaner, cleanupAnalysisId, status === 'RESOLVED' ? 'VERIFIED' : 'AWAITING_VERIFICATION', pin.lat, pin.lng, timestamp],
     );
     await pool.query(
       'INSERT INTO report_photos (owner_user_id, cleanup_id, purpose, state, object_key, ordinal, mime_type, byte_size, sha256, upload_expires_at) '
         + "VALUES ($1::text, $2::uuid, 'CLEANUP', 'ATTACHED', $3::varchar, 0, 'image/jpeg', 128, $4::char(64), now() + interval '10 minutes')",
-      [cleaner, id, 'private/vote-after-' + id, 'c'.repeat(64)],
+      [cleaner, cleanupResult.rows[0].id, 'private/vote-after-' + id, 'c'.repeat(64)],
     );
   }
 
