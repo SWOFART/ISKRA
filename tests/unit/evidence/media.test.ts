@@ -71,6 +71,18 @@ describe('standalone bounded JPEG validation', () => {
       ? { width: 16, height: 16 } : { width: 2, height: 3 });
   });
 
+  it('accepts a grayscale restart interval larger than the complete scan', () => {
+    const valid = readFileSync(new URL('../../fixtures/photos/grayscale.jpg', import.meta.url));
+    const sos = valid.findIndex((value, index) => value === 0xff && valid[index + 1] === 0xda);
+    const bytes = new Uint8Array([...valid.slice(0, sos), 255, 221, 0, 4, 0, 100, ...valid.slice(sos)]);
+    expect(validateJpeg(bytes, 'image/jpeg')).toEqual({ width: 2, height: 3 });
+  });
+
+  it.each(['grayscale-restart', 'progressive-restart'])('accepts %s with a short final interval', (kind) => {
+    const bytes = readFileSync(new URL(`../../fixtures/photos/${kind}.jpg`, import.meta.url));
+    expect(validateJpeg(bytes, 'image/jpeg')).toEqual({ width: 16, height: 16 });
+  });
+
   it('rejects a scan truncated before its required restart intervals', () => {
     const bytes = readFileSync(new URL('../../fixtures/photos/restart.jpg', import.meta.url));
     const firstRestart = bytes.findIndex((value, index) => value === 0xff && bytes[index + 1] === 0xd0);
