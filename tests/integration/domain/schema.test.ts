@@ -20,7 +20,7 @@ async function installSchema(pool: Pool): Promise<void> {
 }
 
 async function createUser(pool: Pool, id: string): Promise<void> {
-  await pool.query('INSERT INTO users (id, nickname) VALUES ($1, $1)', [id]);
+  await pool.query('INSERT INTO users (id, nickname) VALUES ($1, $1::varchar)', [id]);
 }
 
 async function createAnalysis(
