@@ -35,6 +35,10 @@ function makeButton(label: string, className: string): HTMLButtonElement {
   return button;
 }
 
+function appendElements(parent: HTMLElement, ...elements: HTMLElement[]): void {
+  for (const element of elements) parent.appendChild(element);
+}
+
 function renderMapPanel(onReport: () => void): HTMLElement {
   const page = makeElement('section', 'map-page');
   page.setAttribute('aria-label', 'Map of Heilbronn');
@@ -47,13 +51,13 @@ function renderMapPanel(onReport: () => void): HTMLElement {
   mapCanvas.setAttribute('data-zoom', String(defaultMapCamera.zoom));
 
   const mapLabel = makeElement('div', 'map-location');
-  mapLabel.append(
+  appendElements(mapLabel,
     makeElement('span', 'eyebrow', 'YOUR CITY'),
     makeElement('strong', undefined, 'Heilbronn'),
   );
 
   const mapStatus = makeElement('div', 'map-status');
-  mapStatus.append(
+  appendElements(mapStatus,
     makeElement('span', 'status-dot'),
     makeElement('span', undefined, 'Report map is not connected yet.'),
   );
@@ -66,7 +70,7 @@ function renderMapPanel(onReport: () => void): HTMLElement {
   mapNotice.hidden = true;
   mapNotice.setAttribute('role', 'status');
 
-  page.append(mapCanvas, mapLabel, mapStatus, reportButton, mapNotice);
+  appendElements(page, mapCanvas, mapLabel, mapStatus, reportButton, mapNotice);
   return page;
 }
 
@@ -79,7 +83,7 @@ function renderDeferredPanel(
   page.setAttribute('aria-labelledby', 'deferred-heading');
 
   const card = makeElement('div', 'deferred-card');
-  card.append(
+  appendElements(card,
     makeElement('span', 'deferred-icon', '✳'),
     makeElement('h1', undefined, heading),
     makeElement('p', undefined, message),
@@ -94,12 +98,12 @@ function renderDeferredPanel(
       notice.textContent = 'Sign-in will be available when account access is connected.';
       notice.hidden = false;
     });
-    card.append(action, notice);
+    appendElements(card, action, notice);
   }
 
   const headingElement = card.querySelector('h1');
   headingElement?.setAttribute('id', 'deferred-heading');
-  page.append(card);
+  appendElements(page, card);
   return page;
 }
 
@@ -109,7 +113,7 @@ export function App(): HTMLElement {
   const brand = makeElement('a', 'brand', 'ISKRA');
   brand.href = tabPaths.map;
   brand.setAttribute('aria-label', 'ISKRA — Map');
-  header.append(brand, makeElement('span', 'header-caption', 'A cleaner city, together'));
+  appendElements(header, brand, makeElement('span', 'header-caption', 'A cleaner city, together'));
 
   const main = makeElement('main', 'app-main');
   const tablist = makeElement('nav', 'bottom-nav');
@@ -135,7 +139,7 @@ export function App(): HTMLElement {
     tab.setAttribute('aria-label', labels[tabId]);
     tab.id = `tab-${tabId}`;
     tab.setAttribute('aria-controls', 'main-panel');
-    tab.append(
+    appendElements(tab,
       makeElement('span', 'nav-icon', icons[tabId]),
       makeElement('span', 'nav-label', labels[tabId]),
     );
@@ -162,7 +166,7 @@ export function App(): HTMLElement {
       activateTab(tabOrder[nextIndex], true);
     });
     tabs.set(tabId, tab);
-    tablist.append(tab);
+    appendElements(tablist, tab);
   }
 
   let selectedTab = tabFromPath(window.location.pathname);
@@ -192,9 +196,9 @@ export function App(): HTMLElement {
           notice.hidden = false;
         }
       });
-      panel.append(map);
+      appendElements(panel, map);
     } else if (selectedTab === 'impact') {
-      panel.append(
+      appendElements(panel,
         renderDeferredPanel(
           'Your impact',
           'Sign in to see your reports and community contributions.',
@@ -202,7 +206,7 @@ export function App(): HTMLElement {
         ),
       );
     } else {
-      panel.append(
+      appendElements(panel,
         renderDeferredPanel(
           'Rewards',
           'Sign in to see your reward balance and available rewards.',
@@ -218,7 +222,7 @@ export function App(): HTMLElement {
     activateTab(tabFromPath(window.location.pathname), false);
   });
 
-  shell.append(header, main, tablist);
+  appendElements(shell, header, main, tablist);
   activateTab(selectedTab, false);
   return shell;
 }

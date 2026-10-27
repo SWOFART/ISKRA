@@ -26,8 +26,9 @@ class TestElement {
     this.children.splice(0);
   }
 
-  append(...elements: TestElement[]): void {
-    this.children.push(...elements);
+  appendChild(element: TestElement): TestElement {
+    this.children.push(element);
+    return element;
   }
 
   replaceChildren(...elements: TestElement[]): void {
