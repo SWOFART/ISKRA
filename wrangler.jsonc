@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "iskra-platform",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "env": {
+    "staging": {
+      "name": "iskra-staging",
+      "workers_dev": false
+    },
+    "production": {
+      "name": "iskra-production",
+      "workers_dev": false
+    }
+  }
+}
