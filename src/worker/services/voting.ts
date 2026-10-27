@@ -90,6 +90,19 @@ async function currentBalance(client: CheckedOutClient, userId: string): Promise
   return result.rows[0];
 }
 
+async function retryDeadlocks<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? (error as { code?: unknown }).code : undefined;
+      if (code !== '40P01' || attempt >= 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+    }
+  }
+}
+
 /** Applies report-locked, stage-specific votes, rewards and threshold effects atomically. */
 export class PostgresReportVotingService {
   private readonly reports: PostgresReportReadService;
@@ -108,15 +121,16 @@ export class PostgresReportVotingService {
     }
     const key = UuidSchema.parse(idempotencyKey).toLowerCase();
     const reportId = UuidSchema.parse(rawReportId).toLowerCase();
+    const requestHash = await hashRequest(reportId, input);
     let execution;
     try {
-      execution = await executeIdempotently<VoteReceiptState>(
+      execution = await retryDeadlocks(() => executeIdempotently<VoteReceiptState>(
         this.database,
         {
           actorId,
           operation: 'REPORT_VOTE',
           key,
-          requestHash: await hashRequest(reportId, input),
+          requestHash,
         },
         async (client) => {
           const reportResult = await client.query<LockedReport>(
@@ -340,7 +354,7 @@ export class PostgresReportVotingService {
             rpAwarded: 0 as const,
           };
         },
-      );
+      ));
     } catch (error) {
       if (error instanceof IdempotencyConflictError) {
         throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', 'This key was already used with different vote data.');

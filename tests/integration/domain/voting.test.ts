@@ -89,6 +89,11 @@ async function createReport(pool: Pool, options: ReportOptions = {}) {
         + 'CASE WHEN $4 = \'VERIFIED\' THEN $7::timestamptz ELSE NULL END)',
       [id, cleaner, cleanupAnalysisId, status === 'RESOLVED' ? 'VERIFIED' : 'AWAITING_VERIFICATION', pin.lat, pin.lng, timestamp],
     );
+    await pool.query(
+      'INSERT INTO report_photos (owner_user_id, cleanup_id, purpose, state, object_key, ordinal, mime_type, byte_size, sha256, upload_expires_at) '
+        + "VALUES ($1::text, $2::uuid, 'CLEANUP', 'ATTACHED', $3::varchar, 0, 'image/jpeg', 128, $4::char(64), now() + interval '10 minutes')",
+      [cleaner, id, 'private/vote-after-' + id, 'c'.repeat(64)],
+    );
   }
 
   return { id, author, analysisId };
