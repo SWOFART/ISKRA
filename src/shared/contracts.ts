@@ -41,7 +41,8 @@ export const ErrorCodeSchema = enumeration([
   'AI_TIMEOUT', 'UNAVAILABLE', 'INTERNAL_ERROR',
 ]);
 export type ErrorCode = Infer<typeof ErrorCodeSchema>;
-export const API_ERROR_POLICY = Object.freeze({
+export type ApiErrorHttpStatus = 400 | 401 | 403 | 404 | 409 | 410 | 413 | 415 | 422 | 429 | 500 | 502 | 503 | 504;
+const apiErrorPolicy = {
   INVALID_INPUT: { httpStatus: 400, retryable: false },
   UNAUTHENTICATED: { httpStatus: 401, retryable: false },
   SELF_VOTE: { httpStatus: 403, retryable: false },
@@ -71,7 +72,8 @@ export const API_ERROR_POLICY = Object.freeze({
   AI_TIMEOUT: { httpStatus: 504, retryable: true },
   UNAVAILABLE: { httpStatus: 503, retryable: true },
   INTERNAL_ERROR: { httpStatus: 500, retryable: false },
-} satisfies Record<ErrorCode, { httpStatus: number; retryable: boolean }>);
+} as const satisfies Record<ErrorCode, { httpStatus: ApiErrorHttpStatus; retryable: boolean }>;
+export const API_ERROR_POLICY = Object.freeze(apiErrorPolicy);
 export const ErrorSchema = object({
   code: ErrorCodeSchema, message: string(1, 500), requestId: UuidSchema, retryable: boolean,
 }).refine((value) => API_ERROR_POLICY[value.code].retryable === value.retryable,
