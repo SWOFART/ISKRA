@@ -110,6 +110,13 @@ describe('execution, assessment and ledger distinctions', () => {
     expect(c.CleanupReceiptSchema.safeParse({ ...fixtures.cleanupPending, provisionalRp: 50 }).success).toBe(false);
     expect(c.CleanupReceiptSchema.safeParse({ ...fixtures.cleanupPending, balance: 40 }).success).toBe(false);
   });
+  it('distinguishes a new publication from a replay carrying a current report snapshot', () => {
+    expect(fixtures.publication.report.status).toBe('AWAITING_EXISTENCE');
+    expect(fixtures.publication.report.existenceYesCount).toBe(0);
+    expect(c.PublicationReceiptSchema.safeParse({ ...fixtures.publication, report: fixtures.viewerReport }).success).toBe(false);
+    expect(c.PublicationReceiptSchema.safeParse({ ...fixtures.publication, rpAwarded: 0, report: fixtures.viewerReport }).success).toBe(true);
+    expect(fixtures.cleanupPending.report.resolutionYesCount).toBe(0);
+  });
   it('rejects contradictory lifecycle and permissions', () => {
     expect(c.PublicReportDetailSchema.safeParse({ ...fixtures.publicReport, currentStage: 'EXISTENCE' }).success).toBe(false);
     expect(c.PublicReportDetailSchema.safeParse({ ...fixtures.publicReport, resolutionYesCount: 4 }).success).toBe(false);
@@ -139,5 +146,10 @@ describe('new-action location admission (not replay freshness)', () => {
   it('enforces the separate 3m report pin adjustment', () => {
     expect(reportPinAdmission(location, location, now)).toBeNull();
     expect(reportPinAdmission(location, { lat: 49.141, lng: 9.22 }, now)).toBe('PIN_TOO_FAR');
+    const zero = { ...location, lat: 0, lng: 0 };
+    const at = (m: number) => ({ lat: m / 6_371_000 * 180 / Math.PI, lng: 0 });
+    expect(reportPinAdmission(zero, at(2.999), now)).toBeNull();
+    expect(reportPinAdmission(zero, at(3), now)).toBeNull();
+    expect(reportPinAdmission(zero, at(3.001), now)).toBe('PIN_TOO_FAR');
   });
 });

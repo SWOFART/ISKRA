@@ -168,18 +168,18 @@
     "report": {
       "id": "11111111-1111-4111-8111-000000000001",
       "route": "GREEN",
-      "status": "AWAITING_RESOLUTION",
+      "status": "AWAITING_EXISTENCE",
       "location": {
         "lat": 49.14,
         "lng": 9.22
       },
       "coverPhotoId": "11111111-1111-4111-8111-000000000002",
       "description": "DEMO fixture: staged litter in Heilbronn.",
-      "existenceYesCount": 8,
-      "resolutionYesCount": 2,
-      "existenceVerifiedAt": "2026-10-27T12:00:00.000Z",
-      "lastExistenceConfirmedAt": "2026-10-27T12:00:00.000Z",
-      "version": 12,
+      "existenceYesCount": 0,
+      "resolutionYesCount": 0,
+      "existenceVerifiedAt": null,
+      "lastExistenceConfirmedAt": null,
+      "version": 1,
       "updatedAt": "2026-10-27T12:00:00.000Z",
       "isDemo": true,
       "beforePhotos": [
@@ -190,39 +190,27 @@
           "expiresAt": "2026-10-27T12:00:00.000Z"
         }
       ],
-      "afterPhotos": [
-        {
-          "id": "11111111-1111-4111-8111-000000000003",
-          "ordinal": 1,
-          "mediaUrl": "https://demo.invalid/api/photos/11111111-1111-4111-8111-000000000003/content?token=synthetic",
-          "expiresAt": "2026-10-27T12:00:00.000Z"
-        }
-      ],
+      "afterPhotos": [],
       "author": {
         "id": "demo-reporter",
         "nickname": "Demo Spark",
         "avatar": "leaf"
       },
-      "cleaner": {
-        "id": "demo-cleaner",
-        "nickname": "Demo Cleaner",
-        "avatar": "tree"
-      },
-      "currentStage": "RESOLUTION",
+      "cleaner": null,
+      "currentStage": "EXISTENCE",
       "openVoteStages": [
-        "EXISTENCE",
-        "RESOLUTION"
+        "EXISTENCE"
       ],
       "viewer": {
         "stages": {
           "EXISTENCE": {
-            "canVote": true,
-            "reason": null,
+            "canVote": false,
+            "reason": "SELF_VOTE",
             "hasVoted": false
           },
           "RESOLUTION": {
-            "canVote": true,
-            "reason": null,
+            "canVote": false,
+            "reason": "STAGE_CLOSED",
             "hasVoted": false
           }
         },
@@ -390,7 +378,7 @@
       "coverPhotoId": "11111111-1111-4111-8111-000000000002",
       "description": "DEMO fixture: staged litter in Heilbronn.",
       "existenceYesCount": 8,
-      "resolutionYesCount": 2,
+      "resolutionYesCount": 0,
       "existenceVerifiedAt": "2026-10-27T12:00:00.000Z",
       "lastExistenceConfirmedAt": "2026-10-27T12:00:00.000Z",
       "version": 12,

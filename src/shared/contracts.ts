@@ -155,7 +155,9 @@ export const UploadTicketSchema = object({ photoId: UuidSchema, uploadUrl: media
 export const UploadResultSchema = object({ photoId: UuidSchema, state: literal('UPLOADED') });
 export const BootstrapReceiptSchema = object({ user: PublicIdentitySchema, balance: BalanceSchema, balanceVersion: VersionSchema });
 const privateBalance = { balance: BalanceSchema, balanceVersion: VersionSchema };
-export const PublicationReceiptSchema = object({ report: ViewerReportDetailSchema, rpAwarded: union(literal(0), literal(5)), ...privateBalance });
+export const PublicationReceiptSchema = object({ report: ViewerReportDetailSchema, rpAwarded: union(literal(0), literal(5)), ...privateBalance })
+  .refine((v) => v.rpAwarded === 0 || (v.report.status === 'AWAITING_EXISTENCE'
+    && v.report.existenceYesCount === 0), 'New publication must return its initial committed state');
 export const VoteReceiptSchema = object({
   voteId: UuidSchema, replayed: boolean, rpAwarded: union(literal(0), literal(5)),
   ...privateBalance, report: ViewerReportDetailSchema,
