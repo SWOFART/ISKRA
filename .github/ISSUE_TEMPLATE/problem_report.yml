@@ -1,0 +1,39 @@
+name: Bug report
+description: Describe a reproducible failure in ISKRA or its delivery setup.
+title: 'fix: '
+body:
+  - type: markdown
+    attributes:
+      value: Report one problem. Remove tokens, credentials and personal data from all evidence.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Actual and expected behavior
+      description: Describe what happened and what should have happened.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction and evidence
+      description: Include steps, browser/device, environment, release and safe logs or screenshots when available.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Core flow or deployment is blocked
+        - A feature fails with a workaround available
+        - Visual or usability problem
+        - Impact is not established yet
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Completion criteria
+      description: List observable checks that will demonstrate the fix.
+    validations:
+      required: true
