@@ -194,6 +194,7 @@ export const UploadRequestSchema = union(
 );
 export const UploadTicketSchema = object({ photoId: UuidSchema, uploadUrl: mediaUrl, expiresAt: TimestampSchema, maxBytes: literal(POLICY.maxPhotoBytes) });
 export const UploadResultSchema = object({ photoId: UuidSchema, state: literal('UPLOADED') });
+export const BootstrapRequestSchema = object({});
 export const BootstrapReceiptSchema = object({ user: PublicIdentitySchema, balance: BalanceSchema, balanceVersion: VersionSchema });
 const privateBalance = { balance: BalanceSchema, balanceVersion: VersionSchema };
 export const PublicationReceiptSchema = object({ report: ViewerReportDetailSchema, rpAwarded: union(literal(0), literal(5)), ...privateBalance })
