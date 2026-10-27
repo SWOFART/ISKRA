@@ -1,16 +1,30 @@
 # Contributing to ISKRA
 
-Use [plan.md](plan.md) for product rules and architecture, and [infra/runbook.md](infra/runbook.md) for deployment. Team assignments are coordinated separately.
+Use [plan.md](plan.md) and the [active OpenSpec change](openspec/changes/build-iskra-hackathon-mvp/) for product rules and architecture; later confirmed OpenSpec decisions supersede conflicting historical plan examples. Follow [infra/runbook.md](infra/runbook.md) for deployment and the existing A/B/C ownership boundaries.
 
 ## Issue → branch → pull request
 
 1. Open one issue per actionable bug or task, with acceptance criteria. Check existing issues first and assign the issue to the person doing the work.
 2. Branch from the latest `develop`. Keep the change focused on that issue.
 3. Run the relevant checks and open a **draft pull request targeting `develop`**. Include `Closes #<number>` when merging should complete the issue.
-4. Request review when the change is ready. A human reviews and merges after CI passes.
+4. Complete the required PR checklist and independent Gate A below before marking ready for review. A human reviews and merges after the remaining gates pass.
 5. Release through a separate PR from `develop` to `main`. Production deployment remains a manual action; merging a PR does not deploy production.
 
 Do not push feature work directly to `develop` or `main`. Do not force-push shared branches without explicit authorization. These are contribution rules; server-side branch protection is not configured by this change.
+
+## Required PR gates
+
+Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) for every PR, including PRs opened through a CLI. Templates do not retroactively populate existing PRs, and a custom `--body-file` must retain the checklist. Keep incomplete gates unchecked and the PR draft; do not mark them satisfied merely because follow-up work is documented.
+
+GitHub prefills templates only after they reach the [default branch](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository). ISKRA's default is `main`; merging a template change into `develop` alone does not activate prefill. Release the reviewed change through `develop` → `main`; until then, paste the template into new PRs explicitly. Do not change the default branch or bypass human merges to activate it.
+
+1. **Scope and acceptance:** link existing task issues, record criteria and verify only what the change claims. Use `Related #N` for partial work and `Closes #N` only after the whole task is complete. B alone updates the canonical OpenSpec checklist after integrated evidence; A/C hand off through PRs.
+2. **Architecture/security/configuration:** verify the template's required checks, including OpenSpec ownership/contracts, safe data handling and Google-sourced configuration. Explain non-applicable guarantees explicitly; do not copy another project's build stack.
+3. **Independent Gate A:** fill the [review prompt](.github/prompts/gate-a-review.md) with the issue/criteria, exact base and HEAD SHAs, validation results and known omissions. Provide the filled prompt to the user for independent review. Record the actual user-provided reviewer/verdict/evidence. Author self-review or an invented PASS does not qualify. Until evidence arrives, use PENDING and stay draft. Resolve blocking findings; any new commit or changed reviewed base requires a new verdict for that candidate.
+4. **CI and OpenSpec acceptance:** CI must pass for the current HEAD; applicable G0–G5/H48 gates must have real evidence. Document N/A only when the task does not require that milestone. A dry-run, fixtures or health endpoint cannot pass a live runtime/Green gate.
+5. **Human review and merge:** an independent human reviews the PR and a human owner merges it. Agents do not approve their own changes or merge automatically.
+
+These are mandatory review-process gates, matching Open Circuit's manual review pattern. Markdown checkboxes do not technically block GitHub merging. No new body validator or branch-protection rule is installed here; current develop is unprotected, so maintainers must enforce this process until repository protection is configured separately.
 
 ## Branch names
 
@@ -57,4 +71,4 @@ Once the application exists, run its required `typecheck`, `test:unit` and `buil
 
 ## Template provenance
 
-The review topics and problem-report structure were informed by [SWOFART/open-circuit](https://github.com/SWOFART/open-circuit). ISKRA's templates are independently worded and adapted to this repository. Open Circuit's desktop build pipeline and mandatory manual Gate A process are not ISKRA requirements. The existing ISKRA MIT license is unchanged.
+The review topics, required checklists and independent Gate A pattern were adapted from [SWOFART/open-circuit](https://github.com/SWOFART/open-circuit), as requested by the user. ISKRA's template and reusable prompt are independently worded for OpenSpec, Workers and Google-sourced configuration. Open Circuit's desktop build pipeline is not imported. The existing ISKRA MIT license is unchanged.
