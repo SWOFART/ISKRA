@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { applyClientDesignTokens, clientStyleProperties } from '../../../src/client/applyDesignTokens';
 import { clientDesign } from '../../../src/client/designTokens';
 
 function contrastRatio(foreground: string, background: string): number {
@@ -35,9 +36,27 @@ describe('client design decisions', () => {
     expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.brandText, colors.brand)).toBeGreaterThanOrEqual(4.5);
+    for (const surface of [colors.canvas, colors.surface, colors.surfaceMuted]) {
+      expect(contrastRatio(colors.border, surface)).toBeGreaterThanOrEqual(3);
+    }
 
     for (const route of Object.values(colors.route)) {
       expect(contrastRatio(route.text, route.surface)).toBeGreaterThanOrEqual(4.5);
+      for (const surface of [colors.canvas, colors.surface, colors.surfaceMuted]) {
+        expect(contrastRatio(route.marker, surface)).toBeGreaterThanOrEqual(3);
+      }
     }
+  });
+
+  it('applies the design tokens as client CSS properties', () => {
+    const applied: Array<[string, string]> = [];
+
+    applyClientDesignTokens({
+      setProperty(property, value) {
+        if (value) applied.push([property, value]);
+      },
+    });
+
+    expect(Object.fromEntries(applied)).toEqual(clientStyleProperties);
   });
 });
