@@ -120,15 +120,15 @@ Branch: `codex/person-c-delivery`, based on `develop` at `f2287d1`. B remains th
 | 2.3, partial | Root pinned package/lockfile, strict TypeScript, Vitest, Hono Worker, health/release and API JSON 404. Worker-only bundle; Vite/SPA/direct client navigation and B/C router integration require A's entry and B's frozen contracts/facade. Client paths return safe JSON 503 rather than fabricated UI. |
 | 2.7, local evidence | RS256 signature verification using `jose`/Web Crypto, issuer/audience/subject/time checks, UID-only context and bounded key refresh tests. Real Firebase token on deployed Workers and real sign-in remain unverified. |
 | 2.9, partial | Safe JSON error envelope, server-generated request IDs, actual-byte body cap, mutation-origin guard, no-store/no-referrer and API security headers. B's shared validators/error mapping and live public/private route tests are pending. |
-| 2.4 and 2.10, pending | Vitest exists, but no Playwright/real-PG harness or product deployment is claimed. Requires schema/router/client handoff and D10 resource/access decisions. |
+| 2.4 and 2.10 | The later independent harness section below supplies Playwright/real-PG infrastructure for 2.4. Product deployment (2.10), domain tests and client integration remain pending. |
 
 ### Interfaces supplied to A/B
 
 - `WorkerEnv` in `src/worker/middleware/context.ts` owns optional `FIREBASE_PROJECT_ID`/`RELEASE_SHA` bindings and request variables `requestId` and `identity: {uid} | undefined`. Missing project configuration fails closed with 503. No provider email/name enters the context.
 - Use `requireAuth()` on protected routes and `optionalAuth()` on guest-capable routes. Both accept only bearer tokens; supplied invalid credentials never silently become guest access. Domain request schemas must reject actor/status/RP fields; ignoring such fields in auth does not replace B's input validation.
-- `ApiError(status, code, safeMessage, retryable)` produces `{error:{code,message,requestId,retryable}}`. Only sanitized messages belong here; unexpected exceptions return fixed 500 text without token/SQL/key logging. `INTERNAL_ERROR` (500) and `UNAVAILABLE` (503) are **provisional platform codes to reconcile with B's frozen mapping**, not approved shared-schema additions.
+- `ApiError(status, code, safeMessage, retryable)` produces `{error:{code,message,requestId,retryable}}`. Only sanitized messages belong here; unexpected exceptions return fixed 500 text without token/SQL/key logging. The later v1 integration uses B's `API_ERROR_POLICY`, including `INTERNAL_ERROR` (500) and `UNAVAILABLE` (503). Invalid status/retry combinations are programming errors and return a safe 500.
 - Root middleware counts streamed bytes up to 1MiB, including when Content-Length understates the payload. This first slice buffers the bounded body; C's later authenticated JPEG upload path must add purpose/ownership/type/dimension checks and immutable R2 finalization. The API-only CSP must be scoped/adapted before serving A's actual HTML.
-- Only health is mounted. C will mount B's `createDomainRoutes` and the real evidence facade when their interfaces exist; no fake domain/AI success endpoints were added.
+- Health and B's `createDomainRoutes` facade are mounted. Unfinished domain endpoints return the canonical JSON 503; the real evidence facade is still pending. No fake domain/AI success endpoints were added.
 
 ### Firebase verification limits
 
@@ -167,3 +167,67 @@ npm run dev -- --local
 Root build is a Wrangler dry-run Worker bundle, not a product deployment or a Vite/client build. The existing CI automatically runs the new root checks and preserves the separate check-Worker/configuration tests. Unit coverage includes bad signatures/claims/algorithms, rotation/cooldown/concurrency/cache expiry, unavailable/oversized key responses, safe failures, origin rejection, body limits and verified identity propagation. Real-PG races, real devices, private media and the genuine Green flow remain later acceptance gates.
 
 Foundation verification on 2026-10-27: clean `npm ci`, typecheck, 42 root unit tests and root bundle passed; three separate check-Worker tests/build and eight cloud-configuration tests passed. A local Wrangler/workerd server returned health 200, unknown API 404 and `/impact` 503 with JSON/no-store/request IDs; it was then stopped. These local runtime checks did not exercise a real Firebase user or a cloud deployment.
+
+## Contract integration and milestone review — issue #18, 2026-10-27
+
+Develop `b08055e` includes B's merged schemas (PR70), v1 handoff (PR71) and domain/transaction/report-context facades (PR72), plus the confirmed roster/access owner. This clears the missing schema/router dependency for C's API-boundary integration. G0 is not automatically complete: the handoff still requests A/C acknowledgment and independent review. C acknowledges `v1-candidate.2` for endpoint/error, upload/location, assessment and internal interface shapes through this integration PR; B records consumer acknowledgments and canonical checklist completion. A's acknowledgment is not inferred from a merged PR.
+
+C's root now mounts B's facade and uses the shared error HTTP/retry mapping. JSON/body errors are `400 INVALID_INPUT`; an oversized declared JPEG is `413 PHOTO_TOO_LARGE`. Both count actual bytes under the existing 1MiB cap. B/C route authors can use `parseJsonBody(c, schema)` for strict JSON content-type, syntax and shared request-schema validation with safe 400 responses; unknown authority fields are rejected by the supplied schema. A schema error outside that request helper remains a generic 500 so server projection bugs are not blamed on the client. Domain placeholders still report 503 and do not claim authentication, mutation or publication success.
+
+The root typecheck now includes shared code and all unit tests (including B's fixtures with JSON-module support), closing the earlier typecheck handoff. Local clean install, typecheck, 158 unit tests and Worker dry-run passed before PR creation. No shared schema/domain facade file was edited.
+
+G1 remains blocked: no A client entry, real database implementation/migrations or SQL transaction probe is present. A fresh Google read confirms both environments still disable deployment with no populated app/deploy keys; Cloud SQL discovery still returns 403. PR68 (PG/browser harness) is merged after independent review; PR69 (JPEG validation) remains pending. Neither is a product runtime milestone. Live hosting, verified real-user token, storage/network/TLS and AI quota acceptance are still unproven; no cloud write or billable resource was created by this integration.
+
+## Disposable PostgreSQL and browser harness — task 2.4
+
+Issue [#13](https://github.com/SWOFART/ISKRA/issues/13), Person C. This independent slice builds on the merged Worker foundation. Complete scaffold task 2.3, B's migrations/domain races and A's UI are still separate dependencies for integrated acceptance; this harness does not close those tasks or G0/G1. B maintains canonical OpenSpec task checkboxes after reviewing integrated evidence.
+
+`pg` is a pinned **development dependency** for real database tests, with no ORM and no change to B's runtime database client/schema. PostgreSQL 17 is the selected **test target**, not confirmation of a provisioned Cloud SQL version. CI pins the tested multi-architecture PostgreSQL image digest; update that pin deliberately. Test-only tables are named `harness_ledger`, not a proposed product schema.
+
+Start an isolated local database (Docker must be running):
+
+```bash
+docker run --detach --rm --name iskra-test-postgres --publish 127.0.0.1:55432:5432 --env POSTGRES_HOST_AUTH_METHOD=trust --env POSTGRES_USER=iskra_test --env POSTGRES_DB=iskra_test postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
+docker exec iskra-test-postgres pg_isready -U iskra_test -d iskra_test
+```
+
+After readiness succeeds:
+
+```bash
+npm ci
+npm run typecheck
+npm run test:unit
+TEST_DATABASE_URL=postgres://iskra_test@127.0.0.1:55432/iskra_test npm run test:integration
+npx --no-install playwright install chromium
+npm run test:e2e
+npm run build
+docker stop iskra-test-postgres
+```
+
+The trust-auth database is disposable, loopback-bound and has no mounted data volume. Never reuse these instructions for a shared/cloud database. `TEST_DATABASE_URL` is an ephemeral test fixture, not a product secret: its name is blank in `.env.example`; the loopback URL is supplied only to the test process/CI service. No GitHub settings variables or secrets are created, no Google/cloud credentials are fetched by test jobs, and the fixture must not be added to product environment JSON or Worker bindings.
+
+`tests/integration/auth/postgres.ts` exports `testDatabaseConfig()` and `withTestDatabase(async pool => ...)`. Before connecting, the guard requires a PostgreSQL URL with an explicit port, loopback host, exact `iskra_test` user/database and no query/fragment overrides. Explicit connection settings prevent falling back to a production PGHOST/database/options. Each invocation generates its own schema, uses a scoped pool (maximum four connections) and drops only that generated schema in `finally`, including after callback failure. B can import this helper for future domain tests and use a checked-out client for transactions; all clients must be released in `finally`. The harness does not run migrations, reset databases or delete public/product schemas. Real-PG tests prove rollback, concurrent uniqueness and schema cleanup, not product vote/RP invariants.
+
+`vitest.integration.config.ts` runs all `tests/integration/**/*.test.ts` without silently skipping a missing database. Ordinary runs intentionally skip only the named negative probe. CI first runs the normal command without an error wrapper, so a genuine invariant failure fails the job. It then sets the **test-only** `ISKRA_TEST_INJECT_FAILURE=1` to prove an intentionally false SQL assertion returns exit 1. The structured JSON report must identify exactly the expected file/assertion; a small test reporter also records suite/hook and unhandled-error counts omitted by Vitest's JSON reporter. The validator rejects unrelated collection, hook, assertion, connection and unhandled failures; Python regressions and local real-PostgreSQL fault probes cover these cases. The flags/report files are test-only and never read by Worker code or deployed configuration.
+
+Playwright uses a newly spawned local Wrangler/workerd at fixed loopback port 8789 with server reuse disabled. It runs a real Chromium health/navigation check plus request-boundary checks; there is no configurable external/staging URL. The server stops after the run. Trace recording is off and reports/results are ignored; no artifacts are uploaded. Client navigation/camera/login tests and real phones remain pending. Playwright's documented [webServer lifecycle](https://playwright.dev/docs/test-webserver) and node-postgres's [single-client transaction rule](https://node-postgres.com/features/transactions) informed this setup.
+
+Local evidence on 2026-10-27: four real PostgreSQL tests passed, the negative assertion failed as expected, and both Playwright checks passed. This is local acceptance of the harness; PR CI and independent Gate A are recorded separately in its PR.
+
+## Additional read-only prerequisites — task 1.4 / issue #8
+
+Rechecked on 2026-10-27 without provisioning resources, enabling billing/APIs, changing secrets or making a model call:
+
+| Probe | Actual result / remaining requirement |
+|---|---|
+| Google selected project | `iskra-512914` |
+| Firebase providers/domains | Email/password and Google enabled; authorized domains remain localhost and the project's Firebase hosting domains. Final product origin is absent. |
+| Google environment JSON | Both environment records readable; deployment disabled and no populated app/deployment key names. Local OAuth is not a configured CI deployment token. |
+| Cloudflare local login | Wrangler OAuth has Workers deployment scopes; this does not prove the Google-sourced CI token is configured. |
+| Private R2 readiness | Bucket listing denied, Cloudflare error 10042; resource/account readiness remains unverified. No bucket created or billing setting changed. |
+| Hyperdrive listing | Read succeeded; no ISKRA-named configuration observed. No connection/TLS/query-cache acceptance claimed. |
+| Cloud SQL instance listing | Google API returned 403. This does not prove zero instances; API enablement/permissions must be resolved before discovery/provisioning. |
+| Google billing information | API returned 403; billing state, spending owner/cap and teardown date remain unconfirmed. |
+| Gemini / MapTiler | No populated model/key/map values in the environment records; model availability, quota and map-origin restrictions are unverified. |
+
+Current [Gemini rate-limit documentation](https://ai.google.dev/gemini-api/docs/rate-limits) requires checking the actual project's active limits rather than inferring capacity from a key or a generic advertised tier. No model/version/quota is approved by these probes. Issue #8 remains open because the account/budget/domain/model requirements are incomplete. These blockers affect live provisioning and G1, not disposable local tests.

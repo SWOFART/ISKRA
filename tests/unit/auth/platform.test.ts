@@ -62,7 +62,7 @@ describe('Worker API boundary', () => {
     const response = await app.request('/api/upload', {
       method: 'POST', body: new Uint8Array(1_048_577), headers: headers as Record<string, string>,
     }, env);
-    expect(response.status).toBe(413);
+    expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: { code: 'INVALID_INPUT' } });
   });
 
