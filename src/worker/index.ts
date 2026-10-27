@@ -12,11 +12,19 @@ export function createApp() {
   app.use('/api/*', boundedBody);
   app.route('/api', createHealthRoutes());
   app.route('/api', createDomainRoutes());
-  app.notFound((c) => {
+  app.notFound(async (c) => {
     if (c.req.path === '/api' || c.req.path.startsWith('/api/')) {
       throw new ApiError(404, 'NOT_FOUND', 'This API route does not exist.');
     }
-    throw new ApiError(503, 'UNAVAILABLE', 'The client application is not integrated yet.', true);
+    if (!['GET', 'HEAD'].includes(c.req.method)) {
+      throw new ApiError(404, 'NOT_FOUND', 'This route does not exist.');
+    }
+    if (c.env.ASSETS) {
+      c.header('Content-Security-Policy', "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+      const response = await c.env.ASSETS.fetch(c.req.raw);
+      return c.newResponse(response.body, response);
+    }
+    throw new ApiError(503, 'UNAVAILABLE', 'Client assets are unavailable.', true);
   });
   app.onError(handleError);
   return app;
