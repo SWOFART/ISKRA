@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import { VoteReceiptSchema } from '../../../src/shared/contracts';
 import { PostgresTransactionDatabase } from '../../../src/worker/db/client';
+import { ApiError } from '../../../src/worker/middleware/errors';
 import type { WorkerEnv } from '../../../src/worker/middleware/context';
 import { handleError } from '../../../src/worker/middleware/errors';
 import { apiSecurity } from '../../../src/worker/middleware/security';
@@ -115,7 +116,10 @@ function createApp(pool: Pool, now: () => number) {
     verify: async (token) => ({ uid: token }),
     now,
   }));
-  app.onError(handleError);
+  app.onError((error, context) => {
+    if (!(error instanceof ApiError)) console.error('Unexpected voting integration error:', error);
+    return handleError(error, context);
+  });
   return app;
 }
 
