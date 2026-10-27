@@ -351,5 +351,12 @@ describe('PostgreSQL report read projections', () => {
       );
       const precisePageTwo = ReportListSchema.parse(await precisePageTwoResponse.json());
       expect(precisePageTwo.items.map((item) => item.id)).toEqual([sameMillisecondOlder.id]);
+
+      const invalidCursorResponse = await app.request(
+        '/api/reports?cursor=2026-02-31T12%3A00%3A00.000000Z~00000000-0000-4000-8000-000000000001',
+        {}, environment,
+      );
+      expect(invalidCursorResponse.status).toBe(400);
+      expect(await invalidCursorResponse.json()).toMatchObject({ error: { code: 'INVALID_INPUT' } });
     }));
 });

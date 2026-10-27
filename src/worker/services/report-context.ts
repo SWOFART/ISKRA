@@ -168,8 +168,21 @@ function parseCursor(value: string | null): Cursor | null {
   try {
     if (delimiter <= 0) throw new TypeError('Invalid report list cursor.');
     const publishedAt = value.slice(0, delimiter);
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(publishedAt)
-      || !Number.isFinite(Date.parse(publishedAt))) throw new TypeError('Invalid report cursor timestamp.');
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.\d{6}Z$/.exec(publishedAt);
+    if (!match) throw new TypeError('Invalid report cursor timestamp.');
+    const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    const hour = Number(hourText);
+    const minute = Number(minuteText);
+    const second = Number(secondText);
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (year === 0 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]
+      || hour > 23 || minute > 59 || second > 59) {
+      throw new TypeError('Invalid report cursor timestamp.');
+    }
     return {
       publishedAt,
       id: UuidSchema.parse(value.slice(delimiter + 1)),
