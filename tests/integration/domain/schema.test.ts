@@ -33,7 +33,7 @@ async function createAnalysis(
   const result = await pool.query<{ id: string }>(
     `INSERT INTO ai_analyses (owner_user_id, kind, status, report_id, input_hash, result, expires_at)
      VALUES ($1, $2, $3, $4, $5, $6::jsonb,
-       CASE WHEN $3 = 'READY' THEN now() + interval '30 minutes' ELSE NULL END)
+       CASE WHEN $3::analysis_status = 'READY' THEN now() + interval '30 minutes' ELSE NULL END)
      RETURNING id`,
     [owner, reportId === null ? 'REPORT' : 'CLEANUP', status, reportId, inputHash,
       status === 'READY' ? JSON.stringify({ decision: 'ACCEPT' }) : null],
