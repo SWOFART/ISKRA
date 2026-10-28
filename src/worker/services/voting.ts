@@ -71,12 +71,13 @@ function alreadyVoted(): never {
   throw new ApiError(409, 'ALREADY_VOTED', 'A vote for this report and stage has already been recorded.');
 }
 
-async function hashRequest(reportId: string, input: VoteRequest): Promise<string> {
+async function hashRequest(reportId: string, input: VoteRequest, voteId: string | null): Promise<string> {
   const value = JSON.stringify({
     reportId: reportId.toLowerCase(),
     stage: input.stage,
     choice: input.choice,
     location: input.location,
+    ...(voteId === null ? {} : { deterministicVoteId: voteId }),
   });
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -115,13 +116,21 @@ export class PostgresReportVotingService {
     this.reports = new PostgresReportReadService(database, media);
   }
 
-  async vote(actorId: string, idempotencyKey: string, rawReportId: string, input: VoteRequest) {
+  async vote(
+    actorId: string,
+    idempotencyKey: string,
+    rawReportId: string,
+    input: VoteRequest,
+    internal: { readonly deterministicVoteId?: string } = {},
+  ) {
     if (!this.media) {
       throw new ApiError(503, 'UNAVAILABLE', 'Report photos are not available yet.', true);
     }
     const key = UuidSchema.parse(idempotencyKey).toLowerCase();
     const reportId = UuidSchema.parse(rawReportId).toLowerCase();
-    const requestHash = await hashRequest(reportId, input);
+    const deterministicVoteId = internal.deterministicVoteId === undefined
+      ? null : UuidSchema.parse(internal.deterministicVoteId).toLowerCase();
+    const requestHash = await hashRequest(reportId, input, deterministicVoteId);
     let execution;
     try {
       execution = await retryDeadlocks(() => executeIdempotently<VoteReceiptState>(
@@ -218,10 +227,11 @@ export class PostgresReportVotingService {
 
           const distance = distanceM(input.location, { lat: Number(report.lat), lng: Number(report.lng) });
           const inserted = await client.query<{ id: string }>(
-            'INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m) '
-              + 'VALUES ($1::uuid, $2::vote_stage, $3::text, $4::vote_choice, $5::double precision, $6::double precision) '
+            'INSERT INTO votes (id, report_id, stage, voter_user_id, choice, distance_m, accuracy_m) '
+              + 'VALUES (COALESCE($1::uuid, gen_random_uuid()), $2::uuid, $3::vote_stage, $4::text, '
+              + '$5::vote_choice, $6::double precision, $7::double precision) '
               + 'RETURNING id',
-            [reportId, input.stage, actorId, input.choice, distance, input.location.accuracyM],
+            [deterministicVoteId, reportId, input.stage, actorId, input.choice, distance, input.location.accuracyM],
           );
           const voteId = inserted.rows[0]?.id;
           if (!voteId) throw new Error('Vote insert did not return its ID.');

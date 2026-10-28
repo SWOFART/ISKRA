@@ -124,8 +124,10 @@ function readAnalysisContext(value: unknown, reportId: string): CleanupAnalysisC
   return { beforeEvidenceHash: beforeEvidenceHash.toLowerCase(), location: location.data };
 }
 
-async function requestHash(reportId: string, analysisId: string): Promise<string> {
-  const value = JSON.stringify({ reportId: reportId.toLowerCase(), analysisId: analysisId.toLowerCase() });
+async function requestHash(reportId: string, analysisId: string, cleanupId: string | null): Promise<string> {
+  const value = JSON.stringify(cleanupId === null
+    ? { reportId: reportId.toLowerCase(), analysisId: analysisId.toLowerCase() }
+    : { reportId: reportId.toLowerCase(), analysisId: analysisId.toLowerCase(), deterministicCleanupId: cleanupId });
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -163,13 +165,21 @@ export class PostgresCleanupSubmissionService {
     this.reports = new PostgresReportReadService(database, media);
   }
 
-  async submit(actorId: string, idempotencyKey: string, reportId: string, input: { readonly analysisId: string }) {
+  async submit(
+    actorId: string,
+    idempotencyKey: string,
+    reportId: string,
+    input: { readonly analysisId: string },
+    internal: { readonly deterministicCleanupId?: string } = {},
+  ) {
     if (!this.media) {
       throw new ApiError(503, 'UNAVAILABLE', 'Report photos are not available yet.', true);
     }
     const key = UuidSchema.parse(idempotencyKey).toLowerCase();
     const targetId = UuidSchema.parse(reportId).toLowerCase();
     const analysisId = UuidSchema.parse(input.analysisId).toLowerCase();
+    const deterministicCleanupId = internal.deterministicCleanupId === undefined
+      ? null : UuidSchema.parse(internal.deterministicCleanupId).toLowerCase();
     let execution;
     try {
       execution = await executeIdempotently<CleanupReceiptState>(
@@ -178,7 +188,7 @@ export class PostgresCleanupSubmissionService {
           actorId,
           operation: 'CLEANUP_SUBMISSION',
           key,
-          requestHash: await requestHash(targetId, analysisId),
+          requestHash: await requestHash(targetId, analysisId, deterministicCleanupId),
         },
         async (client) => {
           const reportResult = await client.query<LockedReport>(
@@ -294,11 +304,11 @@ export class PostgresCleanupSubmissionService {
 
           const inserted = await client.query<{ id: string }>(
             `INSERT INTO cleanup_submissions (
-               report_id, cleaner_user_id, analysis_id, lat, lng, accuracy_m, captured_location_at
-             ) VALUES ($1::uuid, $2::text, $3::uuid, $4::double precision, $5::double precision,
-               $6::double precision, $7::timestamptz)
+               id, report_id, cleaner_user_id, analysis_id, lat, lng, accuracy_m, captured_location_at
+             ) VALUES (COALESCE($1::uuid, gen_random_uuid()), $2::uuid, $3::text, $4::uuid,
+               $5::double precision, $6::double precision, $7::double precision, $8::timestamptz)
              RETURNING id`,
-            [targetId, actorId, analysisId, context.location.lat, context.location.lng,
+            [deterministicCleanupId, targetId, actorId, analysisId, context.location.lat, context.location.lng,
               context.location.accuracyM, context.location.observedAt],
           );
           const cleanupId = inserted.rows[0]?.id;

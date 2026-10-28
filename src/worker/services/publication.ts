@@ -78,8 +78,10 @@ function notFound(): never {
   throw new ApiError(404, 'NOT_FOUND', 'The requested resource was not found.');
 }
 
-async function requestHash(analysisId: string, description: string): Promise<string> {
-  const value = JSON.stringify({ analysisId: analysisId.toLowerCase(), description });
+async function requestHash(analysisId: string, description: string, reportId: string | null): Promise<string> {
+  const value = JSON.stringify(reportId === null
+    ? { analysisId: analysisId.toLowerCase(), description }
+    : { analysisId: analysisId.toLowerCase(), description, deterministicReportId: reportId });
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -107,12 +109,15 @@ export class PostgresReportPublicationService {
     actorId: string,
     idempotencyKey: string,
     input: { readonly analysisId: string; readonly description: string },
+    internal: { readonly deterministicReportId?: string } = {},
   ) {
     if (!this.media) {
       throw new ApiError(503, 'UNAVAILABLE', 'Report photos are not available yet.', true);
     }
     const key = UuidSchema.parse(idempotencyKey).toLowerCase();
     const analysisId = UuidSchema.parse(input.analysisId).toLowerCase();
+    const deterministicReportId = internal.deterministicReportId === undefined
+      ? null : UuidSchema.parse(internal.deterministicReportId).toLowerCase();
     let execution;
     try {
       execution = await executeIdempotently<PublishedReceiptState>(
@@ -121,7 +126,7 @@ export class PostgresReportPublicationService {
           actorId,
           operation: 'REPORT_PUBLICATION',
           key,
-          requestHash: await requestHash(analysisId, input.description),
+          requestHash: await requestHash(analysisId, input.description, deterministicReportId),
         },
         async (client) => {
           try {
@@ -206,16 +211,17 @@ export class PostgresReportPublicationService {
 
           const reportInsert = await client.query<{ id: string }>(
             `INSERT INTO reports (
-               author_user_id, route, status, description, original_ai_description, comment,
+               id, author_user_id, route, status, description, original_ai_description, comment,
                lat, lng, measured_lat, measured_lng, accuracy_m, captured_location_at,
                city_id, analysis_id, reporter_total_rp, initial_rp, cleaner_rp
              ) VALUES (
-               $1::text, $2::report_route, 'AWAITING_EXISTENCE', $3::varchar, $4::varchar,
-               $5::varchar, $6::double precision, $7::double precision, $8::double precision,
-               $9::double precision, $10::double precision, $11::timestamptz, $12::text,
-               $13::uuid, $14::integer, $15::integer, $16::integer
+               COALESCE($1::uuid, gen_random_uuid()), $2::text, $3::report_route,
+               'AWAITING_EXISTENCE', $4::varchar, $5::varchar, $6::varchar,
+               $7::double precision, $8::double precision, $9::double precision,
+               $10::double precision, $11::double precision, $12::timestamptz, $13::text,
+               $14::uuid, $15::integer, $16::integer, $17::integer
              ) RETURNING id`,
-            [actorId, assessment.data.route, input.description, assessment.data.description,
+            [deterministicReportId, actorId, assessment.data.route, input.description, assessment.data.description,
               storedContext.data.comment, storedContext.data.pin.lat, storedContext.data.pin.lng,
               storedContext.data.measuredLocation.lat, storedContext.data.measuredLocation.lng,
               storedContext.data.measuredLocation.accuracyM, storedContext.data.measuredLocation.observedAt,
