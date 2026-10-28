@@ -11,7 +11,6 @@ test('switches to German, persists the choice and keeps the selected tab', async
   await expect(page.locator('.deferred-card h1')).toHaveText('Dein Einfluss');
   await expect(page).toHaveURL(/\/impact$/);
 
-  await page.reload();
   await page.evaluate(() => localStorage.setItem('iskra.locale', 'de'));
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
