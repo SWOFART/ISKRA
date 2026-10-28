@@ -91,6 +91,7 @@ const mediaUrl = string(1, 2048).refine((v) => {
 export const PhotoSchema = object({
   id: UuidSchema, ordinal: number(1, 5, true), mediaUrl, expiresAt: TimestampSchema,
 });
+export type Photo = Infer<typeof PhotoSchema>;
 const gallery = (min: number) => array(PhotoSchema, min, 5).refine(
   (v) => new Set(v.map((p) => p.id)).size === v.length
     && v.every((p, i) => p.ordinal === i + 1), 'Photos must be unique and ordered from ordinal 1');
@@ -149,6 +150,23 @@ export const ViewerReportDetailSchema = object({ ...detailFields, viewer: Viewer
   'Permission requires an open operation');
 export const ReportDetailSchema = union(PublicReportDetailSchema, ViewerReportDetailSchema);
 export const ReportListSchema = object({ items: array(ReportSummarySchema, 0, 100), nextCursor: nullable(string(1, 512)) });
+export const ReportListQuerySchema = object({
+  cityId: string(1, 64).refine((v) => v === 'heilbronn', 'Unsupported city'),
+  bbox: nullable(string(1, 64).refine((v) => {
+    const coordinates = v.split(',');
+    if (coordinates.length !== 4 || coordinates.some((part) => !/^-?\d+(?:\.\d+)?$/.test(part))) return false;
+    const [west, south, east, north] = coordinates.map(Number);
+    return Number.isFinite(west) && Number.isFinite(south) && Number.isFinite(east) && Number.isFinite(north)
+      && west >= -180 && east <= 180 && west < east
+      && south >= -90 && north <= 90 && south < north;
+  }, 'Invalid bounding box')),
+  routes: nullable(array(RouteSchema, 1, 3).refine((v) => new Set(v).size === v.length, 'Duplicate routes')),
+  needsVerification: boolean,
+  resolved: boolean,
+  limit: number(1, 100, true),
+  cursor: nullable(string(1, 128)),
+});
+export type ReportListQuery = Infer<typeof ReportListQuerySchema>;
 
 export const RetakeReasonSchema = enumeration([
   'INSUFFICIENT_EVIDENCE', 'DIFFERENT_SCENE', 'LITTER_REMAINING', 'HAZARD_REMAINING',
@@ -181,10 +199,18 @@ export const ReportAnalysisRequestSchema = object({
   photoIds: PhotoIdsSchema, comment: string(0, 1000), measuredLocation: LocationSchema,
   pin: PointSchema, cityId: literal('heilbronn'), outputLocale: LocaleSchema,
 });
+/** Immutable non-photo input snapshot kept in ai_analyses.context; ordered IDs are in photo_ids. */
+export const ReportAnalysisContextSchema = object({
+  comment: string(0, 1000), measuredLocation: LocationSchema,
+  pin: PointSchema, cityId: literal('heilbronn'), outputLocale: LocaleSchema,
+});
 export const CleanupAnalysisRequestSchema = object({
   reportId: UuidSchema, photoIds: PhotoIdsSchema, location: LocationSchema, outputLocale: LocaleSchema,
 });
-export const PublishRequestSchema = object({ analysisId: UuidSchema, description: string(1, 1000) });
+export const PublishRequestSchema = object({
+  analysisId: UuidSchema,
+  description: string(1, 1000).refine((value) => value.trim().length > 0, 'Description must not be blank'),
+});
 export const VoteRequestSchema = object({ stage: StageSchema, choice: ChoiceSchema, location: LocationSchema });
 export const CleanupRequestSchema = object({ analysisId: UuidSchema });
 const uploadFields = { mimeType: literal('image/jpeg'), byteSize: number(1, POLICY.maxPhotoBytes, true), ordinal: number(1, 5, true) };
@@ -194,6 +220,7 @@ export const UploadRequestSchema = union(
 );
 export const UploadTicketSchema = object({ photoId: UuidSchema, uploadUrl: mediaUrl, expiresAt: TimestampSchema, maxBytes: literal(POLICY.maxPhotoBytes) });
 export const UploadResultSchema = object({ photoId: UuidSchema, state: literal('UPLOADED') });
+export const BootstrapRequestSchema = object({});
 export const BootstrapReceiptSchema = object({ user: PublicIdentitySchema, balance: BalanceSchema, balanceVersion: VersionSchema });
 const privateBalance = { balance: BalanceSchema, balanceVersion: VersionSchema };
 export const PublicationReceiptSchema = object({ report: ViewerReportDetailSchema, rpAwarded: union(literal(0), literal(5)), ...privateBalance })
