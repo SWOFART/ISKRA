@@ -10,6 +10,7 @@ class TestElement {
   readonly attributes = new Map<string, string>();
   readonly listeners = new Map<string, TestListener[]>();
   className = '';
+  disabled = false;
   id = '';
   hidden = false;
   href = '';
@@ -52,6 +53,7 @@ class TestElement {
   }
 
   dispatch(name: string, event: Record<string, unknown> = {}): void {
+    if (name === 'click' && this.disabled) return;
     for (const listener of this.listeners.get(name) ?? []) listener(event);
   }
 
@@ -140,6 +142,7 @@ function selectedTab(root: TestElement): TestElement | undefined {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -180,6 +183,49 @@ describe('client shell', () => {
 
     expect(fixtureResolver).toHaveBeenCalledTimes(2);
     expect(retryButton?.hidden).toBe(true);
+  });
+
+  it('honors Retry-After before enabling a user-triggered retry after 429', async () => {
+    vi.useFakeTimers();
+    const responses = [
+      new Response(JSON.stringify({
+        error: {
+          code: 'RATE_LIMITED',
+          message: 'Rate limit reached.',
+          requestId: '11111111-1111-4111-8111-111111111111',
+          retryable: true,
+        },
+      }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '2' },
+      }),
+      new Response(JSON.stringify({ items: [], nextCursor: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ];
+    const fetcher = vi.fn(async () => responses.shift()!);
+    const { root } = createHarness('/map', createClientApi({ mode: 'live', fetcher }));
+    const mapStatus = root.querySelector('.map-status');
+    const retryButton = root.querySelector('.retry-button');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retryButton?.hidden).toBe(false);
+    expect(retryButton?.disabled).toBe(true);
+    expect(mapStatus?.textContent).toContain('Please wait before retrying.');
+
+    retryButton?.dispatch('click');
+    expect(fetcher).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(retryButton?.disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(retryButton?.disabled).toBe(false);
+
+    retryButton?.dispatch('click');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(mapStatus?.textContent).toContain('No reports are available yet.');
   });
 
   it('does not offer retry for non-retryable fixture errors', async () => {

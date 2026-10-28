@@ -64,6 +64,7 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
   const retryButton = makeButton('Retry', 'retry-button');
   retryButton.setAttribute('aria-label', 'Retry loading reports');
   retryButton.hidden = true;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   appendElements(mapStatus,
     makeElement('span', 'status-dot'),
     mapStatusText,
@@ -83,7 +84,38 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
   mapNotice.hidden = true;
   mapNotice.setAttribute('role', 'status');
 
+  function clearRetryTimer(): void {
+    if (retryTimer !== undefined) clearTimeout(retryTimer);
+    retryTimer = undefined;
+  }
+
+  function deferRetry(error: ApiClientError): void {
+    let remainingMs = error.retryAfterMs ?? 0;
+    if (remainingMs <= 0) return;
+
+    retryButton.disabled = true;
+    mapStatusText.textContent = `${error.message} Please wait before retrying.`;
+
+    const scheduleEnable = (): void => {
+      const delayMs = Math.min(remainingMs, 2_147_483_647);
+      retryTimer = setTimeout(() => {
+        remainingMs -= delayMs;
+        if (remainingMs > 0) {
+          scheduleEnable();
+          return;
+        }
+        retryTimer = undefined;
+        retryButton.disabled = false;
+        mapStatusText.textContent = error.message;
+      }, delayMs);
+    };
+
+    scheduleEnable();
+  }
+
   async function loadReports(): Promise<void> {
+    clearRetryTimer();
+    retryButton.disabled = false;
     retryButton.hidden = true;
     mapStatus.setAttribute('aria-busy', 'true');
     mapStatusText.textContent = 'Loading reports…';
@@ -105,13 +137,17 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
       mapStatusText.textContent = error instanceof ApiClientError
         ? error.message
         : 'Reports could not be loaded.';
-      retryButton.hidden = !(error instanceof ApiClientError && error.retryable);
+      const canRetry = error instanceof ApiClientError && error.retryable;
+      retryButton.hidden = !canRetry;
+      if (canRetry) deferRetry(error);
     } finally {
       mapStatus.setAttribute('aria-busy', 'false');
     }
   }
 
-  retryButton.addEventListener('click', () => { void loadReports(); });
+  retryButton.addEventListener('click', () => {
+    if (!retryButton.hidden && !retryButton.disabled) void loadReports();
+  });
   void loadReports();
 
   appendElements(page, mapCanvas, mapLabel, mapStatus, fixtureBanner, reportButton, mapNotice);
