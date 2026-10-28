@@ -551,7 +551,7 @@ describe('PostgreSQL report voting', () => {
       await installSchema(pool);
       const supportVoters = Array.from({ length: 5 }, (_, index) => `vote-support-${index + 4}`);
       const priorVoters = ['vote-support-1', 'vote-support-2', 'vote-support-3'];
-      await Promise.all([reportAuthor, reportCleaner, 'vote-after-support', ...priorVoters, ...supportVoters]
+      await Promise.all([reportAuthor, reportCleaner, 'vote-after-support', 'vote-support-nine-no', ...priorVoters, ...supportVoters]
         .map((id) => createUser(pool, id)));
       const report = await createReport(pool, {
         status: 'AWAITING_RESOLUTION', existenceYesCount: 3, resolutionYesCount: 0, cleaner: reportCleaner,
@@ -619,12 +619,25 @@ describe('PostgreSQL report voting', () => {
         },
       });
 
+      const afterEighthYes = await pool.query<{ last_existence_confirmed_at: Date }>(
+        'SELECT last_existence_confirmed_at FROM reports WHERE id = $1::uuid', [report.id],
+      );
+      nowValue += 1_000;
+      const noKey = crypto.randomUUID();
+      const noFix = location(nowValue);
+      const noResponse = await sendVote(app, 'vote-support-nine-no', report.id, 'EXISTENCE', 'NO', noKey, noFix);
+      expect(noResponse.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await noResponse.json())).toMatchObject({
+        replayed: false, rpAwarded: 5, balance: 5, balanceVersion: 1,
+        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 8, resolutionYesCount: 0, version: 6 },
+      });
+
       nowValue += 61_000;
       const fourthReplay = await sendVote(app, supportVoters[0], report.id, 'EXISTENCE', 'YES', fourthKey, fourthFix);
       expect(fourthReplay.status).toBe(200);
       expect(VoteReceiptSchema.parse(await fourthReplay.json())).toMatchObject({
         replayed: true, rpAwarded: 0, balance: 5, balanceVersion: 1,
-        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 8, version: 5 },
+        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 8, version: 6 },
       });
       const eighthSemanticReplay = await sendVote(
         app, supportVoters[4], report.id, 'EXISTENCE', 'YES', crypto.randomUUID(), eighthFix,
@@ -632,7 +645,13 @@ describe('PostgreSQL report voting', () => {
       expect(eighthSemanticReplay.status).toBe(200);
       expect(VoteReceiptSchema.parse(await eighthSemanticReplay.json())).toMatchObject({
         replayed: true, rpAwarded: 0, balance: 5, balanceVersion: 1,
-        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 8, version: 5 },
+        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 8, version: 6 },
+      });
+      const noReplay = await sendVote(app, 'vote-support-nine-no', report.id, 'EXISTENCE', 'NO', noKey, noFix);
+      expect(noReplay.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await noReplay.json())).toMatchObject({
+        replayed: true, rpAwarded: 0, balance: 5, balanceVersion: 1,
+        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 8, version: 6 },
       });
 
       const state = await pool.query<{
@@ -656,10 +675,12 @@ describe('PostgreSQL report voting', () => {
         status: 'AWAITING_RESOLUTION', existence_yes_count: 8, resolution_yes_count: 0, version: 5,
         last_existence_confirmed_at: expect.any(Date), cleanup_status: 'AWAITING_VERIFICATION',
         existence_notifications: 1, resolution_notifications: 0,
-        voter_balance: 5, voter_version: 1, vote_rows: 8, vote_credits: 8,
+        voter_balance: 5, voter_version: 1, vote_rows: 9, vote_credits: 9,
       });
       expect(state.rows[0].last_existence_confirmed_at.getTime())
         .toBeGreaterThan(before.rows[0].last_existence_confirmed_at.getTime());
+      expect(state.rows[0].last_existence_confirmed_at.getTime())
+        .toBe(afterEighthYes.rows[0].last_existence_confirmed_at.getTime());
     }));
 
   it('keeps existence support open in VERIFIED without repeating verification effects', () =>
