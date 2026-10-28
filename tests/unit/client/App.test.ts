@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/client/App';
+import { createClientApi, DEVELOPMENT_FIXTURE_LABEL, type FixtureResponse } from '../../../src/client/api';
 import { clientDesign } from '../../../src/client/designTokens';
 
 type TestListener = (event: Record<string, unknown>) => void;
@@ -84,7 +85,13 @@ class TestElement {
 
 let focusedElement: TestElement | null = null;
 
-function createHarness(pathname = '/map') {
+function createHarness(
+  pathname = '/map',
+  api = createClientApi({
+    mode: 'fixture',
+    fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
+  }),
+) {
   focusedElement = null;
   const location = { pathname };
   const windowListeners = new Map<string, ((event: unknown) => void)[]>();
@@ -117,7 +124,7 @@ function createHarness(pathname = '/map') {
   vi.stubGlobal('navigator', fakeNavigator);
 
   return {
-    root: App() as unknown as TestElement,
+    root: App(api) as unknown as TestElement,
     location,
     accessAttempts,
     dispatchWindowEvent(name: string) {
@@ -137,6 +144,68 @@ afterEach(() => {
 });
 
 describe('client shell', () => {
+  it('loads shared fixtures through the app and visibly labels sample data', async () => {
+    const { root } = createHarness('/map', createClientApi({ mode: 'fixture' }));
+
+    await vi.waitFor(() => expect(root.querySelector('.fixture-banner')?.hidden).toBe(false));
+
+    expect(root.querySelector('.fixture-banner')?.textContent).toBe(DEVELOPMENT_FIXTURE_LABEL);
+    expect(root.querySelector('.map-status')?.textContent).toContain('1 sample report loaded.');
+  });
+
+  it('offers a user-triggered retry after retryable fixture errors', async () => {
+    const responses: FixtureResponse[] = [
+      {
+        status: 429,
+        body: {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Wait before trying again.',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            retryable: true,
+          },
+        },
+      },
+      { status: 200, body: { items: [], nextCursor: null } },
+    ];
+    const fixtureResolver = vi.fn(() => responses.shift()!);
+    const { root } = createHarness('/map', createClientApi({ mode: 'fixture', fixtureResolver }));
+    const mapStatus = root.querySelector('.map-status');
+    const retryButton = root.querySelector('.retry-button');
+
+    await vi.waitFor(() => expect(retryButton?.hidden).toBe(false));
+    expect(mapStatus?.textContent).toContain('Wait before trying again.');
+    retryButton?.dispatch('click');
+    await vi.waitFor(() => expect(mapStatus?.textContent).toContain('No sample reports are available yet.'));
+
+    expect(fixtureResolver).toHaveBeenCalledTimes(2);
+    expect(retryButton?.hidden).toBe(true);
+  });
+
+  it('does not offer retry for non-retryable fixture errors', async () => {
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: () => ({
+        status: 400,
+        body: {
+          error: {
+            code: 'INVALID_INPUT',
+            message: 'Correct the request before continuing.',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            retryable: false,
+          },
+        },
+      }),
+    });
+    const { root } = createHarness('/map', api);
+    const mapStatus = root.querySelector('.map-status');
+    const retryButton = root.querySelector('.retry-button');
+
+    await vi.waitFor(() => expect(mapStatus?.textContent).toContain('Correct the request before continuing.'));
+
+    expect(retryButton?.hidden).toBe(true);
+  });
+
   it('shows exactly three tabs and a Heilbronn map without accessing location or camera APIs', () => {
     const { root, accessAttempts } = createHarness();
 

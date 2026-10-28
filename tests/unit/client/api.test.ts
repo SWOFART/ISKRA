@@ -220,6 +220,18 @@ describe('client API transport', () => {
     expect(fixtureResolver).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects policy-inconsistent fixture error envelopes through the shared validator', async () => {
+    const fixtureResolver = vi.fn(() => ({
+      status: 503,
+      body: { error: { code: 'UNAVAILABLE', message: 'Try again.', requestId, retryable: false } },
+    }));
+    const api = createClientApi({ mode: 'fixture', fixtureResolver });
+
+    await expect(api.request({ path: '/reports', responseSchema: ReportListSchema }))
+      .rejects.toMatchObject({ code: 'INVALID_RESPONSE', retryable: false, status: 503 });
+    expect(fixtureResolver).toHaveBeenCalledTimes(1);
+  });
+
   it('never falls back from live API failures to fixture data', async () => {
     const fixtureResolver = vi.fn(() => ({ status: 200, body: { items: [], nextCursor: null } }));
     const fetcher = vi.fn(async () => { throw new Error('private network details'); });
