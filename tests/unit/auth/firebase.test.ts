@@ -76,6 +76,20 @@ describe('bounded Google key resolution', () => {
     await Promise.all(Array.from({ length: 5 }, () => verifyFirebaseToken(token, project, keys)));
     await verifyFirebaseToken(token, project, keys);
     expect(fetchKeys).toHaveBeenCalledTimes(1);
+    expect(fetchKeys).toHaveBeenCalledWith(
+      'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com',
+      expect.objectContaining({ redirect: 'manual' }),
+    );
+  });
+
+  it('rejects a signing-key redirect without following another origin', async () => {
+    const fetchKeys = vi.fn(async () => new Response(null, {
+      status: 302, headers: { Location: 'https://untrusted.example.test/keys' },
+    }));
+    const keys = createFirebaseKeyResolver(fetchKeys);
+    await expect(verifyFirebaseToken(await sign(), project, keys)).rejects.toThrow('Signing keys unavailable');
+    expect(fetchKeys).toHaveBeenCalledOnce();
+    expect(fetchKeys).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ redirect: 'manual' }));
   });
 
   it('allows one unknown-key refresh after cooldown, not one fetch per attacker key', async () => {

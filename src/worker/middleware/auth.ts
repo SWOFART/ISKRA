@@ -23,8 +23,9 @@ export function createFirebaseKeyResolver(fetchKeys: typeof fetch = fetch): JWTV
     }
     lastRefresh = Date.now();
     pending = (async () => {
+      // Workers lacks redirect:'error'; non-2xx responses below still fail closed.
       const response = await fetchKeys(KEY_URL, {
-        signal: AbortSignal.timeout(5_000), redirect: 'error',
+        signal: AbortSignal.timeout(5_000), redirect: 'manual',
       });
       if (!response.ok) throw new Error('Signing keys unavailable');
       const reader = response.body?.getReader();
