@@ -30,6 +30,45 @@ type UploadState = { ticket?: UploadTicket; photoId?: string };
 
 const analysisPollIntervalMs = 750;
 const analysisWaitLimitMs = 90_000;
+const maximumRetryTimerMs = 2_147_483_647;
+
+let reportRetryAvailableAt = 0;
+let reportRetryTimer: ReturnType<typeof setTimeout> | undefined;
+const reportRetryListeners = new Set<() => void>();
+
+function isReportRetryBlocked(): boolean {
+  return reportRetryAvailableAt > Date.now();
+}
+
+function notifyReportRetryListeners(): void {
+  reportRetryListeners.forEach((listener) => listener());
+}
+
+function scheduleReportRetryExpiry(): void {
+  const remainingMs = reportRetryAvailableAt - Date.now();
+  if (remainingMs > 0) {
+    reportRetryTimer = setTimeout(scheduleReportRetryExpiry, Math.min(remainingMs, maximumRetryTimerMs));
+    return;
+  }
+  reportRetryTimer = undefined;
+  reportRetryAvailableAt = 0;
+  notifyReportRetryListeners();
+}
+
+function deferReportRetry(delayMs: number): void {
+  reportRetryAvailableAt = Math.max(reportRetryAvailableAt, Date.now() + delayMs);
+  if (reportRetryTimer !== undefined) clearTimeout(reportRetryTimer);
+  notifyReportRetryListeners();
+  reportRetryTimer = setTimeout(
+    scheduleReportRetryExpiry,
+    Math.min(reportRetryAvailableAt - Date.now(), maximumRetryTimerMs),
+  );
+}
+
+function subscribeToReportRetry(listener: () => void): () => void {
+  reportRetryListeners.add(listener);
+  return () => reportRetryListeners.delete(listener);
+}
 
 export interface ReportSubmissionOptions {
   api: ClientApi;
@@ -142,44 +181,34 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   let disposed = false;
   let retryAction: 'analysis' | 'status' | 'publication' | null = null;
   let failureStep: 'upload' | 'analysis' | null = null;
-  let retryAvailableAt = 0;
-  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryFailureMessage: { text: string | null; flowGeneration: number } | null = null;
   const analysisOperation = createOperationKeyScope();
   const publishOperation = createOperationKeyScope();
 
   function retryIsBlocked(): boolean {
-    return retryAvailableAt > Date.now();
-  }
-
-  function clearRetryDelay(): void {
-    if (retryTimer !== undefined) clearTimeout(retryTimer);
-    retryTimer = undefined;
-    retryAvailableAt = 0;
+    return isReportRetryBlocked();
   }
 
   function deferRetry(error: unknown): void {
     const delayMs = error instanceof ApiClientError && error.retryable ? error.retryAfterMs : undefined;
     if (!delayMs || delayMs <= 0) return;
-    clearRetryDelay();
-    retryAvailableAt = Date.now() + delayMs;
-    const waitingFlowGeneration = flowGeneration;
-    const failureMessage = analysisStatus.textContent;
-    analysisStatus.textContent = t('capture.retryWait');
-    const enableRetry = () => {
-      const remainingMs = retryAvailableAt - Date.now();
-      if (remainingMs > 0) {
-        retryTimer = setTimeout(enableRetry, Math.min(remainingMs, 2_147_483_647));
-        return;
-      }
-      retryTimer = undefined;
-      retryAvailableAt = 0;
-      if (!disposed && !root.hidden) {
-        analysisStatus.textContent = flowGeneration === waitingFlowGeneration ? failureMessage : '';
-        updateActions();
-      }
-    };
-    retryTimer = setTimeout(enableRetry, Math.min(delayMs, 2_147_483_647));
+    retryFailureMessage = { text: analysisStatus.textContent, flowGeneration };
+    deferReportRetry(delayMs);
+  }
+
+  function syncRetryState(): void {
     updateActions();
+    if (root.hidden) return;
+    if (retryIsBlocked()) {
+      analysisStatus.textContent = t('capture.retryWait');
+      return;
+    }
+    if (analysisStatus.textContent === t('capture.retryWait')) {
+      analysisStatus.textContent = retryFailureMessage?.flowGeneration === flowGeneration
+        ? retryFailureMessage.text
+        : '';
+    }
+    retryFailureMessage = null;
   }
 
   function setLocationMessage(key: MessageKey, values?: MessageValues): void {
@@ -261,7 +290,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
     });
     root.hidden = false;
     options.onVisibilityChange(true);
-    if (retryIsBlocked()) analysisStatus.textContent = t('capture.retryWait');
+    syncRetryState();
     editPhotosButton.focus();
   }
 
@@ -453,7 +482,10 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
       }
       displayAssessment(result);
     } catch (error) {
-      if (generation !== flowGeneration || disposed || root.hidden) return;
+      if (generation !== flowGeneration || disposed || root.hidden) {
+        deferRetry(error);
+        return;
+      }
       const code = errorCode(error);
       if (code && code !== 'INVALID_RESPONSE' && isLocationRecoveryError(code)) {
         locationBinding = null;
@@ -491,7 +523,10 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
         acceptedStatuses: [200, 201],
       });
     } catch (error) {
-      if (generation !== flowGeneration || disposed || root.hidden) return;
+      if (generation !== flowGeneration || disposed || root.hidden) {
+        deferRetry(error);
+        return;
+      }
       const code = errorCode(error);
       if (error instanceof ApiClientError && !error.retryable) publishOperation.complete();
       retryAction = error instanceof ApiClientError && error.retryable ? 'publication' : null;
@@ -550,6 +585,8 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
     }
   });
 
+  const unsubscribeRetryState = subscribeToReportRetry(syncRetryState);
+
   function appendElements(parent: HTMLElement, ...elements: HTMLElement[]): void {
     elements.forEach((element) => parent.appendChild(element));
   }
@@ -561,7 +598,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
       if (disposed) return;
       disposed = true;
       close();
-      clearRetryDelay();
+      unsubscribeRetryState();
       photoList.replaceChildren();
     },
   };
