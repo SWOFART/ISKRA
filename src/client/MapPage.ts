@@ -3,7 +3,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { ApiClientError, createClientApi } from './api';
 import { clientDesign, type SupportedLocale } from './designTokens';
-import { errorMessageKey, type MessageKey, type MessageValues } from './i18n';
+import { errorMessageKey, formatDateTime, formatNumber, type MessageKey, type MessageValues } from './i18n';
 import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from './mapModel';
 import { renderPhotoCapture, type CapturedPhoto, type CaptureStage } from './PhotoCapture';
 import { renderReportSheet } from './ReportSheet';
@@ -123,10 +123,7 @@ function progressLabels(report: ReportSummary, t: Translate, locale: SupportedLo
   });
   const latest = report.lastExistenceConfirmedAt
     ? t('map.progress.latest', {
-      date: new Intl.DateTimeFormat(locale === 'de' ? 'de-DE' : 'en-GB', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      }).format(new Date(report.lastExistenceConfirmedAt)),
+      date: formatDateTime(locale, report.lastExistenceConfirmedAt),
     })
     : '';
 
@@ -608,7 +605,7 @@ export function renderMapPage(
         ? `map-marker--${clusterRoutes[0].toLowerCase()}`
         : 'map-marker--mixed';
       const marker = makeButton(
-        cluster.reports.length > 1 ? String(cluster.reports.length) : '•',
+        cluster.reports.length > 1 ? formatNumber(locale, cluster.reports.length) : '•',
         `map-marker ${cluster.reports.length > 1 ? 'map-marker--cluster' : ''} ${mixedRouteClass}`,
       );
       const marginX = (19 / mapWidth) * 100;

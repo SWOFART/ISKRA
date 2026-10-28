@@ -364,6 +364,17 @@ export function localeFromBrowserLanguages(languages: readonly string[]): Suppor
   return 'en';
 }
 
+export function formatNumber(locale: SupportedLocale, value: number): string {
+  return new Intl.NumberFormat(locale === 'de' ? 'de-DE' : 'en-GB').format(value);
+}
+
+export function formatDateTime(locale: SupportedLocale, value: string | number | Date): string {
+  return new Intl.DateTimeFormat(locale === 'de' ? 'de-DE' : 'en-GB', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
+
 export function readStoredLocale(): SupportedLocale | null {
   try {
     const value = window.localStorage?.getItem(LOCALE_STORAGE_KEY);
@@ -382,7 +393,10 @@ export function storeLocale(locale: SupportedLocale): void {
 }
 
 export function translate(locale: SupportedLocale, key: MessageKey, values: MessageValues = {}): string {
-  return catalogs[locale][key].replace(/\{(\w+)\}/g, (_match, name: string) => String(values[name] ?? ''));
+  return catalogs[locale][key].replace(/\{(\w+)\}/g, (_match, name: string) => {
+    const value = values[name] ?? '';
+    return typeof value === 'number' ? formatNumber(locale, value) : value;
+  });
 }
 
 export function errorMessageKey(code: string): MessageKey {
