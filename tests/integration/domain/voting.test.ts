@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { ViewerReportDetailSchema, VoteReceiptSchema } from '../../../src/shared/contracts';
 import { distanceM } from '../../../src/shared/location';
 import { PostgresTransactionDatabase } from '../../../src/worker/db/client';
+import type { CheckedOutClient, TransactionDatabase } from '../../../src/worker/db/client';
 import { ApiError } from '../../../src/worker/middleware/errors';
 import type { WorkerEnv } from '../../../src/worker/middleware/context';
 import { handleError } from '../../../src/worker/middleware/errors';
@@ -113,11 +114,15 @@ function mediaResolver(): ReportMediaResolver {
   };
 }
 
-function createApp(pool: Pool, now: () => number) {
+function createApp(
+  pool: Pool,
+  now: () => number,
+  database: TransactionDatabase = new PostgresTransactionDatabase(pool),
+) {
   const app = new Hono<WorkerEnv>();
   app.use('*', apiSecurity);
   app.route('/api', createDomainRoutes({
-    database: new PostgresTransactionDatabase(pool),
+    database,
     reportMedia: mediaResolver(),
     verify: async (token) => ({ uid: token }),
     now,
@@ -159,6 +164,42 @@ async function seedReportAward(pool: Pool, userId: string, reportId: string) {
     [userId, 'report-initial:' + reportId, reportId],
   );
   await pool.query('UPDATE users SET rp_balance = rp_balance + 5, version = version + 1 WHERE id = $1::text', [userId]);
+}
+
+async function seedAcceptedVote(
+  pool: Pool, reportId: string, userId: string, stage: 'EXISTENCE' | 'RESOLUTION', choice: 'YES' | 'NO' = 'YES',
+) {
+  const vote = await pool.query<{ id: string }>(
+    'INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m) '
+      + 'VALUES ($1::uuid, $2::vote_stage, $3::text, $4::vote_choice, 10, 10) RETURNING id',
+    [reportId, stage, userId, choice],
+  );
+  await pool.query(
+    "INSERT INTO reward_ledger (user_id, kind, delta, source_ref, report_id, vote_id) VALUES ($1::text, 'VOTE', 5, $2::varchar, $3::uuid, $4::uuid)",
+    [userId, 'vote:' + vote.rows[0].id, reportId, vote.rows[0].id],
+  );
+  await pool.query('UPDATE users SET rp_balance = rp_balance + 5, version = version + 1 WHERE id = $1::text', [userId]);
+  return vote.rows[0].id;
+}
+
+function failAfterReportUpdate(database: TransactionDatabase): TransactionDatabase {
+  let injected = false;
+  return {
+    withTransaction<T>(work: (client: CheckedOutClient) => Promise<T>) {
+      return database.withTransaction((client) => work({
+        async query<Row extends Record<string, unknown> = Record<string, unknown>>(
+          text: string, parameters?: readonly unknown[],
+        ) {
+          const result = await client.query<Row>(text, parameters);
+          if (!injected && /^\s*UPDATE reports SET/i.test(text)) {
+            injected = true;
+            throw new ApiError(503, 'UNAVAILABLE', 'Injected pre-commit test fault.', true);
+          }
+          return result;
+        },
+      }));
+    },
+  };
 }
 
 describe('PostgreSQL report voting', () => {
@@ -507,28 +548,30 @@ describe('PostgreSQL report voting', () => {
       });
       await seedReportAward(pool, reportAuthor, resolutionReport.id);
       for (const actor of ['vote-race-three', 'vote-race-four']) {
-        const vote = await pool.query<{ id: string }>(
-          "INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m) VALUES ($1::uuid, 'RESOLUTION', $2::text, 'YES', 10, 10) RETURNING id",
-          [resolutionReport.id, actor],
-        );
-        await pool.query(
-          "INSERT INTO reward_ledger (user_id, kind, delta, source_ref, report_id, vote_id) VALUES ($1::text, 'VOTE', 5, $2::varchar, $3::uuid, $4::uuid)",
-          [actor, 'vote:' + vote.rows[0].id, resolutionReport.id, vote.rows[0].id],
-        );
-        await pool.query('UPDATE users SET rp_balance = rp_balance + 5 WHERE id = $1::text', [actor]);
+        await seedAcceptedVote(pool, existenceReport.id, actor, 'EXISTENCE');
+        await seedAcceptedVote(pool, resolutionReport.id, actor, 'RESOLUTION');
       }
       let nowValue = Date.now();
       const app = createApp(pool, () => nowValue);
       const existenceResponses = await Promise.all(['vote-race-one', 'vote-race-two'].map((actor) =>
         sendVote(app, actor, existenceReport.id, 'EXISTENCE', 'YES', crypto.randomUUID(), location(nowValue))));
       expect(existenceResponses.map((response) => response.status)).toEqual([200, 200]);
-      const existenceState = await pool.query<{ status: string; yes: number; notifications: number }>(
-        'SELECT status, existence_yes_count AS yes, '
+      const existenceState = await pool.query<{
+        status: string; yes: number; version: number; notifications: number; votes: number; credits: number; newVoterCredits: number; newVoterBalance: number;
+      }>(
+        'SELECT status, existence_yes_count AS yes, version, '
           + "(SELECT count(*)::int FROM notifications WHERE report_id = reports.id AND kind = 'EXISTENCE_VERIFIED') AS notifications "
+          + ', (SELECT count(*)::int FROM votes WHERE report_id = reports.id AND stage = \'EXISTENCE\') AS votes '
+          + ', (SELECT count(*)::int FROM reward_ledger WHERE report_id = reports.id AND kind = \'VOTE\') AS credits '
+          + ', (SELECT count(*)::int FROM reward_ledger WHERE report_id = reports.id AND user_id = ANY(ARRAY[\'vote-race-one\', \'vote-race-two\']::text[]) AND kind = \'VOTE\') AS "newVoterCredits" '
+          + ', (SELECT sum(rp_balance)::int FROM users WHERE id = ANY(ARRAY[\'vote-race-one\', \'vote-race-two\']::text[])) AS "newVoterBalance" '
           + 'FROM reports WHERE id = $1::uuid',
         [existenceReport.id],
       );
-      expect(existenceState.rows[0]).toEqual({ status: 'VERIFIED', yes: 4, notifications: 1 });
+      expect(existenceState.rows[0]).toEqual({
+        status: 'VERIFIED', yes: 4, version: 2, notifications: 1, votes: 4, credits: 4,
+        newVoterCredits: 2, newVoterBalance: 10,
+      });
 
       nowValue += 1_000;
       const resolutionResponses = await Promise.all(['vote-race-one', 'vote-race-two'].map((actor) =>
@@ -536,14 +579,274 @@ describe('PostgreSQL report voting', () => {
       expect(resolutionResponses.map((response) => response.status).sort()).toEqual([200, 409]);
       const closedResponse = resolutionResponses.find((response) => response.status === 409);
       expect(await closedResponse?.json()).toMatchObject({ error: { code: 'STAGE_CLOSED' } });
-      const resolutionState = await pool.query<{ status: string; yes: number; finalCredits: number; notifications: number }>(
+      const resolutionState = await pool.query<{
+        status: string; yes: number; version: number; finalCredits: number; notifications: number;
+        votes: number; credits: number; newVoterCredits: number; newVoterBalance: number;
+      }>(
         'SELECT status, resolution_yes_count AS yes, '
+          + 'version, '
           + "(SELECT count(*)::int FROM reward_ledger WHERE report_id = reports.id AND kind IN ('REPORT_FINAL', 'CLEANUP')) AS \"finalCredits\", "
           + "(SELECT count(*)::int FROM notifications WHERE report_id = reports.id AND kind = 'REPORT_RESOLVED') AS notifications "
+          + ', (SELECT count(*)::int FROM votes WHERE report_id = reports.id AND stage = \'RESOLUTION\') AS votes '
+          + ', (SELECT count(*)::int FROM reward_ledger WHERE report_id = reports.id AND kind = \'VOTE\') AS credits '
+          + ', (SELECT count(*)::int FROM reward_ledger WHERE report_id = reports.id AND user_id = ANY(ARRAY[\'vote-race-one\', \'vote-race-two\']::text[]) AND kind = \'VOTE\') AS "newVoterCredits" '
+          + ', (SELECT sum(rp_balance)::int FROM users WHERE id = ANY(ARRAY[\'vote-race-one\', \'vote-race-two\']::text[])) AS "newVoterBalance" '
           + 'FROM reports WHERE id = $1::uuid',
         [resolutionReport.id],
       );
-      expect(resolutionState.rows[0]).toEqual({ status: 'RESOLVED', yes: 3, finalCredits: 2, notifications: 1 });
+      expect(resolutionState.rows[0]).toEqual({
+        status: 'RESOLVED', yes: 3, version: 1, finalCredits: 2, notifications: 1,
+        votes: 3, credits: 3, newVoterCredits: 1, newVoterBalance: 15,
+      });
+    }));
+
+  it('serializes two YES votes from count one to the single existence threshold', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const priorVoter = 'vote-count-one-prior';
+      const newVoters = ['vote-count-one-new-a', 'vote-count-one-new-b'];
+      await Promise.all([reportAuthor, priorVoter, ...newVoters].map((id) => createUser(pool, id)));
+      const report = await createReport(pool, { existenceYesCount: 1 });
+      await seedReportAward(pool, reportAuthor, report.id);
+      await seedAcceptedVote(pool, report.id, priorVoter, 'EXISTENCE');
+      const nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+
+      const responses = await Promise.all(newVoters.map((actor) =>
+        sendVote(app, actor, report.id, 'EXISTENCE', 'YES', crypto.randomUUID(), location(nowValue))));
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+      for (const response of responses) {
+        expect(VoteReceiptSchema.parse(await response.json())).toMatchObject({ replayed: false, rpAwarded: 5 });
+      }
+
+      const state = await pool.query<{
+        status: string; yes: number; version: number; votes: number; credits: number;
+        notifications: number; newVoterCredits: number; newVoterBalance: number;
+      }>(
+        `SELECT status, existence_yes_count AS yes, version,
+           (SELECT count(*)::int FROM votes WHERE report_id = reports.id AND stage = 'EXISTENCE') AS votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = reports.id AND kind = 'VOTE') AS credits,
+           (SELECT count(*)::int FROM notifications WHERE report_id = reports.id AND kind = 'EXISTENCE_VERIFIED') AS notifications,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = reports.id AND user_id = ANY($2::text[]) AND kind = 'VOTE') AS "newVoterCredits",
+           (SELECT sum(rp_balance)::int FROM users WHERE id = ANY($2::text[])) AS "newVoterBalance"
+         FROM reports WHERE id = $1::uuid`,
+        [report.id, newVoters],
+      );
+      expect(state.rows[0]).toEqual({
+        status: 'VERIFIED', yes: 3, version: 2, votes: 3, credits: 3,
+        notifications: 1, newVoterCredits: 2, newVoterBalance: 10,
+      });
+    }));
+
+  it('serializes existence support against the final resolution vote without partial rewards', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const priorExistence = ['vote-support-race-existence-1', 'vote-support-race-existence-2', 'vote-support-race-existence-3'];
+      const priorResolution = ['vote-support-race-resolution-1', 'vote-support-race-resolution-2'];
+      const supportVoter = 'vote-support-race-new';
+      const finalVoter = 'vote-support-race-final';
+      await Promise.all([reportAuthor, reportCleaner, ...priorExistence, ...priorResolution, supportVoter, finalVoter]
+        .map((id) => createUser(pool, id)));
+      const report = await createReport(pool, {
+        status: 'AWAITING_RESOLUTION', existenceYesCount: 3, resolutionYesCount: 2,
+      });
+      await seedReportAward(pool, reportAuthor, report.id);
+      for (const actor of priorExistence) await seedAcceptedVote(pool, report.id, actor, 'EXISTENCE');
+      for (const actor of priorResolution) await seedAcceptedVote(pool, report.id, actor, 'RESOLUTION');
+      await pool.query(
+        "INSERT INTO notifications (user_id, report_id, kind, message) VALUES ($1::text, $2::uuid, 'EXISTENCE_VERIFIED', 'Residents confirmed your report.')",
+        [reportAuthor, report.id],
+      );
+      let nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+      const [support, resolution] = await Promise.all([
+        sendVote(app, supportVoter, report.id, 'EXISTENCE', 'YES', crypto.randomUUID(), location(nowValue)),
+        sendVote(app, finalVoter, report.id, 'RESOLUTION', 'YES', crypto.randomUUID(), location(nowValue)),
+      ]);
+
+      expect(resolution.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await resolution.json())).toMatchObject({
+        replayed: false, rpAwarded: 5, report: { status: 'RESOLVED', resolutionYesCount: 3 },
+      });
+      expect([200, 409]).toContain(support.status);
+      if (support.status === 200) {
+        expect(VoteReceiptSchema.parse(await support.json())).toMatchObject({
+          replayed: false, rpAwarded: 5, report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 4 },
+        });
+      } else {
+        expect(await support.json()).toMatchObject({ error: { code: 'STAGE_CLOSED' } });
+      }
+
+      const state = await pool.query<{
+        status: string; existence_yes_count: number; resolution_yes_count: number; version: number;
+        existence_votes: number; existence_credits: number; resolution_votes: number; resolution_credits: number;
+        reporter_balance: number; cleaner_balance: number; support_balance: number; final_voter_balance: number;
+        existence_notifications: number; resolution_notifications: number; cleanup_status: string;
+      }>(
+        `SELECT r.status, r.existence_yes_count, r.resolution_yes_count, r.version,
+           (SELECT count(*)::int FROM votes WHERE report_id = r.id AND stage = 'EXISTENCE') AS existence_votes,
+           (SELECT count(*)::int FROM reward_ledger l JOIN votes v ON v.id = l.vote_id WHERE l.report_id = r.id AND l.kind = 'VOTE' AND v.stage = 'EXISTENCE') AS existence_credits,
+           (SELECT count(*)::int FROM votes WHERE report_id = r.id AND stage = 'RESOLUTION') AS resolution_votes,
+           (SELECT count(*)::int FROM reward_ledger l JOIN votes v ON v.id = l.vote_id WHERE l.report_id = r.id AND l.kind = 'VOTE' AND v.stage = 'RESOLUTION') AS resolution_credits,
+           (SELECT rp_balance FROM users WHERE id = $2::text) AS reporter_balance,
+           (SELECT rp_balance FROM users WHERE id = $3::text) AS cleaner_balance,
+           (SELECT rp_balance FROM users WHERE id = $4::text) AS support_balance,
+           (SELECT rp_balance FROM users WHERE id = $5::text) AS final_voter_balance,
+           (SELECT count(*)::int FROM notifications WHERE report_id = r.id AND kind = 'EXISTENCE_VERIFIED') AS existence_notifications,
+           (SELECT count(*)::int FROM notifications WHERE report_id = r.id AND kind = 'REPORT_RESOLVED') AS resolution_notifications,
+           cleanup.status AS cleanup_status
+         FROM reports r JOIN cleanup_submissions cleanup ON cleanup.report_id = r.id WHERE r.id = $1::uuid`,
+        [report.id, reportAuthor, reportCleaner, supportVoter, finalVoter],
+      );
+      const supportAccepted = support.status === 200;
+      expect(state.rows[0]).toEqual({
+        status: 'RESOLVED', existence_yes_count: supportAccepted ? 4 : 3, resolution_yes_count: 3,
+        version: supportAccepted ? 2 : 1,
+        existence_votes: 3 + Number(supportAccepted), existence_credits: 3 + Number(supportAccepted),
+        resolution_votes: 3, resolution_credits: 3,
+        reporter_balance: 20, cleaner_balance: 40, support_balance: supportAccepted ? 5 : 0,
+        final_voter_balance: 5, existence_notifications: 1, resolution_notifications: 1, cleanup_status: 'VERIFIED',
+      });
+    }));
+
+  it('rolls back all vote effects on a pre-commit fault and accepts the same-key retry', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const actor = 'vote-precommit-fault';
+      await Promise.all([reportAuthor, actor].map((id) => createUser(pool, id)));
+      const report = await createReport(pool);
+      await seedReportAward(pool, reportAuthor, report.id);
+      const nowValue = Date.now();
+      const key = crypto.randomUUID();
+      const fix = location(nowValue);
+      const faultedApp = createApp(
+        pool, () => nowValue, failAfterReportUpdate(new PostgresTransactionDatabase(pool)),
+      );
+      const failed = await sendVote(faultedApp, actor, report.id, 'EXISTENCE', 'YES', key, fix);
+      expect(failed.status).toBe(503);
+      expect(await failed.json()).toMatchObject({ error: { code: 'UNAVAILABLE' } });
+
+      const rolledBack = await pool.query<{
+        status: string; yes: number; version: number; votes: number; credits: number;
+        balance: number; account_version: number; idempotency: number; notifications: number;
+      }>(
+        `SELECT r.status, r.existence_yes_count AS yes, r.version,
+           (SELECT count(*)::int FROM votes WHERE report_id = r.id) AS votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = r.id AND kind = 'VOTE') AS credits,
+           (SELECT rp_balance FROM users WHERE id = $2::text) AS balance,
+           (SELECT version FROM users WHERE id = $2::text) AS account_version,
+           (SELECT count(*)::int FROM idempotency_keys WHERE user_id = $2::text AND operation = 'REPORT_VOTE' AND key = $3::varchar) AS idempotency,
+           (SELECT count(*)::int FROM notifications WHERE report_id = r.id) AS notifications
+         FROM reports r WHERE r.id = $1::uuid`,
+        [report.id, actor, key],
+      );
+      expect(rolledBack.rows[0]).toEqual({
+        status: 'AWAITING_EXISTENCE', yes: 0, version: 0, votes: 0, credits: 0,
+        balance: 0, account_version: 0, idempotency: 0, notifications: 0,
+      });
+
+      const retry = await sendVote(createApp(pool, () => nowValue), actor, report.id, 'EXISTENCE', 'YES', key, fix);
+      expect(retry.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await retry.json())).toMatchObject({
+        replayed: false, rpAwarded: 5, balance: 5,
+        report: { status: 'AWAITING_EXISTENCE', existenceYesCount: 1, version: 1 },
+      });
+      const committed = await pool.query<{ votes: number; credits: number; balance: number; idempotency: number }>(
+        `SELECT (SELECT count(*)::int FROM votes WHERE report_id = $1::uuid) AS votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = $1::uuid AND kind = 'VOTE') AS credits,
+           (SELECT rp_balance FROM users WHERE id = $2::text) AS balance,
+           (SELECT count(*)::int FROM idempotency_keys WHERE user_id = $2::text AND operation = 'REPORT_VOTE' AND key = $3::varchar) AS idempotency`,
+        [report.id, actor, key],
+      );
+      expect(committed.rows[0]).toEqual({ votes: 1, credits: 1, balance: 5, idempotency: 1 });
+    }));
+
+  it('replays a committed vote when the client loses the first response', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const actor = 'vote-response-lost';
+      await Promise.all([reportAuthor, actor].map((id) => createUser(pool, id)));
+      const report = await createReport(pool);
+      await seedReportAward(pool, reportAuthor, report.id);
+      let nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+      const key = crypto.randomUUID();
+      const fix = location(nowValue);
+
+      // The handler commits before returning this response; canceling it simulates a client that never receives it.
+      const lostResponse = Promise.resolve(sendVote(app, actor, report.id, 'EXISTENCE', 'YES', key, fix)).then(async (response) => {
+        expect(response.status).toBe(200);
+        await response.body?.cancel();
+        throw new Error('simulated committed response drop');
+      });
+      await expect(lostResponse).rejects.toThrow('simulated committed response drop');
+
+      nowValue += 61_000;
+      const retry = await sendVote(app, actor, report.id, 'EXISTENCE', 'YES', key, fix);
+      expect(retry.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await retry.json())).toMatchObject({
+        replayed: true, rpAwarded: 0, balance: 5, balanceVersion: 1,
+        report: { status: 'AWAITING_EXISTENCE', existenceYesCount: 1, version: 1 },
+      });
+      const state = await pool.query<{ votes: number; credits: number; balance: number; idempotency: number }>(
+        `SELECT (SELECT count(*)::int FROM votes WHERE report_id = $1::uuid) AS votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = $1::uuid AND kind = 'VOTE') AS credits,
+           (SELECT rp_balance FROM users WHERE id = $2::text) AS balance,
+           (SELECT count(*)::int FROM idempotency_keys WHERE user_id = $2::text AND operation = 'REPORT_VOTE' AND key = $3::varchar) AS idempotency`,
+        [report.id, actor, key],
+      );
+      expect(state.rows[0]).toEqual({ votes: 1, credits: 1, balance: 5, idempotency: 1 });
+    }));
+
+  it('rolls back report, vote, balance and receipt writes when a vote ledger uniqueness constraint aborts', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const priorVoter = 'vote-ledger-collision-prior';
+      const actor = 'vote-ledger-collision-new';
+      await Promise.all([reportAuthor, priorVoter, actor].map((id) => createUser(pool, id)));
+      const report = await createReport(pool);
+      await seedReportAward(pool, reportAuthor, report.id);
+      const priorVoteId = await seedAcceptedVote(pool, report.id, priorVoter, 'EXISTENCE', 'NO');
+      const conflictingSource = 'vote:forced-ledger-collision';
+      await pool.query('UPDATE reward_ledger SET source_ref = $2::varchar WHERE vote_id = $1::uuid', [priorVoteId, conflictingSource]);
+      await pool.query(`
+        CREATE FUNCTION force_vote_ledger_source_collision() RETURNS trigger LANGUAGE plpgsql AS $function$
+        BEGIN
+          IF NEW.kind = 'VOTE'::ledger_kind THEN
+            NEW.source_ref := 'vote:forced-ledger-collision';
+          END IF;
+          RETURN NEW;
+        END;
+        $function$;
+        CREATE TRIGGER force_vote_ledger_source_collision
+          BEFORE INSERT ON reward_ledger FOR EACH ROW EXECUTE FUNCTION force_vote_ledger_source_collision();
+      `);
+
+      const key = crypto.randomUUID();
+      const response = await sendVote(
+        createApp(pool, () => Date.now()), actor, report.id, 'EXISTENCE', 'YES', key, location(Date.now()),
+      );
+      expect(response.status).toBe(500);
+
+      const state = await pool.query<{
+        status: string; yes: number; version: number; votes: number; credits: number;
+        actor_votes: number; actor_credits: number; actor_balance: number; actor_version: number; idempotency: number;
+      }>(
+        `SELECT r.status, r.existence_yes_count AS yes, r.version,
+           (SELECT count(*)::int FROM votes WHERE report_id = r.id) AS votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = r.id AND kind = 'VOTE') AS credits,
+           (SELECT count(*)::int FROM votes WHERE report_id = r.id AND voter_user_id = $2::text) AS actor_votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = r.id AND user_id = $2::text AND kind = 'VOTE') AS actor_credits,
+           (SELECT rp_balance FROM users WHERE id = $2::text) AS actor_balance,
+           (SELECT version FROM users WHERE id = $2::text) AS actor_version,
+           (SELECT count(*)::int FROM idempotency_keys WHERE user_id = $2::text AND operation = 'REPORT_VOTE' AND key = $3::varchar) AS idempotency
+         FROM reports r WHERE r.id = $1::uuid`,
+        [report.id, actor, key],
+      );
+      expect(state.rows[0]).toEqual({
+        status: 'AWAITING_EXISTENCE', yes: 0, version: 0, votes: 1, credits: 1,
+        actor_votes: 0, actor_credits: 0, actor_balance: 0, actor_version: 0, idempotency: 0,
+      });
     }));
 
   it('accepts fourth-through-eighth existence support without repeating threshold effects or cleanup transition', () =>
