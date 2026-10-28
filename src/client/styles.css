@@ -227,6 +227,13 @@ button {
 .map-marker--red { --marker-color: #8f2822; --marker-surface: #c54840; }
 .map-marker--mixed { --marker-color: #176b4d; --marker-surface: #176b4d; }
 .map-marker--cluster { width: 44px; height: 44px; border-radius: 50%; }
+.map-marker--highlighted { z-index: 3; outline: 4px solid #fff; outline-offset: 3px; box-shadow: 0 0 0 8px rgb(23 107 77 / 32%), 0 3px 9px rgb(22 53 43 / 26%); }
+@media (prefers-reduced-motion: no-preference) {
+  .map-marker--highlighted { animation: newly-published-marker 1.2s ease-in-out 3; }
+  @keyframes newly-published-marker {
+    50% { box-shadow: 0 0 0 13px rgb(23 107 77 / 16%), 0 3px 9px rgb(22 53 43 / 26%); }
+  }
+}
 .map-marker:focus-visible,
 .report-list-item:focus-visible,
 .map-filter-button:focus-visible,
@@ -645,6 +652,20 @@ button {
   line-height: 1.4;
   text-align: center;
   box-shadow: 0 6px 24px rgb(22 53 43 / 10%);
+}
+
+.report-fixture-banner {
+  position: relative;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid #765800;
+  border-radius: var(--client-radius-control);
+  background: #fff3c7;
+  color: #302400;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.4;
+  text-align: center;
 }
 
 @media (max-width: 380px) {
