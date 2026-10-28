@@ -110,9 +110,7 @@ export function createUploadRoutes({ database, verify }: {
     const reservation = await authorizeUpload(c.req.query('ticket'), uid, c.req.param('id'),
       new URL(c.req.url).origin, c.env.MEDIA_SIGNING_SECRET, database);
     await assertUploadRate(database, uid, uploadLimit);
-    if (!c.env.PHOTOS || reservation.request.purpose !== 'REPORT') {
-      throw new ApiError(503, 'UNAVAILABLE', 'Photo storage or cleanup target binding is not integrated yet.', true);
-    }
+    if (!c.env.PHOTOS) throw new ApiError(503, 'UNAVAILABLE', 'Photo storage is not integrated yet.', true);
     const input = await readBoundedBody(c.req.raw);
     if (input.byteLength !== reservation.request.byteSize) {
       throw new ApiError(400, 'INVALID_INPUT', 'Photo size does not match its upload ticket.');
@@ -136,6 +134,7 @@ export function createUploadRoutes({ database, verify }: {
     if (!stored) throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', 'This photo ID has already been used.');
     await finalizeReportPhoto(database, {
       ...reservation, byteSize: bytes.byteLength, sha256, ordinal: reservation.request.ordinal,
+      purpose: reservation.request.purpose,
     }, uploadLimit);
     return c.json(UploadResultSchema.parse({ photoId: reservation.photoId, state: 'UPLOADED' }), 201);
   });

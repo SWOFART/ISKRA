@@ -1,15 +1,15 @@
 import { Hono } from 'hono';
-import { ReportAnalysisRequestSchema, ReportAnalysisSchema, UuidSchema } from '../../shared/contracts';
+import { CleanupAnalysisRequestSchema, CleanupAnalysisSchema, ReportAnalysisRequestSchema, ReportAnalysisSchema, UuidSchema } from '../../shared/contracts';
 import type { TransactionDatabase } from '../db/client';
-import { beginReportAnalysis, evidenceQuota, finishReportAnalysis, readReportAnalysis, type AnalysisPhoto } from '../db/evidence-store';
+import { beginCleanupAnalysis, beginReportAnalysis, evidenceQuota, finishReportAnalysis, readReportAnalysis, type AnalysisPhoto } from '../db/evidence-store';
 import { requireAuth, verifyFirebaseToken } from '../middleware/auth';
 import type { WorkerEnv } from '../middleware/context';
 import { ApiError } from '../middleware/errors';
 import { parseJsonBody } from '../middleware/validation';
-import { analyzeReport, validateGeminiConfig } from '../services/gemini';
+import { analyzeCleanup, analyzeReport, validateGeminiConfig } from '../services/gemini';
 import { validateJpeg } from '../services/media';
 
-async function loadReportBytes(bucket: R2Bucket, photos: AnalysisPhoto[]) {
+async function loadReportBytes(bucket: R2Bucket, photos: readonly AnalysisPhoto[]) {
   const reads = Promise.all(photos.map(async (photo) => {
     const object = await bucket.get(photo.object_key);
     if (!object || object.size !== photo.byte_size) throw new Error('Unavailable photo');
@@ -65,10 +65,37 @@ export function createAnalysisRoutes({ database, verify, now = Date.now, fetcher
     const id = UuidSchema.safeParse(c.req.param('id'));
     if (!id.success || new URL(c.req.url).search) throw new ApiError(400, 'INVALID_INPUT', 'Invalid analysis lookup.');
     if (!database) throw new ApiError(503, 'UNAVAILABLE', 'Analysis storage is not configured.');
-    return c.json(ReportAnalysisSchema.parse(await readReportAnalysis(database, c.get('identity')!.uid, id.data, c.get('requestId'))));
+    const body = await readReportAnalysis(database, c.get('identity')!.uid, id.data, c.get('requestId'));
+    const report = ReportAnalysisSchema.safeParse(body);
+    return c.json(report.success ? report.data : CleanupAnalysisSchema.parse(body));
   });
-  routes.post('/ai/analyze-cleanup', requireAuth(verify), () => {
-    throw new ApiError(503, 'UNAVAILABLE', 'Cleanup analysis awaits durable upload target binding.');
+  routes.post('/ai/analyze-cleanup', requireAuth(verify), async (c) => {
+    const limit = evidenceQuota(c.env.AI_RATE_PER_MINUTE, 5);
+    if (limit === 0) throw new ApiError(503, 'UNAVAILABLE', 'Analysis is temporarily paused.', true);
+    const key = UuidSchema.safeParse(c.req.header('Idempotency-Key'));
+    if (!key.success) throw new ApiError(400, 'INVALID_INPUT', 'Provide a valid analysis operation key.');
+    const parsed = await parseJsonBody(c, CleanupAnalysisRequestSchema);
+    const input = { ...parsed, reportId: parsed.reportId.toLowerCase(), photoIds: parsed.photoIds.map((id) => id.toLowerCase()) };
+    if (!database || !c.env.PHOTOS) throw new ApiError(503, 'UNAVAILABLE', 'Analysis storage is not configured.');
+    const config = { authJson: c.env.VERTEX_AUTH_JSON ?? '', modelId: c.env.GEMINI_MODEL_ID ?? '' };
+    validateGeminiConfig(config);
+    const uid = c.get('identity')!.uid;
+    const work = await beginCleanupAnalysis(database, uid, key.data.toLowerCase(), input, config.modelId, now, limit);
+    if (work.started) {
+      try {
+        const beforePhotos = await loadReportBytes(c.env.PHOTOS, work.before);
+        const afterPhotos = await loadReportBytes(c.env.PHOTOS, work.photos);
+        const result = await analyzeCleanup(config, {
+          beforeDescription: work.description, outputLocale: work.outputLocale, beforePhotos, afterPhotos,
+        }, fetcher);
+        await finishReportAnalysis(database, uid, work.analysisId, result, 'CLEANUP');
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        await finishReportAnalysis(database, uid, work.analysisId, null, 'CLEANUP');
+      }
+    }
+    const body = await readReportAnalysis(database, uid, work.analysisId, c.get('requestId'));
+    return c.json(CleanupAnalysisSchema.parse(body), 202);
   });
   return routes;
 }
