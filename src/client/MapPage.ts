@@ -5,6 +5,7 @@ import { ApiClientError, createClientApi } from './api';
 import { clientDesign, type SupportedLocale } from './designTokens';
 import { errorMessageKey, type MessageKey, type MessageValues } from './i18n';
 import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from './mapModel';
+import { renderPhotoCapture, type CaptureStage } from './PhotoCapture';
 import { renderReportSheet } from './ReportSheet';
 
 type ClientApi = ReturnType<typeof createClientApi>;
@@ -22,6 +23,7 @@ export interface MapPageView {
   element: HTMLElement;
   state: MapPageState;
   mount(): void;
+  openCapture(stage: CaptureStage): void;
   dispose(): void;
 }
 
@@ -330,6 +332,17 @@ export function renderMapPage(
     },
   });
   page.appendChild(reportSheet.element);
+  const photoCapture = renderPhotoCapture({
+    t,
+    onContinue: () => undefined,
+    onExit: () => reportButton.focus(),
+    onVisibilityChange: (open) => {
+      mapArea.inert = open;
+      listPanel.inert = open;
+      setChromeInert?.(open);
+    },
+  });
+  page.appendChild(photoCapture.element);
 
   let mapInstance: MapLibreMap | null = null;
   let mapReady = false;
@@ -737,8 +750,15 @@ export function renderMapPage(
     mapInstance = null;
     mapReady = false;
     reportSheet.dispose();
+    photoCapture.dispose();
   }
 
   void loadReports(initialState !== undefined);
-  return { element: page, state: pageState, mount: () => { void initializeMap(); }, dispose: disposeMap };
+  return {
+    element: page,
+    state: pageState,
+    mount: () => { void initializeMap(); },
+    openCapture: (stage) => photoCapture.open(stage),
+    dispose: disposeMap,
+  };
 }
