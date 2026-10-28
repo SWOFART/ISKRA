@@ -45,7 +45,7 @@ Each environment has a single Secret Manager JSON configuration:
 | staging | `iskra-staging-env` | `iskra-ci-staging@iskra-512914.iam.gserviceaccount.com` | `develop` |
 | production | `iskra-production-env` | `iskra-ci-production@iskra-512914.iam.gserviceaccount.com` | `main` |
 
-The secret payload is a flat JSON object whose keys are listed in `.env.example` and whose values are strings. There is no shell execution or `source .env` of fetched configuration. Unknown keys, non-string/multiline values and invalid deployment origins are rejected. The initial configurations contain only `DEPLOY_ENABLED=false`: no application/deployment keys have been entered, and automated Cloudflare writes remain disabled.
+The secret payload is a flat JSON object whose keys are listed in `.env.example` and whose values are strings. There is no shell execution or `source .env` of fetched configuration. Unknown keys, non-string/multiline values and invalid deployment origins are rejected. Staging now contains the Cloudflare deployment credentials, target URLs and Firebase web configuration with `DEPLOY_ENABLED=true`; production remains disabled. The current evidence section below records the verified deployment and outstanding product dependencies.
 
 Secret replicas are in Frankfurt (`europe-west3`), a technical setup choice for these configuration records. This is not a claim that all identity, logging or future application processing is EU-only. Change the storage policy before inserting real values if the team requires another location.
 
@@ -105,14 +105,14 @@ npm run build --prefix infra/deployment-check
 python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 ```
 
-The initial local deployment, three Worker tests, live health/release checks, JSON 404/405 checks and initial GitHub CI passed. The original live health release predates the user-requested Git history rewrite. The [keyless develop workflow](https://github.com/SWOFART/ISKRA/actions/runs/40524377245) passed: Google OIDC authentication, Secret Manager retrieval, configuration validation and temporary-file cleanup all succeeded. The Cloudflare deployment step was correctly skipped because Google config disables deployment. CI also passed on both branches. Actual automated Cloudflare deployment remains pending until key values are supplied later in Google Cloud.
+The initial local deployment, three Worker tests, live health/release checks, JSON 404/405 checks and initial GitHub CI passed. The original live health release predates the user-requested Git history rewrite. The [keyless develop workflow](https://github.com/SWOFART/ISKRA/actions/runs/40524377245) passed: Google OIDC authentication, Secret Manager retrieval, configuration validation and temporary-file cleanup all succeeded. The Cloudflare deployment step was correctly skipped because Google config disables deployment. CI also passed on both branches. That disabled run is historical; the successful automated check-Worker deployment on 2026-10-28 is recorded below.
 
 ## Later activation — values stay in Google
 
 Do not add a GitHub secret or settings variable to complete this checklist.
 
-- [ ] Add a new version of `iskra-staging-env` in **Google Cloud project `iskra-512914`**. For the infrastructure test, populate `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `DEPLOYMENT_CHECK_URL`, then set string `DEPLOY_ENABLED` to `true`. Keep it `false` while values are missing.
-- [ ] `DEPLOYMENT_CHECK_URL` is the verified check Worker origin above, not the tunnel URL. Use an account-scoped Workers deployment token with minimum verified permissions; never a Global API Key. Create/rotate that token at Cloudflare and save its value directly in Google Secret Manager, not chat or GitHub.
+- [x] Added a new version of `iskra-staging-env` in **Google Cloud project `iskra-512914`**. For the infrastructure test, populate `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `DEPLOYMENT_CHECK_URL`, then set string `DEPLOY_ENABLED` to `true`. Keep it `false` while values are missing.
+- [x] `DEPLOYMENT_CHECK_URL` is the verified check Worker origin above, not the tunnel URL. Use an account-scoped Workers deployment token with minimum verified permissions; never a Global API Key. Create/rotate that token at Cloudflare and save its value directly in Google Secret Manager, not chat or GitHub.
 - [ ] Run **Deploy to Cloudflare** from `develop`, environment `staging`, target `deployment-check`; verify a matching Git SHA in live health.
 - [ ] For the product: set `APP_URL` to the confirmed product Worker origin, while retaining `DEPLOYMENT_CHECK_URL` for the optional isolated test. Add the remaining relevant `.env.example` values to Google's environment JSON. Configure separate named Workers, Hyperdrive/R2 bindings, Firebase domains, MapTiler origins and release health.
 - [ ] Google is also the source for any origin DB/R2 credentials; provision their operational copies in Hyperdrive or storage integrations as appropriate. Do not expose origin credentials to the browser.
@@ -252,7 +252,7 @@ Current [Gemini rate-limit documentation](https://ai.google.dev/gemini-api/docs/
 
 Public model check on 2026-10-28: Google's [model catalog](https://ai.google.dev/gemini-api/docs/models) lists stable `gemini-3.5-flash-lite` and `gemini-3.8-flash`; the [image guide](https://ai.google.dev/gemini-api/docs/image-understanding) demonstrates multiple image inputs, and the [GenerateContent API reference](https://ai.google.dev/api/generate-content) documents `responseJsonSchema` with `oneOf` interpreted as `anyOf`. These are compatibility candidates, not a project model selection. The public [pricing page](https://ai.google.dev/gemini-api/docs/pricing) lists paid input/output rates per million tokens as $0.30/$2.50 for 3.5 Flash-Lite and $0.75/$3.75 for 3.8 Flash through 2026-12-31, changing to $1.50/$7.50 from 2027-01-01. These published rates do not estimate cost per report or confirm project tier, availability or quota. No API key is configured, and no real latency, token use, per-request cost or active project limit has been measured; keep `GEMINI_MODEL_ID` unset until an authorized project probe confirms those facts.
 
-### Recheck on 2026-10-28 — issue #8
+### Historical read-only recheck on 2026-10-28 — issue #8 (before activation)
 
 Read-only checks in the current workstation session reconfirmed the project and narrowed the setup blockers. No API was enabled, secret changed, resource created, or deployment run. For environment secrets, the CLI parsed only key names, the `DEPLOY_ENABLED` state, and presence booleans; it did not print or save secret values.
 
@@ -271,7 +271,7 @@ Read-only checks in the current workstation session reconfirmed the project and 
 | Cloudflare Hyperdrive | `wrangler hyperdrive list` returned no configurations | There is no observed ISKRA Hyperdrive binding/configuration. No SQL connectivity or TLS check has run. |
 | Local CLI identities | Google Cloud CLI and Wrangler OAuth resolve to an existing collaborator account, separate from the GitHub commit identity configured in this checkout | This proves only the current collaborator session's read access. It is not the Google keyless CI identity or the product's Cloudflare deployment credential. No Cloudflare account ID or OAuth token is recorded here. |
 
-See Firebase's [web authentication domain guidance](https://firebase.google.com/docs/auth/web/redirect-best-practices) before adding the verified staging origin. Google's [Cloud Billing budgets guidance](https://docs.cloud.google.com/billing/docs/how-to/budgets) distinguishes alert-only budgets from spend caps; the visible account-wide alerts do not establish an ISKRA spending limit. Restricted MapTiler origins, Gemini model/quota, remaining credit/cap/overage authorization and teardown remain unverified. Issue #8 remains open. The Cloudflare workflow's successful run must not be described as a deploy: the recorded deploy/build/smoke steps were skipped because Google configuration disabled deployment.
+See Firebase's [web authentication domain guidance](https://firebase.google.com/docs/auth/web/redirect-best-practices) before adding the verified staging origin. Google's [Cloud Billing budgets guidance](https://docs.cloud.google.com/billing/docs/how-to/budgets) distinguishes alert-only budgets from spend caps; the visible account-wide alerts do not establish an ISKRA spending limit. Restricted MapTiler origins, Gemini model/quota, remaining credit/cap/overage authorization and teardown remain unverified. Issue #8 remains open. The workflow run recorded in that historical table skipped deployment. The later successful deployment below supersedes that state.
 
 ## Client/Worker integration — task 2.3 / issue #12
 
@@ -305,3 +305,14 @@ Local acceptance: 199 unit tests and seven Chromium checks pass, including rende
 The schema enforces unique vote-stage participation, semantic reward references, report/cleanup analysis use and photo parent ordinals. It permits continued existence support beyond three, caps resolution confirmations at three, stores the first and latest existence confirmation separately, and uses a mutable unique analysis lease slot over non-unique attempt history. The v1 API uses one-based photo ordinals while the database stores zero-based ordinals; convert only in the adapter. Cleanup GPS is stored for private audit and must not enter public projections.
 
 The migration defines no Cloud SQL users, grants, network rules or credentials. The planned `iskra_runtime` and `iskra_migrator` names are role boundaries, not evidence that cloud identities exist; D10 verification and the real migration/backup rehearsal remain pending. PR integration tests apply the SQL only in generated disposable schemas. This work does not claim a live database migration, deployed transaction, or G1 acceptance.
+
+
+## Current staging activation evidence — 2026-10-28
+
+This supersedes the earlier disabled-configuration and missing-domain observations above. No secret values were logged or committed.
+
+- Google Secret Manager `iskra-staging-env` version 4 has `DEPLOY_ENABLED=true`, the account-scoped Workers Scripts: Edit token, account identifier, separate application/check URLs and Firebase browser/Worker configuration. The approved CI token expires **2026-11-04**; rotate it in Google Secret Manager before then. Production remains disabled. A temporary transfer secret version was disabled after transfer; it is not an active configuration source.
+- Firebase project `iskra-512914` was freshly API-verified with Email/Password and Google enabled. Its existing ISKRA web application supplies the configuration. The authorized domains include `iskra-staging.matvey-nesterenko.workers.dev` alongside localhost and the Firebase hosting domains. Provider configuration is not proof of a working browser popup or account bootstrap.
+- [Workflow 40708613504](https://github.com/SWOFART/ISKRA/actions/runs/40708613504) successfully fetched Google configuration, built, deployed and smoke-tested **the isolated deployment-check target** from develop SHA `bd3a412412ca997695f25c0976ea808bf0158d65`. A separate HTTPS GET confirmed `ok=true`, service `iskra-deployment-check`, that exact release and `applicationReady=false`. This is real CI delivery evidence; it is not an application deployment or G1.
+- The staging application origin is configured as `https://iskra-staging.matvey-nesterenko.workers.dev`; application delivery/sign-in evidence is still pending. SQL/Hyperdrive, private R2, Gemini model/quota/key and MapTiler setup remain incomplete. No new billable SQL instance was provisioned.
+- Issue #8 remains open for budget/credits/cap/teardown, SQL/network/TLS, media and AI access acceptance. GitHub contains no environment/key values; Google remains the source and Cloudflare receives operational copies only.
