@@ -170,6 +170,12 @@ Checked on 2026-10-27 without printing tokens, provider client secrets, password
 | Gemini model/key/quota, MapTiler origin restriction | Unverified; no configured key in the environment JSON and no model call made |
 | Spending owner/cap and teardown | Unconfirmed; no billable resource provisioned |
 
+### Gemini adapter documentation check — 2026-10-28
+
+The C adapter uses the native REST endpoint POST https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_ID}:generateContent, sends each validated JPEG as inline image data, places GEMINI_API_KEY in the x-goog-api-key header, and requests JSON using responseMimeType plus responseJsonSchema. The current official [GenerateContent API](https://ai.google.dev/api/generate-content), [image input guide](https://ai.google.dev/gemini-api/docs/image-understanding), [structured output guide](https://ai.google.dev/gemini-api/docs/structured-output), and [API key guide](https://ai.google.dev/gemini-api/docs/api-key) were checked for those request shapes.
+
+No model ID has been selected or added. Project-specific model availability, quota, billing, latency, and cost remain unverified because no Gemini key or live request is available; mocked tests do not pass D10/D11 or task 4.6.
+
 ### Local checks
 
 Use Node 24+ (CI uses 24):
