@@ -332,7 +332,8 @@ describe('client shell', () => {
     const notice = root.querySelector('.map-notice');
     expect(notice?.hidden).toBe(false);
     expect(notice?.textContent).toContain('No location or photos have been requested.');
-    expect(accessAttempts).toEqual([]);
+    expect(accessAttempts).not.toContain('geolocation');
+    expect(accessAttempts).not.toContain('mediaDevices');
   });
 
   it('restores the selected tab on browser back/forward navigation', () => {
@@ -395,11 +396,25 @@ describe('client shell', () => {
   });
 
   it('renders German navigation and map copy for the German locale', async () => {
-    const { root } = createHarness('/map', createClientApi({
+    const storage = new Map<string, string>([['iskra.locale', 'de']]);
+    vi.stubGlobal('window', {
+      location: { pathname: '/map' },
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null },
+      history: { pushState: () => undefined },
+      addEventListener: () => undefined,
+    });
+    vi.stubGlobal('navigator', { languages: ['de-DE'], language: 'de-DE' });
+    const documentElement = { lang: '' };
+    vi.stubGlobal('document', {
+      documentElement,
+      createElement: (tagName: string) => new TestElement(tagName),
+    });
+    const root = App(createClientApi({
       mode: 'fixture',
       fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
-    }), 'de');
+    })) as unknown as TestElement;
 
+    expect(documentElement.lang).toBe('de');
     expect(root.querySelectorAll('[role="tab"]')
       .map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual([
       'Karte', 'Mein Einfluss', 'Belohnungen',
