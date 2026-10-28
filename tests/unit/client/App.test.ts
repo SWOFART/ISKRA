@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/client/App';
 import { createClientApi, DEVELOPMENT_FIXTURE_LABEL, type FixtureResponse } from '../../../src/client/api';
-import { clientDesign, type SupportedLocale } from '../../../src/client/designTokens';
+import { clientDesign } from '../../../src/client/designTokens';
 
 type TestListener = (event: Record<string, unknown>) => void;
 
@@ -17,6 +17,7 @@ class TestElement {
   value = '';
   tabIndex = 0;
   type = '';
+  lang = '';
   private ownText = '';
 
   constructor(readonly tagName: string) {}
@@ -41,6 +42,8 @@ class TestElement {
 
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
+    if (name === 'tabindex') this.tabIndex = Number(value);
+    if (name === 'lang') this.lang = value;
   }
 
   getAttribute(name: string): string | null {
@@ -76,6 +79,9 @@ class TestElement {
   private matches(selector: string): boolean {
     if (selector.startsWith('.')) return this.className.split(/\s+/).includes(selector.slice(1));
     if (selector.startsWith('#')) return this.id === selector.slice(1);
+    if (selector.startsWith('[lang="')) {
+      return this.lang === selector.slice(6, -2);
+    }
     if (selector.startsWith('[') && selector.endsWith(']')) {
       const [name, value] = selector.slice(1, -1).split('=');
       return value === undefined
@@ -94,7 +100,6 @@ function createHarness(
     mode: 'fixture',
     fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
   }),
-  locale: SupportedLocale = 'en',
 ) {
   focusedElement = null;
   const location = { pathname };
@@ -122,7 +127,7 @@ function createHarness(
       windowListeners.set(name, listeners);
     },
   };
-  const fakeNavigator = new Proxy({ language: 'en-US' }, {
+  const fakeNavigator = new Proxy({ languages: ['en-US'], language: 'en-US' }, {
     get: (target, property) => {
       accessAttempts.push(String(property));
       return Reflect.get(target, property);
@@ -161,7 +166,7 @@ describe('client shell', () => {
 
     await vi.waitFor(() => expect(root.querySelector('.fixture-banner')?.hidden).toBe(false));
 
-    expect(root.querySelector('.fixture-banner')?.textContent).toContain(DEVELOPMENT_FIXTURE_LABEL);
+    expect(root.querySelector('.fixture-banner')?.textContent).toBe(DEVELOPMENT_FIXTURE_LABEL);
     expect(root.querySelector('.map-status')?.textContent).toContain('1 sample report loaded.');
   });
 
@@ -261,7 +266,7 @@ describe('client shell', () => {
     expect(retryButton?.hidden).toBe(true);
   });
 
-  it('shows exactly three tabs and a Heilbronn map without accessing location or camera APIs', () => {
+  it('shows exactly three tabs, a Heilbronn map and a focusable skip-link target without requesting device APIs', () => {
     const { root, accessAttempts } = createHarness();
 
     expect(root.querySelectorAll('[role="tab"]')
@@ -274,6 +279,7 @@ describe('client shell', () => {
     expect(mapCanvas?.getAttribute('data-latitude')).toBe(String(clientDesign.map.center.latitude));
     expect(mapCanvas?.getAttribute('data-longitude')).toBe(String(clientDesign.map.center.longitude));
     expect(mapCanvas?.getAttribute('data-zoom')).toBe(String(clientDesign.map.zoom));
+    expect(root.querySelector('#main-content')?.tabIndex).toBe(-1);
     expect(accessAttempts).not.toContain('geolocation');
     expect(accessAttempts).not.toContain('mediaDevices');
   });

@@ -18,6 +18,14 @@ test('switches to German, persists the choice and keeps the selected tab', async
   await expect(page).toHaveURL(/\/impact$/);
 });
 
+test('offers a focusable main target for skip navigation', async ({ page }) => {
+  await page.goto('/map');
+  const main = page.locator('#main-content');
+  await expect(main).toHaveAttribute('tabindex', '-1');
+  await page.locator('.skip-link').click();
+  await expect(page).toHaveURL(/#main-content$/);
+});
+
 test('uses English by default for an English browser', async ({ page }) => {
   await page.goto('/map');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');

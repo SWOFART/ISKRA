@@ -56,10 +56,8 @@ describe('client locale', () => {
     expect(() => storeLocale('en')).not.toThrow();
   });
 
-  it('translates UI copy with interpolation without translating resident content', () => {
+  it('translates UI copy with interpolation', () => {
     expect(translate('en', 'map.countLoaded', { count: 2, noun: 'reports', source: '' })).toBe('2 reports loaded.');
     expect(translate('de', 'map.countLoaded', { count: 2, noun: 'Meldungen', source: '' })).toBe('2 Meldungen geladen.');
-    const authoredDescription = 'Glass near the school';
-    expect(authoredDescription).toBe('Glass near the school');
   });
 });

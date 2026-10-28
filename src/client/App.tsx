@@ -95,7 +95,7 @@ function renderMapPanel(
 
   const fixtureBanner = makeElement('aside', 'fixture-banner');
   fixtureBanner.setAttribute('role', 'note');
-  fixtureBanner.textContent = `${t('fixture.banner')}: ${DEVELOPMENT_FIXTURE_LABEL}`;
+  fixtureBanner.textContent = DEVELOPMENT_FIXTURE_LABEL;
   fixtureBanner.hidden = true;
 
   const reportButton = makeButton(t('map.reportButton'), 'report-button');
@@ -152,7 +152,7 @@ function renderMapPanel(
       });
       const isFixture = result.provenance.mode === 'fixture';
       fixtureBanner.hidden = !isFixture;
-      fixtureBanner.textContent = `${t('fixture.banner')}: ${result.provenance.label}`;
+      fixtureBanner.textContent = result.provenance.label;
       const count = result.data.items.length;
       const source = isFixture ? t('map.countSource.sample') : '';
       mapStatusText.textContent = count === 0
@@ -242,6 +242,7 @@ export function App(
   const header = makeElement('header', 'app-header');
   const main = makeElement('main', 'app-main');
   main.id = 'main-content';
+  main.tabIndex = -1;
   const tablist = makeElement('nav', 'bottom-nav');
   tablist.setAttribute('role', 'tablist');
 
