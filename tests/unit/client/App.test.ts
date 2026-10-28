@@ -90,22 +90,6 @@ class TestElement {
 
 let focusedElement: TestElement | null = null;
 
-const confirmedUnresolvedReport = ReportSummarySchema.parse({
-  id: '11111111-1111-4111-8111-111111111111',
-  route: 'GREEN',
-  status: 'AWAITING_RESOLUTION',
-  location: { lat: 49.14, lng: 9.22 },
-  coverPhotoId: '22222222-2222-4222-8222-222222222222',
-  description: 'Litter remains beside the path.',
-  existenceYesCount: 8,
-  resolutionYesCount: 2,
-  existenceVerifiedAt: '2026-10-27T11:00:00.000Z',
-  lastExistenceConfirmedAt: '2026-10-27T12:00:00.000Z',
-  version: 8,
-  updatedAt: '2026-10-27T12:00:00.000Z',
-  isDemo: false,
-});
-
 function createHarness(
   pathname = '/map',
   api = createClientApi({
