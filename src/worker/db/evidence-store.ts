@@ -80,6 +80,23 @@ export async function readPhoto(database: TransactionDatabase, photoId: string) 
   });
 }
 
+/** Preview issuance never exposes whether a different resident owns a photo. */
+export async function readOwnerPreview(database: TransactionDatabase, photoId: string, uid: string) {
+  return database.withTransaction(async (client) => {
+    const result = await client.query<{ id: string; ordinal: number; purpose: 'REPORT' | 'CLEANUP' }>(
+      `SELECT p.id, p.ordinal + 1 AS ordinal, p.purpose FROM report_photos p
+       WHERE p.id = $1::uuid AND p.owner_user_id = $2 AND p.state = 'UPLOADED'
+         AND p.report_id IS NULL AND p.cleanup_id IS NULL
+         AND (p.upload_expires_at > clock_timestamp() - interval '24 hours' OR EXISTS (
+           SELECT 1 FROM ai_analyses a WHERE a.photo_ids ? p.id::text
+             AND a.owner_user_id = p.owner_user_id AND a.status IN ('RUNNING', 'READY')
+             AND a.consumed_at IS NULL AND a.expires_at > clock_timestamp()
+         ))`, [photoId, uid],
+    );
+    return result.rows[0] ?? null;
+  });
+}
+
 /** Operator/scheduler only: retain expired unattached evidence for at least 24 hours. */
 export async function removeExpiredPhotos(database: TransactionDatabase, bucket: Pick<R2Bucket, 'delete'>) {
   return database.withTransaction(async (client) => {

@@ -7,6 +7,7 @@ import { readPhoto, removeExpiredPhotos } from '../../../src/worker/db/evidence-
 import { authorizePhotoRead, createPhotoReadCapability, createReportMediaResolver } from '../../../src/worker/services/media';
 import { PostgresReportReadService } from '../../../src/worker/services/report-context';
 import { createApp } from '../../../src/worker';
+import { PhotoSchema } from '../../../src/shared/contracts';
 
 const migration = await readFile(new URL('../../../migrations/0001_p0_core.sql', import.meta.url), 'utf8');
 const origin = 'https://iskra.test';
@@ -44,6 +45,68 @@ async function report(pool: Pool) {
 
 // R2 is an explicit object-store test double; the SQL/locking below uses real PostgreSQL.
 describe('photo authorization and orphan transactions', () => {
+  it('issues and refreshes owner previews after PUT expiry without exposing storage keys or granting guest access', () =>
+    withTestDatabase(async (pool) => {
+      const database = await setup(pool);
+      const uploaded = await photo(pool, { expired: false });
+      await pool.query("UPDATE report_photos SET ordinal = 4, upload_expires_at = now() - interval '10 minutes' WHERE id = $1", [uploaded.id]);
+      const get = vi.fn(async () => ({ size: 3, body: new Response(new Uint8Array([1, 2, 3])).body }));
+      const env = { FIREBASE_PROJECT_ID: 'iskra-test', PHOTOS: { get } as unknown as R2Bucket, MEDIA_SIGNING_SECRET: secret };
+      const app = createApp({ database, verify: async (uid) => ({ uid }) });
+      const request = (uid?: string) => app.request(`${origin}/api/photos/${uploaded.id.toUpperCase()}`, {
+        headers: uid ? { Authorization: 'Bearer ' + uid } : {},
+      }, env);
+      expect((await request()).status).toBe(401);
+      expect((await request('foreign-owner')).status).toBe(404);
+      const response = await request(owner);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+      const preview = PhotoSchema.parse(await response.json());
+      expect(preview).toMatchObject({ id: uploaded.id, ordinal: 5 });
+      expect(JSON.stringify(preview)).not.toContain(uploaded.key);
+      expect(get).not.toHaveBeenCalled();
+      expect((await app.request(preview.mediaUrl, {}, env)).status).toBe(403);
+      expect((await app.request(preview.mediaUrl, { headers: { Authorization: 'Bearer foreign-owner' } }, env)).status).toBe(403);
+      expect((await app.request(preview.mediaUrl, { headers: { Authorization: 'Bearer ' + owner } }, env)).status).toBe(200);
+      try {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(Date.now() + 301_000);
+        expect((await app.request(preview.mediaUrl, { headers: { Authorization: 'Bearer ' + owner } }, env)).status).toBe(410);
+        const refreshed = PhotoSchema.parse(await (await request(owner)).json());
+        expect(refreshed.mediaUrl).not.toBe(preview.mediaUrl);
+        expect((await app.request(refreshed.mediaUrl, { headers: { Authorization: 'Bearer ' + owner } }, env)).status).toBe(200);
+        await pool.query("UPDATE report_photos SET state = 'RESERVED' WHERE id = $1", [uploaded.id]);
+        expect((await app.request(refreshed.mediaUrl, { headers: { Authorization: 'Bearer ' + owner } }, env)).status).toBe(404);
+      } finally { vi.useRealTimers(); }
+    }));
+
+  it('limits preview issuance to retained unattached uploads or photos protected by a live analysis', () =>
+    withTestDatabase(async (pool) => {
+      const database = await setup(pool);
+      const attached = await photo(pool, { reportId: await report(pool) });
+      const expired = await photo(pool);
+      const reserved = await photo(pool, { expired: false });
+      await pool.query("UPDATE report_photos SET state = 'RESERVED' WHERE id = $1", [reserved.id]);
+      const protectedPhoto = await photo(pool);
+      const analysis = await pool.query<{ id: string }>(
+        `INSERT INTO ai_analyses(owner_user_id,kind,status,input_hash,photo_ids,expires_at)
+         VALUES($1,'REPORT','RUNNING',$2,$3::jsonb,now()+interval '45 seconds') RETURNING id`,
+        [owner, crypto.randomUUID(), JSON.stringify([protectedPhoto.id])],
+      );
+      const env = { FIREBASE_PROJECT_ID: 'iskra-test', PHOTOS: {} as R2Bucket, MEDIA_SIGNING_SECRET: secret };
+      const app = createApp({ database, verify: async () => ({ uid: owner }) });
+      const preview = (id: string) => app.request(`${origin}/api/photos/${id}`, { headers: { Authorization: 'Bearer test' } }, env);
+      for (const id of [attached.id, expired.id, reserved.id, crypto.randomUUID()]) {
+        const response = await preview(id);
+        expect(response.status).toBe(404);
+        expect(await response.json()).toMatchObject({ error: { code: 'NOT_FOUND', message: 'Photo not found.' } });
+      }
+      expect((await preview(protectedPhoto.id)).status).toBe(200);
+      await pool.query("UPDATE ai_analyses SET created_at=now()-interval '1 minute', expires_at=now()-interval '1 second' WHERE id=$1", [analysis.rows[0].id]);
+      expect((await preview(protectedPhoto.id)).status).toBe(404);
+    }));
+
   it('projects and serves real database-attached photos to guests, while private photos require their owner', () =>
     withTestDatabase(async (pool) => {
       const database = await setup(pool);
