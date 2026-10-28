@@ -149,7 +149,7 @@ async function counts(pool: Pool, owner = actorOne) {
 }
 
 describe('PostgreSQL report publication', () => {
-  it('publishes one or five photos for the same initial reward and stores immutable analysis facts', () =>
+  it('publishes one or five retained photos after PUT expiry for the same initial reward', () =>
     withTestDatabase(async (pool) => {
       await installSchema(pool);
       await createUser(pool, actorOne);
@@ -158,7 +158,7 @@ describe('PostgreSQL report publication', () => {
 
       for (const photoCount of [1, 5]) {
         const owner = photoCount === 1 ? actorOne : actorTwo;
-        const analysis = await createAnalysis(pool, { owner, photoCount });
+        const analysis = await createAnalysis(pool, { owner, photoCount, expiredPhoto: true });
         const response = await publish(app, owner, analysis.id);
         expect(response.status).toBe(201);
         const receipt = PublicationReceiptSchema.parse(await response.json());
@@ -282,7 +282,6 @@ describe('PostgreSQL report publication', () => {
       const retakeAnalysis = await createAnalysis(pool, { result: retake });
       const expiredAnalysis = await createAnalysis(pool, { expired: true });
       const consumedAnalysis = await createAnalysis(pool, { consumed: true });
-      const expiredPhotoAnalysis = await createAnalysis(pool, { expiredPhoto: true });
       const demoAnalysis = await createAnalysis(pool, { demo: true });
       const otherOwnerAnalysis = await createAnalysis(pool, { owner: actorTwo });
       const app = createApp(pool, createMediaResolver());
@@ -293,7 +292,6 @@ describe('PostgreSQL report publication', () => {
       expect((await publish(app, actorOne, retakeAnalysis.id)).status).toBe(422);
       expect((await publish(app, actorOne, expiredAnalysis.id)).status).toBe(410);
       expect((await publish(app, actorOne, consumedAnalysis.id)).status).toBe(409);
-      expect((await publish(app, actorOne, expiredPhotoAnalysis.id)).status).toBe(410);
       const demo = await publish(app, actorOne, demoAnalysis.id);
       expect(demo.status).toBe(403);
       const unowned = await publish(app, actorOne, otherOwnerAnalysis.id);
@@ -302,7 +300,7 @@ describe('PostgreSQL report publication', () => {
       expect((await counts(pool))).toMatchObject({ reports: 0, ledger: 0, balance: 0, attached: 0 });
       expect((await pool.query<{ consumed_at: Date | null; status: string }>(
         `SELECT consumed_at, status FROM ai_analyses WHERE id = ANY($1::uuid[]) ORDER BY id`,
-        [[retakeAnalysis.id, expiredAnalysis.id, consumedAnalysis.id, expiredPhotoAnalysis.id, demoAnalysis.id,
+        [[retakeAnalysis.id, expiredAnalysis.id, consumedAnalysis.id, demoAnalysis.id,
           otherOwnerAnalysis.id]],
       )).rows.filter((row) => row.consumed_at !== null).length).toBe(1);
       expect((await pool.query<{ count: number }>(

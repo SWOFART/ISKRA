@@ -108,7 +108,7 @@ type ReportInput = Infer<typeof ReportAnalysisRequestSchema>;
 export interface AnalysisPhoto extends Record<string, unknown> {
   id: string; owner_user_id: string; purpose: string; state: string;
   report_id: string | null; cleanup_id: string | null; ordinal: number;
-  object_key: string; byte_size: number; sha256: string; upload_active: boolean;
+  object_key: string; byte_size: number; sha256: string; retained: boolean;
 }
 interface AnalysisAttempt extends Record<string, unknown> {
   id: string; status: string; result: unknown; expires_at: Date | string | null;
@@ -123,7 +123,7 @@ async function digest(value: unknown) {
 async function reportInputPhotos(client: CheckedOutClient, uid: string, ids: string[], lock = false) {
   const result = await client.query<AnalysisPhoto>(
     `SELECT id, owner_user_id, purpose, state, report_id, cleanup_id, ordinal, object_key, byte_size, sha256,
-       upload_expires_at > clock_timestamp() AS upload_active
+       upload_expires_at > clock_timestamp() - interval '24 hours' AS retained
      FROM report_photos WHERE id = ANY($1::uuid[]) ORDER BY id ${lock ? 'FOR SHARE' : ''}`, [ids],
   );
   const photos = ids.map((id) => result.rows.find((row) => row.id === id));
@@ -169,7 +169,8 @@ export async function beginReportAnalysis(
       if (!shared) {
         // Lock lease before photos, matching publication's lock order.
         const lockedPhotos = await reportInputPhotos(client, uid, input.photoIds, true);
-        if (lockedPhotos.some((photo) => !photo.upload_active)) {
+        // New work uses the existing orphan-retention window, not the expired PUT capability.
+        if (lockedPhotos.some((photo) => !photo.retained)) {
           throw new ApiError(410, 'EXPIRED', 'One or more report photos have expired.');
         }
         const count = await client.query<{ count: number }>(
