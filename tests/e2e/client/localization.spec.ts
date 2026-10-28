@@ -14,6 +14,8 @@ test('switches to German, persists the choice and keeps the selected tab', async
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
   await expect(page.locator('.nav-tab[aria-selected="true"] .nav-label')).toHaveText('Mein Einfluss');
+  await expect(page.locator('.deferred-card h1')).toHaveText('Dein Einfluss');
+  await expect(page).toHaveURL(/\/impact$/);
 });
 
 test('uses English by default for an English browser', async ({ page }) => {

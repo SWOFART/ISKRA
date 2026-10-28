@@ -82,7 +82,7 @@ function renderMapPanel(onReport: () => void, api: ClientApi, t: Translate): HTM
 
   const fixtureBanner = makeElement('aside', 'fixture-banner');
   fixtureBanner.setAttribute('role', 'note');
-  fixtureBanner.textContent = t('fixture.banner');
+  fixtureBanner.textContent = `${t('fixture.banner')}: ${DEVELOPMENT_FIXTURE_LABEL}`;
   fixtureBanner.hidden = true;
 
   const reportButton = makeButton(t('map.reportButton'), 'report-button');
@@ -139,12 +139,13 @@ function renderMapPanel(onReport: () => void, api: ClientApi, t: Translate): HTM
       });
       const isFixture = result.provenance.mode === 'fixture';
       fixtureBanner.hidden = !isFixture;
+      fixtureBanner.textContent = `${t('fixture.banner')}: ${result.provenance.label}`;
       const count = result.data.items.length;
       const source = isFixture ? t('map.countSource.sample') : '';
       mapStatusText.textContent = count === 0
         ? t('map.countNone', { source })
         : t('map.countLoaded', {
-          count,
+          count: new Intl.NumberFormat(locale).format(count),
           source,
           noun: t(count === 1 ? 'map.noun.one' : 'map.noun.other'),
         });
@@ -212,6 +213,7 @@ export function App(
   session?: FirebaseSession,
 ): HTMLElement {
   let locale = initialLocale;
+  if (typeof document !== 'undefined') document.documentElement.lang = locale;
   const t: Translate = (key, values) => translate(locale, key, values);
   let authOpen = false;
   let authIntent: 'report' | TabId | null = null;
@@ -219,8 +221,11 @@ export function App(
   let authPanel: ReturnType<typeof renderAuthPanel> | undefined;
 
   const shell = makeElement('div', 'app-shell');
+  const skipLink = makeElement('a', 'skip-link', t('nav.skipToContent'));
+  skipLink.href = '#main-content';
   const header = makeElement('header', 'app-header');
   const main = makeElement('main', 'app-main');
+  main.id = 'main-content';
   const tablist = makeElement('nav', 'bottom-nav');
   tablist.setAttribute('role', 'tablist');
 
@@ -321,6 +326,7 @@ export function App(
       makeElement('span', 'header-caption', t('header.caption')),
       controls,
     );
+    skipLink.textContent = t('nav.skipToContent');
 
     tabs = new Map(tabOrder.map((tabId) => [tabId, createTab(tabId)]));
     tablist.setAttribute('aria-label', t('nav.main'));
@@ -427,7 +433,7 @@ export function App(
     activateTab(tabFromPath(window.location.pathname), false);
   });
 
-  appendElements(shell, header, main, tablist);
+  appendElements(shell, skipLink, header, main, tablist);
   renderChrome();
   activateTab(selectedTab, false);
   session?.subscribe(renderChrome);

@@ -138,9 +138,27 @@ button {
   color: var(--client-color-brand-text);
 }
 
-.locale-button:focus-visible {
+.locale-button:focus-visible,
+.skip-link:focus-visible {
   outline: 3px solid var(--client-color-focus);
   outline-offset: 2px;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 10;
+  top: 8px;
+  left: 8px;
+  padding: 10px 14px;
+  transform: translateY(-160%);
+  border-radius: var(--client-radius-control);
+  background: var(--client-color-surface);
+  color: var(--client-color-text);
+  box-shadow: 0 4px 18px rgb(22 53 43 / 18%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
 }
 
 .app-main {
