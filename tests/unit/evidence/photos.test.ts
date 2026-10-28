@@ -137,6 +137,19 @@ describe('Worker photo delivery', () => {
     expect((await f.app.request(photo.mediaUrl, {}, env)).status).toBe(503);
   });
 
+  it('closes scheduled database scopes after successful cleanup and storage failure', async () => {
+    const f = fixture();
+    const close = vi.fn(async () => {});
+    const worker = createWorkerHandler({ createDatabase: () => ({ database: f.database, close }) });
+    const env = { PHOTOS: f.bucket, HYPERDRIVE: { connectionString: 'postgres://fixture/iskra' } };
+    await worker.scheduled({} as ScheduledController, env);
+    expect(f.bucket.delete).toHaveBeenCalledWith(stored.object_key);
+    expect(close).toHaveBeenCalledOnce();
+    vi.mocked(f.bucket.delete).mockRejectedValueOnce(new Error('private storage detail'));
+    await expect(worker.scheduled({} as ScheduledController, env)).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
   it('uses request-scoped storage/database at runtime and closes the database', async () => {
     const f = fixture(); const close = vi.fn(async () => {});
     const createDatabase = vi.fn(() => ({ database: f.database, close }));
