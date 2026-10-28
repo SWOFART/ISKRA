@@ -1,6 +1,7 @@
 import './styles.css';
 import { App } from './App';
 import { applyClientDesignTokens } from './applyDesignTokens';
+import { localeFromBrowserLanguages, readStoredLocale } from './i18n';
 
 applyClientDesignTokens(document.documentElement.style);
 
@@ -10,4 +11,6 @@ if (!root) {
   throw new Error('The application root element is missing.');
 }
 
-root.replaceChildren(App());
+const locale = readStoredLocale() ?? localeFromBrowserLanguages(navigator.languages ?? [navigator.language]);
+document.documentElement.lang = locale;
+root.replaceChildren(App(undefined, locale));
