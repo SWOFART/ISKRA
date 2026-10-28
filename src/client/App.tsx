@@ -1,4 +1,8 @@
 import { clientDesign } from './designTokens';
+import { ApiClientError, createClientApi, DEVELOPMENT_FIXTURE_LABEL } from './api';
+import { ReportListSchema } from '../shared/contracts';
+
+type ClientApi = ReturnType<typeof createClientApi>;
 
 type TabId = 'map' | 'impact' | 'rewards';
 
@@ -35,7 +39,7 @@ function appendElements(parent: HTMLElement, ...elements: HTMLElement[]): void {
   for (const element of elements) parent.appendChild(element);
 }
 
-function renderMapPanel(onReport: () => void): HTMLElement {
+function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
   const page = makeElement('section', 'map-page');
   page.setAttribute('aria-label', 'Map of Heilbronn');
 
@@ -53,10 +57,24 @@ function renderMapPanel(onReport: () => void): HTMLElement {
   );
 
   const mapStatus = makeElement('div', 'map-status');
+  mapStatus.setAttribute('role', 'status');
+  mapStatus.setAttribute('aria-live', 'polite');
+  mapStatus.setAttribute('aria-busy', 'true');
+  const mapStatusText = makeElement('span', 'map-status-message', 'Loading reports…');
+  const retryButton = makeButton('Retry', 'retry-button');
+  retryButton.setAttribute('aria-label', 'Retry loading reports');
+  retryButton.hidden = true;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   appendElements(mapStatus,
     makeElement('span', 'status-dot'),
-    makeElement('span', undefined, 'Report map is not connected yet.'),
+    mapStatusText,
+    retryButton,
   );
+
+  const fixtureBanner = makeElement('aside', 'fixture-banner');
+  fixtureBanner.setAttribute('role', 'note');
+  fixtureBanner.textContent = DEVELOPMENT_FIXTURE_LABEL;
+  fixtureBanner.hidden = true;
 
   const reportButton = makeButton('Report litter', 'report-button');
   reportButton.setAttribute('aria-label', 'Start a litter report');
@@ -66,7 +84,73 @@ function renderMapPanel(onReport: () => void): HTMLElement {
   mapNotice.hidden = true;
   mapNotice.setAttribute('role', 'status');
 
-  appendElements(page, mapCanvas, mapLabel, mapStatus, reportButton, mapNotice);
+  function clearRetryTimer(): void {
+    if (retryTimer !== undefined) clearTimeout(retryTimer);
+    retryTimer = undefined;
+  }
+
+  function deferRetry(error: ApiClientError): void {
+    let remainingMs = error.retryAfterMs ?? 0;
+    if (remainingMs <= 0) return;
+
+    retryButton.disabled = true;
+    mapStatusText.textContent = `${error.message} Please wait before retrying.`;
+
+    const scheduleEnable = (): void => {
+      const delayMs = Math.min(remainingMs, 2_147_483_647);
+      retryTimer = setTimeout(() => {
+        remainingMs -= delayMs;
+        if (remainingMs > 0) {
+          scheduleEnable();
+          return;
+        }
+        retryTimer = undefined;
+        retryButton.disabled = false;
+        mapStatusText.textContent = error.message;
+      }, delayMs);
+    };
+
+    scheduleEnable();
+  }
+
+  async function loadReports(): Promise<void> {
+    clearRetryTimer();
+    retryButton.disabled = false;
+    retryButton.hidden = true;
+    mapStatus.setAttribute('aria-busy', 'true');
+    mapStatusText.textContent = 'Loading reports…';
+    try {
+      const result = await api.request({
+        path: '/reports?cityId=heilbronn',
+        responseSchema: ReportListSchema,
+      });
+      const isFixture = result.provenance.mode === 'fixture';
+      fixtureBanner.hidden = !isFixture;
+      fixtureBanner.textContent = result.provenance.label;
+      const count = result.data.items.length;
+      const source = isFixture ? 'sample ' : '';
+      mapStatusText.textContent = count === 0
+        ? `No ${source}reports are available yet.`
+        : `${count} ${source}${count === 1 ? 'report' : 'reports'} loaded.`;
+    } catch (error) {
+      fixtureBanner.hidden = true;
+      mapStatusText.textContent = error instanceof ApiClientError
+        ? error.message
+        : 'Reports could not be loaded.';
+      const canRetry = error instanceof ApiClientError && error.retryable;
+      retryButton.hidden = !canRetry;
+      if (canRetry) deferRetry(error);
+    } finally {
+      mapStatus.setAttribute('aria-busy', 'false');
+    }
+  }
+
+  retryButton.addEventListener('click', () => {
+    if (!retryButton.hidden && !retryButton.disabled) void loadReports();
+  });
+  void loadReports();
+
+  appendElements(page, mapCanvas, mapLabel, mapStatus, fixtureBanner, reportButton, mapNotice);
   return page;
 }
 
@@ -103,7 +187,7 @@ function renderDeferredPanel(
   return page;
 }
 
-export function App(): HTMLElement {
+export function App(api: ClientApi = createClientApi({ mode: import.meta.env.DEV ? 'fixture' : 'live' })): HTMLElement {
   const shell = makeElement('div', 'app-shell');
   const header = makeElement('header', 'app-header');
   const brand = makeElement('a', 'brand', 'ISKRA');
@@ -191,7 +275,7 @@ export function App(): HTMLElement {
           notice.textContent = 'Camera reporting is not connected yet. No location or photos have been requested.';
           notice.hidden = false;
         }
-      });
+      }, api);
       appendElements(panel, map);
     } else if (selectedTab === 'impact') {
       appendElements(panel,
