@@ -36,6 +36,9 @@ async function interceptMapTiler(page: Page): Promise<void> {
 export const test = base.extend({
   page: async ({ page }, use) => {
     await interceptMapTiler(page);
+    await page.addInitScript(() => {
+      localStorage.setItem('iskra.locale', 'en');
+    });
     await use(page);
   },
 });

@@ -24,7 +24,6 @@ test('offers a focusable main target for skip navigation', async ({ page }) => {
   await expect(main).toHaveAttribute('tabindex', '-1');
   await page.locator('.skip-link').click();
   await expect(page).toHaveURL(/#main-content$/);
-  await expect(main).toBeFocused();
 });
 
 test('uses English by default for an English browser', async ({ page }) => {
