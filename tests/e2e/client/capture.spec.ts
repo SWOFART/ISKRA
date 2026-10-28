@@ -460,6 +460,9 @@ test('uploads, analyzes, previews and publishes an urgent RED report without ope
   const browserErrors: string[] = [];
   page.on('pageerror', (error) => browserErrors.push(error.message));
   page.on('console', (message) => { if (message.type() === 'error') browserErrors.push(message.text()); });
+  page.on('response', (response) => {
+    if (response.status() >= 500) browserErrors.push(`${response.status()} ${response.url()}`);
+  });
   let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
   await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'accept-running'); });
   const dialog = await submitOneReportPhoto(page, 'en');
@@ -608,6 +611,33 @@ test('honors Retry-After before retrying a failed analysis', async ({ page }) =>
     .toHaveText('Avoid touching the sharp material and keep others away.');
   expect(apiState?.analysisRequests).toHaveLength(2);
   expect(apiState?.analysisRequests[1].operationKey).not.toBe(apiState?.analysisRequests[0].operationKey);
+});
+
+test('keeps Retry-After active after editing photos and reopening submission', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-analysis'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await dialog.getByRole('button', { name: 'Edit photos' }).click();
+  const camera = page.getByRole('dialog', { name: 'Capture report photos' });
+  await expect(camera).toBeVisible();
+  await camera.getByRole('button', { name: 'Continue with photos' }).click();
+  const reopenedDialog = page.getByRole('dialog', { name: 'Photos ready for the next step' });
+  await expect(reopenedDialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  const locationButton = reopenedDialog.getByRole('button', { name: 'Get fresh location' });
+  await expect(locationButton).toBeDisabled();
+  await locationButton.dispatchEvent('click');
+  expect(apiState?.analysisRequests).toHaveLength(1);
+  expect((await captureState(page)).locationRequests).toBe(1);
+  await expect(locationButton).toBeEnabled();
+  await locationButton.click();
+  await expect(reopenedDialog.locator('.photo-capture-location-status'))
+    .toContainText('Fresh location captured');
+  await reopenedDialog.getByRole('button', { name: 'Upload and assess photos' }).click();
+  await expect(reopenedDialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.analysisRequests).toHaveLength(2);
 });
 
 test('honors Retry-After before retrying publication', async ({ page }) => {

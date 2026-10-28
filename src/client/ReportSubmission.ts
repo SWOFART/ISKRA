@@ -162,6 +162,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
     if (!delayMs || delayMs <= 0) return;
     clearRetryDelay();
     retryAvailableAt = Date.now() + delayMs;
+    const waitingFlowGeneration = flowGeneration;
     const failureMessage = analysisStatus.textContent;
     analysisStatus.textContent = t('capture.retryWait');
     const enableRetry = () => {
@@ -173,7 +174,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
       retryTimer = undefined;
       retryAvailableAt = 0;
       if (!disposed && !root.hidden) {
-        analysisStatus.textContent = failureMessage;
+        analysisStatus.textContent = flowGeneration === waitingFlowGeneration ? failureMessage : '';
         updateActions();
       }
     };
@@ -214,7 +215,6 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   }
 
   function resetHandoff(): void {
-    clearRetryDelay();
     flowGeneration += 1;
     locationGeneration += 1;
     uploads = photos.map(() => ({}));
@@ -261,11 +261,11 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
     });
     root.hidden = false;
     options.onVisibilityChange(true);
+    if (retryIsBlocked()) analysisStatus.textContent = t('capture.retryWait');
     editPhotosButton.focus();
   }
 
   function close(): void {
-    clearRetryDelay();
     locationGeneration += 1;
     flowGeneration += 1;
     root.hidden = true;
@@ -561,6 +561,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
       if (disposed) return;
       disposed = true;
       close();
+      clearRetryDelay();
       photoList.replaceChildren();
     },
   };
