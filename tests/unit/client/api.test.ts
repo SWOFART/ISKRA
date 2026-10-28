@@ -193,6 +193,33 @@ describe('client API transport', () => {
     expect(result.provenance.label).toContain('NOT LIVE DATA');
   });
 
+  it('maps retryable fixture errors through the shared policy and preserves Retry-After', async () => {
+    const fixtureResolver = vi.fn(() => ({
+      status: 429,
+      body: { error: { code: 'RATE_LIMITED', message: 'Please wait.', requestId, retryable: true } },
+      headers: { 'Retry-After': '3' },
+    }));
+    const api = createClientApi({ mode: 'fixture', fixtureResolver });
+
+    await expect(api.request({ path: '/reports', responseSchema: ReportListSchema }))
+      .rejects.toMatchObject({
+        code: 'RATE_LIMITED', retryable: true, status: 429, requestId, retryAfterMs: 3000,
+      });
+    expect(fixtureResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps non-retryable fixture errors through the shared policy', async () => {
+    const fixtureResolver = vi.fn(() => ({
+      status: 400,
+      body: { error: { code: 'INVALID_INPUT', message: 'Correct the request.', requestId, retryable: false } },
+    }));
+    const api = createClientApi({ mode: 'fixture', fixtureResolver });
+
+    await expect(api.request({ path: '/reports', responseSchema: ReportListSchema }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT', retryable: false, status: 400, requestId });
+    expect(fixtureResolver).toHaveBeenCalledTimes(1);
+  });
+
   it('never falls back from live API failures to fixture data', async () => {
     const fixtureResolver = vi.fn(() => ({ status: 200, body: { items: [], nextCursor: null } }));
     const fetcher = vi.fn(async () => { throw new Error('private network details'); });

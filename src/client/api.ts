@@ -69,6 +69,7 @@ export interface FixtureRequest {
 export interface FixtureResponse {
   status: number;
   body: unknown;
+  headers?: HeadersInit;
 }
 
 export type FixtureResolver = (request: FixtureRequest) => Promise<FixtureResponse> | FixtureResponse;
@@ -167,6 +168,25 @@ function invalidResponse(status?: number, cause?: unknown): ApiClientError {
   });
 }
 
+function errorFromPayload(status: number, payload: unknown, retryAfter: string | null): ApiClientError {
+  const parsed = ErrorEnvelopeSchema.safeParse(payload);
+  if (!parsed.success) return invalidResponse(status, parsed.error);
+
+  const { error } = parsed.data;
+  if (API_ERROR_POLICY[error.code].httpStatus !== status) {
+    return invalidResponse(status);
+  }
+
+  return new ApiClientError({
+    code: error.code,
+    message: error.message,
+    retryable: error.retryable,
+    status,
+    requestId: error.requestId,
+    retryAfterMs: parseRetryAfter(retryAfter),
+  });
+}
+
 async function errorFromResponse(response: Response): Promise<ApiClientError> {
   let payload: unknown;
   try {
@@ -175,22 +195,13 @@ async function errorFromResponse(response: Response): Promise<ApiClientError> {
     return invalidResponse(response.status, cause);
   }
 
-  const parsed = ErrorEnvelopeSchema.safeParse(payload);
-  if (!parsed.success) return invalidResponse(response.status, parsed.error);
+  return errorFromPayload(response.status, payload, response.headers.get('Retry-After'));
+}
 
-  const { error } = parsed.data;
-  if (API_ERROR_POLICY[error.code].httpStatus !== response.status) {
-    return invalidResponse(response.status);
-  }
-
-  return new ApiClientError({
-    code: error.code,
-    message: error.message,
-    retryable: error.retryable,
-    status: response.status,
-    requestId: error.requestId,
-    retryAfterMs: parseRetryAfter(response.headers.get('Retry-After')),
-  });
+function isAcceptedStatus(status: number, acceptedStatuses?: readonly number[]): boolean {
+  return acceptedStatuses
+    ? acceptedStatuses.includes(status)
+    : status >= 200 && status < 300;
 }
 
 async function parseP0Fixture(request: FixtureRequest): Promise<FixtureResponse> {
@@ -312,6 +323,9 @@ export function createClientApi(options: CreateClientApiOptions) {
 
     if (mode === 'fixture') {
       const fixture = await fixtureResolver({ method, path, body });
+      if (!isAcceptedStatus(fixture.status, input.acceptedStatuses)) {
+        throw errorFromPayload(fixture.status, fixture.body, new Headers(fixture.headers).get('Retry-After'));
+      }
       return parseSuccess(fixture.status, fixture.body, input.responseSchema, provenance);
     }
 
@@ -382,9 +396,7 @@ export function createClientApi(options: CreateClientApiOptions) {
       }
     }
 
-    const accepted = input.acceptedStatuses
-      ? input.acceptedStatuses.includes(response.status)
-      : response.ok;
+    const accepted = isAcceptedStatus(response.status, input.acceptedStatuses);
     if (!accepted) throw await errorFromResponse(response);
 
     let payload: unknown;
