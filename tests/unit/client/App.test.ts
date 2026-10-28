@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/client/App';
 import { createClientApi, DEVELOPMENT_FIXTURE_LABEL, type FixtureResponse } from '../../../src/client/api';
+import type { FirebaseSession } from '../../../src/client/auth';
 import { clientDesign, type SupportedLocale } from '../../../src/client/designTokens';
-import { ReportSummarySchema } from '../../../src/shared/contracts';
+import { translate } from '../../../src/client/i18n';
+import { ImpactSchema, ReportSummarySchema } from '../../../src/shared/contracts';
+import p0Fixtures from '../../fixtures/contracts/p0.json';
 
 type TestListener = (event: Record<string, unknown>) => void;
 
@@ -15,9 +18,12 @@ class TestElement {
   id = '';
   hidden = false;
   href = '';
+  scrollTop = 0;
   value = '';
   tabIndex = 0;
   type = '';
+  readonly dataset: Record<string, string> = {};
+  readonly classList = { toggle: () => undefined };
   private ownText = '';
 
   constructor(readonly tagName: string) {}
@@ -97,6 +103,7 @@ function createHarness(
     fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
   }),
   locale: SupportedLocale = 'en',
+  session?: FirebaseSession,
 ) {
   focusedElement = null;
   const location = { pathname };
@@ -136,7 +143,7 @@ function createHarness(
   vi.stubGlobal('navigator', fakeNavigator);
 
   return {
-    root: App(api, locale) as unknown as TestElement,
+    root: App(api, locale, session) as unknown as TestElement,
     location,
     accessAttempts,
     storage,
@@ -167,6 +174,38 @@ const confirmedUnresolvedReport = ReportSummarySchema.parse({
   updatedAt: '2026-10-27T12:00:00.000Z',
   isDemo: false,
 });
+
+const impactResponse = ImpactSchema.parse({
+  reporter: { created: 1, inProgress: 1, resolved: 0, earnedRp: 20, pendingRp: 15 },
+  cleaner: { submitted: 1, pending: 1, verified: 0, earnedRp: 0, pendingRp: 40 },
+  verification: { acceptedVotes: 1, confirmedReports: 0, earnedRp: 5 },
+  totals: { earnedRp: 25, balanceRp: 20 },
+  impactScore: null,
+  impactScoreState: 'NOT_CONFIGURED',
+  balanceVersion: 2,
+  items: [{
+    report: confirmedUnresolvedReport,
+    roles: ['REPORTER', 'CLEANER', 'VERIFIER'],
+    lastUpdatedAt: '2026-10-27T12:00:00.000Z',
+  }],
+  nextCursor: null,
+});
+
+function authenticatedSession(): FirebaseSession {
+  return {
+    ready: Promise.resolve(),
+    uid: 'resident-1',
+    busy: false,
+    subscribe: () => () => undefined,
+    bootstrap: async () => undefined,
+    getIdToken: async () => 'fixture-token',
+    signInEmail: async () => undefined,
+    signInGoogle: async () => undefined,
+    createAccount: async () => undefined,
+    resetPassword: async () => undefined,
+    signOut: async () => undefined,
+  } as unknown as FirebaseSession;
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -358,6 +397,58 @@ describe('client shell', () => {
     expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe(label);
     expect(panel?.textContent).toContain(message);
     expect(panel?.querySelector('button')?.textContent).toBe('Sign in');
+  });
+
+  it('renders bilingual role-specific Impact and restores it after opening a report', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: ({ path }) => {
+        requests.push(path);
+        const pathname = new URL(path, 'https://iskra.invalid').pathname;
+        if (pathname === '/me/impact') return { status: 200, body: impactResponse };
+        if (pathname === '/reports') {
+          return { status: 200, body: { items: [confirmedUnresolvedReport], nextCursor: null } };
+        }
+        if (pathname === `/reports/${confirmedUnresolvedReport.id}`) {
+          return { status: 200, body: { ...p0Fixtures.publicReport, id: confirmedUnresolvedReport.id } };
+        }
+        return { status: 404, body: { error: {
+          code: 'NOT_FOUND', message: 'Not found.',
+          requestId: '11111111-1111-4111-8111-111111111111', retryable: false,
+        } } };
+      },
+    });
+    const { root, location, dispatchWindowEvent } = createHarness(
+      '/impact', api, 'de', authenticatedSession(),
+    );
+    root.querySelector('.deferred-card')?.querySelector('button')?.dispatch('click');
+
+    await vi.waitFor(() => expect(root.querySelector('.impact-history-link')).not.toBeNull());
+    expect(requests).toContain('/me/impact');
+    expect(root.querySelector('.impact-heading')?.textContent).toBe('Dein Einfluss');
+    expect(root.querySelector('.impact-score-note')?.textContent).toBe('Nicht konfiguriert');
+    expect(root.querySelector('.impact-metric-grid--totals')?.textContent).toContain('25 RP');
+    expect(root.querySelector('.impact-metric-grid--totals')?.textContent).toContain('20 RP');
+    expect(root.querySelector('.impact-role-section')?.textContent).toContain('15 RP');
+    expect(root.querySelector('.impact-history-roles')?.textContent).toContain('Meldende Person');
+    expect(root.querySelector('.impact-history-roles')?.textContent).toContain('Reinigende Person');
+    expect(root.querySelector('.impact-history-roles')?.textContent).toContain('Prüfende Person');
+    expect(root.querySelector('.impact-role-detail')?.textContent).toBe('Stimme angenommen');
+    expect(root.querySelector('.impact-report-status')?.textContent).toBe('Reinigung wird geprüft');
+    expect(root.querySelector('.fixture-banner')?.textContent).toBe(translate('de', 'fixture.banner'));
+
+    const impactPage = root.querySelector('.impact-page')!;
+    impactPage.scrollTop = 164;
+    root.querySelector('.impact-history-link')?.dispatch('click');
+
+    expect(location.pathname).toBe('/map');
+    expect(root.querySelector('.report-sheet-layer')?.hidden).toBe(false);
+
+    location.pathname = '/impact';
+    dispatchWindowEvent('popstate');
+    await vi.waitFor(() => expect(root.querySelector('.impact-history-link')).not.toBeNull());
+    expect(root.querySelector('.impact-page')?.scrollTop).toBe(164);
   });
 
   it('supports arrow, Home and End keyboard navigation while updating browser history', () => {

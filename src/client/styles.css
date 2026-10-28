@@ -827,3 +827,113 @@ button {
     border-radius: 0 0 var(--client-radius-sheet) var(--client-radius-sheet);
   }
 }
+
+.impact-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  overscroll-behavior: contain;
+}
+
+.impact-page h1,
+.impact-page h2,
+.impact-page p {
+  margin: 0;
+}
+
+.impact-page h1 { font-size: 1.35rem; }
+.impact-page h2 { margin-bottom: 10px; font-size: 1rem; }
+.impact-load-status { color: var(--client-color-text-muted); }
+.impact-total-section,
+.impact-role-section,
+.impact-history-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.impact-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.impact-metric-grid--totals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.impact-metric {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 68px;
+  padding: 10px;
+  border: 1px solid var(--client-color-border);
+  border-radius: var(--client-radius-control);
+  background: var(--client-color-surface-muted);
+  gap: 5px;
+}
+
+.impact-metric-label { color: var(--client-color-text-muted); font-size: 0.75rem; line-height: 1.25; }
+.impact-metric-value { font-size: 1.05rem; overflow-wrap: anywhere; }
+.impact-score-note { grid-column: 1 / -1; color: var(--client-color-text-muted); font-size: 0.75rem; }
+.impact-history-list { display: grid; margin: 0; padding: 0; list-style: none; gap: 8px; }
+.impact-history-item { min-width: 0; }
+.impact-history-link {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--client-color-border);
+  border-radius: var(--client-radius-control);
+  background: var(--client-color-surface);
+  text-align: left;
+  cursor: pointer;
+  gap: 7px;
+}
+
+.impact-history-link:hover,
+.impact-history-link:focus-visible { background: var(--client-color-surface-muted); }
+.impact-history-description { font-weight: 650; overflow-wrap: anywhere; }
+.impact-history-meta,
+.impact-history-roles { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.impact-route,
+.impact-report-status,
+.impact-role-pill,
+.impact-role-detail,
+.impact-demo-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--client-color-border);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.impact-history-date,
+.impact-role-detail,
+.impact-demo-label { color: var(--client-color-text-muted); font-size: 0.75rem; }
+.impact-empty-history { padding: 12px 0; color: var(--client-color-text-muted); }
+.impact-retry-button,
+.impact-load-more-button {
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 1px solid var(--client-color-border);
+  border-radius: var(--client-radius-control);
+  background: var(--client-color-surface);
+  cursor: pointer;
+}
+
+.impact-retry-button:focus-visible,
+.impact-load-more-button:focus-visible { outline: 3px solid var(--client-color-focus); outline-offset: 2px; }
+
+@media (min-width: 560px) {
+  .impact-page { padding-right: 22px; padding-left: 22px; }
+  .impact-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

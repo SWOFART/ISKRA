@@ -106,7 +106,7 @@ async function signIn(page: import('@playwright/test').Page): Promise<void> {
   await page.getByLabel('Email', { exact: true }).fill(loginEmail);
   await page.getByLabel('Password', { exact: true }).fill(loginPassword);
   await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.locator('.deferred-card')).toContainText('Your account is connected.');
+  await expect(page.getByRole('heading', { name: 'Your impact', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Map', exact: true }).click();
   await expect(page.locator('.report-button')).toBeVisible();
 }

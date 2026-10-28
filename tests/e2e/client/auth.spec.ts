@@ -120,9 +120,7 @@ test('cancelled camera intent restores guest map and does not leak into a guarde
   await page.getByRole('tab', { name: 'My Impact', exact: true }).click();
   await page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true }).click();
   await completeEmailSignIn(page);
-  await expect(page.locator('.deferred-card')).toContainText(
-    'Your account is connected. The Impact view is still being connected to your activity.',
-  );
+  await expect(page.getByRole('heading', { name: 'Your impact', exact: true })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'My Impact', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('dialog', { name: 'Capture report photos' })).toHaveCount(0);
   expect(await cameraRequestCount(page)).toBe(0);
