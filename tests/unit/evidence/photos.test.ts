@@ -27,6 +27,19 @@ function token(url: string) { return new URL(url).searchParams.get('token')!; }
 afterEach(() => vi.useRealTimers());
 
 describe('private photo capabilities', () => {
+  it('authenticates preview requests and rejects malformed IDs and query extras before SQL', async () => {
+    const { app, query, bucket } = fixture();
+    const env = { FIREBASE_PROJECT_ID: 'iskra-test', PHOTOS: bucket, MEDIA_SIGNING_SECRET: secret };
+    expect((await app.request(`${origin}/api/photos/${id}`, {}, env)).status).toBe(401);
+    for (const path of ['/photos/not-a-uuid', `/photos/${id}?uid=owner`, `/photos/${id}?token=anything`]) {
+      expect((await app.request(origin + '/api' + path, { headers: { Authorization: 'Bearer owner' } }, env)).status).toBe(400);
+    }
+    expect((await app.request(`${origin}/api/photos/${id}`, { headers: { Authorization: 'Bearer owner' } }, {
+      FIREBASE_PROJECT_ID: 'iskra-test', MEDIA_SIGNING_SECRET: secret,
+    })).status).toBe(503);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('creates ordered, five-minute, same-origin links and refreshes them without exposing storage keys', async () => {
     const media = createReportMediaResolver(origin, secret);
     const now = Date.now();

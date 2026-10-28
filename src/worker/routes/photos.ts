@@ -1,16 +1,24 @@
 import { Hono } from 'hono';
 import type { TransactionDatabase } from '../db/client';
-import { optionalAuth, type verifyFirebaseToken } from '../middleware/auth';
+import { optionalAuth, requireAuth, type verifyFirebaseToken } from '../middleware/auth';
 import type { WorkerEnv } from '../middleware/context';
 import { ApiError } from '../middleware/errors';
-import { authorizePhotoRead } from '../services/media';
-import { POLICY } from '../../shared/contracts';
+import { authorizePhotoRead, createOwnerPhotoPreview } from '../services/media';
+import { POLICY, UuidSchema } from '../../shared/contracts';
 
 export function createPhotoRoutes({ database, verify }: {
   database?: TransactionDatabase;
   verify?: typeof verifyFirebaseToken;
 } = {}) {
-  return new Hono<WorkerEnv>().on(['GET', 'HEAD'], '/photos/:id/content', optionalAuth(verify), async (c) => {
+  const routes = new Hono<WorkerEnv>();
+  routes.get('/photos/:id', requireAuth(verify), async (c) => {
+    const id = UuidSchema.safeParse(c.req.param('id'));
+    if (!id.success || new URL(c.req.url).search) throw new ApiError(400, 'INVALID_INPUT', 'Invalid photo lookup.');
+    if (!database || !c.env.PHOTOS) throw new ApiError(503, 'UNAVAILABLE', 'Photo storage is not configured.');
+    return c.json(await createOwnerPhotoPreview(database, id.data.toLowerCase(), c.get('identity')!.uid,
+      new URL(c.req.url).origin, c.env.MEDIA_SIGNING_SECRET));
+  });
+  routes.on(['GET', 'HEAD'], '/photos/:id/content', optionalAuth(verify), async (c) => {
     if (!database || !c.env.PHOTOS) throw new ApiError(503, 'UNAVAILABLE', 'Photo storage is not configured.');
     const tokens = c.req.queries('token');
     if (tokens?.length !== 1 || [...new URL(c.req.url).searchParams.keys()].some((key) => key !== 'token')) {
@@ -41,4 +49,5 @@ export function createPhotoRoutes({ database, verify }: {
       throw new ApiError(503, 'UNAVAILABLE', 'Photo content is temporarily unavailable.');
     }
   });
+  return routes;
 }

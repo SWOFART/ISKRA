@@ -502,6 +502,16 @@ A separate private local workerd invocation also completed the actual federation
 
 Remaining: live deployed upload→Vertex→publication, real ACCEPT/blur/hazard/model-quality cases, owner preview/quotas/private R2/durable cleanup binding and full Green. The production cleanup producer still returns503 pending its existing target handoff; the ten-image adapter probe does not complete that endpoint. Keep #8/#30/#33 and full #19/#32 outcomes open.
 
+## Owner preview-link refresh — issue #29, partial
+
+Authenticated `GET /api/photos/:id` now returns the existing strict `Photo` DTO with its database capture ordinal and a fresh five-minute OWNER capability. It accepts only a UUID and no query fields. SQL selects that Firebase UID's own unattached UPLOADED row if retained under the existing24-hour window or protected by a live unconsumed RUNNING/READY analysis. Missing, foreign, RESERVED, attached and beyond-retention rows share404 NOT_FOUND; guests are rejected before SQL. No object key, listing or resident data enters the response.
+
+The content URL still requires the matching Firebase bearer token on GET/HEAD and rechecks the current SQL row, so forwarding the link does not grant another user access. The client must fetch preview bytes through authenticated requests before rendering a transient local object URL. Published-photo links still come from report detail. A preview cannot make expired analysis publishable, extend retention, reserve a cleanup or award RP. A housekeeping race after link issuance safely returns404 on the later byte request; it never exposes a deleted or foreign row.
+
+No shared schema, migration, dependency, credential, cloud resource or schedule changes. The API addition is C-owned and reuses `PhotoSchema`; it does not claim A's upload/analysis UI is connected. Tests exercise a real PostgreSQL UID/state/retention selection, one-based ordinal mapping, all access-denied cases, successful owner-only byte fetch, link expiry/refresh and row-state revocation. R2 and Firebase identities in these tests are explicit doubles; live private R2 and frontend preview acceptance remain pending. Issue #29 stays open for object-only orphan sweep, controlled logging/scheduling and real storage acceptance.
+
+Local verification for this owner-preview candidate: typecheck,372unit tests,87real-PostgreSQL integration tests plus1intentional skipped probe,build and diff-check pass. The PostgreSQL cases use only disposable loopback schemas; no staging database or cloud object is read or changed by them.
+
 ## Evidence quota — issue #54, partial
 
 `AI_RATE_PER_MINUTE` is the existing Worker setting. Blank keeps five new report analyses and ten finalized photos per account per minute, enforced in SQL so separate Worker isolates share the count. `0` pauses both before storage or the model call. Any other non-numeric value fails closed. This is not a provider budget kill switch and not a per-IP limit. Google Cloud billing caps stay outside the Worker. Issue #54 stays open: the live Green slice and the rest of plan §13 are still unverified.
