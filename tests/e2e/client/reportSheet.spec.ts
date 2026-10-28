@@ -68,9 +68,15 @@ test('opens the report sheet with stage labels and supports keyboard, touch and 
   await expect(sheet).toContainText('Existence: 3/3 threshold');
   await expect(sheet).toContainText('Cleanup verification: 2/3');
   await expect(page.getByRole('button', { name: 'Close report details' })).toBeFocused();
+  await expect(page.locator('.app-header')).toHaveJSProperty('inert', true);
+  await expect(page.locator('.bottom-nav')).toHaveJSProperty('inert', true);
 
   const lastSheetButton = page.locator('.photo-gallery-open').last();
   await lastSheetButton.focus();
+  await page.keyboard.press('Tab');
+  await expect(sheet.getByRole('button', { name: 'English' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(sheet.getByRole('button', { name: 'Deutsch' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Expand report details' })).toBeFocused();
 
@@ -86,6 +92,8 @@ test('opens the report sheet with stage labels and supports keyboard, touch and 
 
   await page.keyboard.press('Escape');
   await expect(sheet).toBeHidden();
+  await expect(page.locator('.app-header')).toHaveJSProperty('inert', false);
+  await expect(page.locator('.bottom-nav')).toHaveJSProperty('inert', false);
   await expect(page.locator(`.report-list-item[data-report-id="${detail.id}"]`)).toBeFocused();
 
   await page.locator(`.report-list-item[data-report-id="${detail.id}"]`).click();

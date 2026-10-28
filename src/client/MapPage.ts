@@ -166,6 +166,8 @@ export function renderMapPage(
   t: Translate,
   locale: SupportedLocale,
   initialState?: MapPageState,
+  setChromeInert?: (inert: boolean) => void,
+  onLocaleChange?: (locale: SupportedLocale) => void,
 ): MapPageView {
   const pageState = initialState ?? createMapPageState();
   const page = makeElement('section', 'map-page');
@@ -305,6 +307,7 @@ export function renderMapPage(
   const reportSheet = renderReportSheet({
     t,
     locale,
+    onLocaleChange: (nextLocale) => onLocaleChange?.(nextLocale),
     onClose: (reportId) => {
       detailLoadGeneration += 1;
       selectedReportId = null;
@@ -323,6 +326,7 @@ export function renderMapPage(
     onVisibilityChange: (open) => {
       mapArea.inert = open;
       listPanel.inert = open;
+      setChromeInert?.(open);
     },
   });
   page.appendChild(reportSheet.element);

@@ -236,7 +236,8 @@ test('preserves map filters, camera selection and expanded cluster when changing
   await expect(page.locator(`.report-list-item[data-report-id="${secondId}"]`))
     .toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByRole('button', { name: 'Deutsch' }).click();
+  await page.getByRole('dialog', { name: 'Report details' })
+    .getByRole('button', { name: 'Deutsch' }).click();
 
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
   await expect(page.locator('.route-filter[data-route="RED"]')).toHaveAttribute('aria-pressed', 'false');

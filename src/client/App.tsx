@@ -266,7 +266,10 @@ export function App(
           notice.textContent = t('map.cameraNotConnected');
           notice.hidden = false;
         }
-      }, api, t, locale, mapPageState);
+      }, api, t, locale, mapPageState, (inert) => {
+        header.inert = inert;
+        tablist.inert = inert;
+      }, setLocale);
       mapPageState = currentMapPage.state;
       appendElements(panel, currentMapPage.element);
     } else if (selectedTab === 'impact') {

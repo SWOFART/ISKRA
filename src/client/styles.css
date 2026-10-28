@@ -401,11 +401,13 @@ button {
 .report-sheet--full { height: 100%; border-radius: 0; }
 .report-sheet-handle { display: grid; place-items: center; touch-action: none; }
 .report-sheet-handle::before { width: 42px; height: 4px; border-radius: 99px; background: var(--client-color-border); content: ''; }
-.report-sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 0 10px; }
+.report-sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 0 10px; flex-wrap: wrap; }
 .report-sheet-heading { margin: 0; font-size: 1rem; }
-.report-sheet-header-actions { display: flex; gap: 8px; }
+.report-sheet-header-actions { display: flex; align-items: center; gap: 8px; }
+.report-sheet-locale { display: flex; gap: 4px; }
 .report-sheet-expand,
 .report-sheet-close,
+.report-sheet-locale-button,
 .report-sheet-retry,
 .photo-gallery-controls button,
 .photo-gallery-retry,
@@ -430,6 +432,8 @@ button {
   outline: 3px solid var(--client-color-focus);
   outline-offset: 2px;
 }
+.report-sheet-locale-button { padding: 0 8px; }
+.report-sheet-locale-button[aria-pressed="true"] { border-color: var(--client-color-focus); background: var(--client-color-surface-muted); font-weight: 700; }
 .report-sheet-message { padding: 12px 0; }
 .report-detail-overview { display: grid; gap: 8px; }
 .report-detail-status,

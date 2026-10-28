@@ -12,6 +12,7 @@ type SheetState = 'closed' | 'partial' | 'full';
 export interface ReportSheetOptions {
   t: Translate;
   locale: SupportedLocale;
+  onLocaleChange(locale: SupportedLocale): void;
   onClose(reportId: string): void;
   onRetry(reportId: string): void;
   refreshPhotos(reportId: string, stage: GalleryStage): Promise<readonly Photo[]>;
@@ -91,10 +92,20 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
   const header = makeElement('header', 'report-sheet-header');
   const heading = makeElement('h2', 'report-sheet-heading', options.t('report.heading'));
   heading.id = 'report-sheet-heading';
+  const localeGroup = makeElement('div', 'report-sheet-locale');
+  localeGroup.setAttribute('role', 'group');
+  localeGroup.setAttribute('aria-label', options.t('header.localeLabel'));
+  for (const [locale, label] of [['en', 'English'], ['de', 'Deutsch']] as const) {
+    const button = makeButton(label, 'report-sheet-locale-button');
+    button.setAttribute('lang', locale);
+    button.setAttribute('aria-pressed', String(locale === options.locale));
+    button.addEventListener('click', () => options.onLocaleChange(locale));
+    localeGroup.appendChild(button);
+  }
   const headerActions = makeElement('div', 'report-sheet-header-actions');
   const expandButton = makeButton(options.t('report.expand'), 'report-sheet-expand');
   const closeButton = makeButton(options.t('report.close'), 'report-sheet-close');
-  appendElements(headerActions, expandButton, closeButton);
+  appendElements(headerActions, localeGroup, expandButton, closeButton);
   appendElements(header, heading, headerActions);
 
   const content = makeElement('div', 'report-sheet-content');
