@@ -423,7 +423,7 @@ describe('PostgreSQL report voting', () => {
         [selfCleaner, report.id],
       );
       expect(roleLedger.rows.map(({ kind, delta }) => [kind, delta])).toEqual([
-        ['CLEANUP', 40], ['REPORT_FINAL', 15], ['REPORT_INITIAL', 5],
+        ['REPORT_INITIAL', 5], ['REPORT_FINAL', 15], ['CLEANUP', 40],
       ]);
       expect(new Set(roleLedger.rows.map((row) => row.source_ref)).size).toBe(3);
       const state = await pool.query<{ rp_balance: number; account_version: number; report_version: number; cleanup_status: string; cleanup_version: number }>(
@@ -473,7 +473,7 @@ describe('PostgreSQL report voting', () => {
         [reporter, report.id],
       );
       expect(reporterLedger.rows.map(({ kind, delta }) => [kind, delta])).toEqual([
-        ['REPORT_FINAL', 15], ['REPORT_INITIAL', 5], ['VOTE', 5],
+        ['REPORT_INITIAL', 5], ['REPORT_FINAL', 15], ['VOTE', 5],
       ]);
       expect(new Set(reporterLedger.rows.map((row) => row.source_ref)).size).toBe(3);
       const accountVersions = await pool.query<{ reporter_balance: number; reporter_version: number; cleaner_balance: number; cleaner_version: number }>(
