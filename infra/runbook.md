@@ -515,3 +515,13 @@ Local verification for this owner-preview candidate: typecheck,372unit tests,87r
 ## Evidence quota — issue #54, partial
 
 `AI_RATE_PER_MINUTE` is the existing Worker setting. Blank keeps five new report analyses and ten finalized photos per account per minute, enforced in SQL so separate Worker isolates share the count. `0` pauses both before storage or the model call. Any other non-numeric value fails closed. This is not a provider budget kill switch and not a per-IP limit. Google Cloud billing caps stay outside the Worker. Issue #54 stays open: the live Green slice and the rest of plan §13 are still unverified.
+
+## Public-bundle credential gate — issue #54, partial
+
+The existing Google-configured application deploy now checks `dist/client` immediately before invoking Wrangler. It refuses missing builds, symlinks, known deployment/runtime/migration credential values, their JSON-escaped forms, the Vertex assertion private key extracted from `VERTEX_AUTH_JSON`, and PEM private-key markers in any public asset, including source maps and binary files. Failures name no credential or matched content. The check reads values only from the existing private Google-sourced configuration; no GitHub secret, separate store, new option or dependency is introduced.
+
+Public `VITE_FIREBASE_API_KEY` and `VITE_MAPTILER_KEY` values remain permitted because they are intended browser configuration. `GEMINI_MODEL_ID`, project identifiers and Hyperdrive IDs are not treated as credentials. The isolated deployment-check Worker keeps its existing path; this gate applies to the product's public assets only. It checks literal/JSON-escaped known values and private-key markers, not every possible encoding or an exhaustive secret-discovery scan. It does not inspect Worker runtime secrets as if they were public assets.
+
+Regression tests deliberately write server credentials/private keys to a temporary public source map, verify rejection without echoing the value, permit intentional public keys, reject missing/symlinked assets, and verify a failing gate prevents Wrangler from running. The existing PR configuration-test step runs these tests without cloud credentials; actual deployment checks the Google-sourced values before upload. No workflow, cloud value, runtime policy, quota or billing setting is changed by this PR.
+
+This completes one no-secret-build check from plan section13, not the whole task8.6. Provider/storage outage evidence, request-log redaction, cross-user access, rate behavior, the genuine Green slice and physical-device checks remain separate acceptance work. Keep #54 open; this change neither activates media nor claims production security certification.

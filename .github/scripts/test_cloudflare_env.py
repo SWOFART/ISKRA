@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from cloudflare_env import (
     SMOKE_MAX_ATTEMPTS, deployment_summary, main, validate_config,
-    validate_health, write_private_json, write_hyperdrive_config,
+    validate_health, write_private_json, write_hyperdrive_config, assert_public_assets,
 )
 
 
@@ -212,12 +212,55 @@ class CloudConfigurationTests(unittest.TestCase):
             (Path(directory) / "iskra-environment.json").write_text(self.valid(HYPERDRIVE_ID="a" * 32))
             env = {"RUNNER_TEMP": directory, "GITHUB_SHA": "release-sha"}
             with patch.dict(os.environ, env), patch.object(sys, "argv", ["cloudflare_env.py", "deploy", "staging", "application"]):
-                with patch("cloudflare_env.subprocess.run") as deploy:
+                with patch("cloudflare_env.assert_public_assets") as scan, patch("cloudflare_env.subprocess.run") as deploy:
                     main()
+            scan.assert_called_once_with(Path("dist/client"), json.loads(self.valid(HYPERDRIVE_ID="a" * 32)))
             command = deploy.call_args.args[0]
             self.assertIn("--config", command)
             self.assertEqual(command[command.index("--config") + 1], str(Path(directory) / "iskra-wrangler.json"))
             self.assertNotIn("HYPERDRIVE_ID", deploy.call_args.kwargs["env"])
+
+    def test_known_server_credentials_and_signing_keys_cannot_enter_public_assets(self):
+        values = {"CLOUDFLARE_API_TOKEN": "private-deploy-token-for-test",
+                  "MEDIA_SIGNING_SECRET": "private-media-key-for-test",
+                  "MIGRATION_DATABASE_URL": "postgres://private:password@private-db/iskra",
+                  "VERTEX_AUTH_JSON": json.dumps({"privateKey": "private-worker-signing-key\nsecond-line"})}
+        leaked = [*values.values(), "private-worker-signing-key\nsecond-line",
+                  json.dumps("private-worker-signing-key\nsecond-line")[1:-1],
+                  "-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----"]
+        for secret in leaked:
+            with self.subTest(case=len(secret)), tempfile.TemporaryDirectory() as folder:
+                directory = Path(folder)
+                (directory / "index.html").write_text("<main>ISKRA</main>")
+                # Covers binary/static assets and source maps, not only JavaScript.
+                (directory / "app.js.map").write_bytes(b"prefix:" + secret.encode() + b":suffix")
+                with self.assertRaisesRegex(ValueError, "server credential") as error:
+                    assert_public_assets(directory, values)
+                self.assertNotIn(secret, str(error.exception))
+
+    def test_browser_keys_are_public_but_missing_assets_and_symlinks_fail_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            with self.assertRaisesRegex(ValueError, "Build the application"):
+                assert_public_assets(directory, {})
+            (directory / "index.html").write_text("public-firebase-key public-map-key")
+            assert_public_assets(directory, {"VITE_FIREBASE_API_KEY": "public-firebase-key",
+                                             "VITE_MAPTILER_KEY": "public-map-key"})
+            (directory / "linked.js").symlink_to(directory / "index.html")
+            with self.assertRaisesRegex(ValueError, "symbolic links"):
+                assert_public_assets(directory, {})
+
+    def test_credential_scan_failure_prevents_wrangler_from_running(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "iskra-environment.json").write_text(self.valid())
+            with patch.dict(os.environ, {"RUNNER_TEMP": directory}), patch.object(
+                sys, "argv", ["cloudflare_env.py", "deploy", "staging", "application"],
+            ), patch("cloudflare_env.assert_public_assets", side_effect=ValueError("unsafe assets")), patch(
+                "cloudflare_env.subprocess.run",
+            ) as deploy:
+                with self.assertRaisesRegex(ValueError, "unsafe assets"):
+                    main()
+                deploy.assert_not_called()
 
     def test_preparation_selects_the_infrastructure_check_origin(self):
         with tempfile.TemporaryDirectory() as directory:
