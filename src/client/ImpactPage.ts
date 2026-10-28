@@ -62,6 +62,20 @@ function makeButton(label: string, className: string): HTMLButtonElement {
   return button;
 }
 
+function sameNotifications(
+  left: readonly ImpactNotification[],
+  right: readonly ImpactNotification[],
+): boolean {
+  return left.length === right.length && left.every((notification, index) => {
+    const next = right[index];
+    return notification.id === next.id
+      && notification.kind === next.kind
+      && notification.message === next.message
+      && notification.reportId === next.reportId
+      && notification.readAt === next.readAt;
+  });
+}
+
 function append(parent: HTMLElement, ...children: HTMLElement[]): void {
   for (const child of children) parent.appendChild(child);
 }
@@ -172,6 +186,18 @@ export function renderImpactPage(
   }
 
   function renderNotifications(): void {
+    const activeElement = document.activeElement;
+    const focusedButton = activeElement?.tagName === 'BUTTON'
+      && notificationsList.contains(activeElement)
+      ? activeElement as HTMLButtonElement
+      : null;
+    const focusedNotificationId = focusedButton
+      ?.closest<HTMLElement>('.impact-notification-item')?.dataset.notificationId;
+    const focusedAction = focusedButton?.classList.contains('impact-notification-mark-read')
+      ? '.impact-notification-mark-read'
+      : focusedButton?.classList.contains('impact-notification-open-report')
+        ? '.impact-notification-open-report'
+        : undefined;
     notificationsList.replaceChildren();
     refreshNotificationsButton.hidden = notificationState !== 'error';
     refreshNotificationsButton.disabled = false;
@@ -211,12 +237,21 @@ export function renderImpactPage(
         const actionStatus = makeElement('span', 'impact-notification-action-status');
         actionStatus.setAttribute('role', 'status');
         markRead.addEventListener('click', () => {
+          const restoreFocus = document.activeElement === markRead;
           markRead.disabled = true;
           actionStatus.textContent = '';
           void options.onMarkNotificationRead(notification.id).then((marked) => {
             if (active && !marked) {
               markRead.disabled = false;
               actionStatus.textContent = t('impact.notificationReadFailed');
+              if (restoreFocus && (document.activeElement === document.body || !page.contains(document.activeElement))) {
+                markRead.focus();
+              }
+            } else if (active && restoreFocus
+              && (document.activeElement === document.body || !page.contains(document.activeElement))) {
+              const item = Array.from(notificationsList.querySelectorAll<HTMLElement>('.impact-notification-item'))
+                .find((candidate) => candidate.dataset.notificationId === notification.id);
+              item?.querySelector<HTMLButtonElement>('.impact-notification-open-report')?.focus();
             }
           });
         });
@@ -225,6 +260,15 @@ export function renderImpactPage(
 
       append(item, message, readState, actions);
       notificationsList.appendChild(item);
+    }
+
+    if (focusedNotificationId && focusedAction) {
+      const item = Array.from(notificationsList.querySelectorAll<HTMLElement>('.impact-notification-item'))
+        .find((candidate) => candidate.dataset.notificationId === focusedNotificationId);
+      const target = item?.querySelector<HTMLButtonElement>(focusedAction)
+        ?? item?.querySelector<HTMLButtonElement>('.impact-notification-open-report')
+        ?? notificationsList.querySelector<HTMLButtonElement>('.impact-notification-open-report');
+      target?.focus();
     }
   }
 
@@ -375,9 +419,10 @@ export function renderImpactPage(
     element: page,
     get scrollTop() { return page.scrollTop; },
     setNotifications(items, state) {
+      const changed = notificationState !== state || !sameNotifications(notificationItems, items);
       notificationItems = items;
       notificationState = state;
-      if (active) renderNotifications();
+      if (active && changed) renderNotifications();
     },
     dispose() {
       active = false;

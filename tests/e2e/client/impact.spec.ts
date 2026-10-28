@@ -184,8 +184,15 @@ test('shows quiet localized resolution notifications once, marks them read and r
 
   const existenceCard = page.locator(`.impact-notification-item[data-notification-id="${existenceId}"]`);
   await expect(existenceCard).toContainText('Residents confirmed your report.');
-  await existenceCard.getByRole('button', { name: 'Mark as read' }).click();
+  const markRead = existenceCard.getByRole('button', { name: 'Mark as read' });
+  await markRead.focus();
+  const readsBeforeFocusRefresh = notificationReads;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => notificationReads).toBe(readsBeforeFocusRefresh + 1);
+  await expect(markRead).toBeFocused();
+  await markRead.click();
   await expect(existenceCard).toContainText('Read');
+  await expect(existenceCard.getByRole('button', { name: 'Open report' })).toBeFocused();
 
   notifications.unshift({
     id: resolutionId,
