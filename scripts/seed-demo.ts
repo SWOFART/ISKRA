@@ -133,7 +133,7 @@ async function main() {
     port: target.port,
     database: 'iskra_test',
     user: 'iskra_test',
-    password: target.password || 'iskra-test-only',
+    password: target.password,
     ssl: false,
     options: '-c search_path=pg_catalog',
     application_name: 'iskra-demo-seed-admin',
