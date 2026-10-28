@@ -134,6 +134,7 @@ test('reveals every report in a cluster, including reports at the same coordinat
   await expect(clusterDetails.locator('.map-cluster-report')).toHaveCount(2);
   await expect(clusterDetails).toContainText('Litter beside the path.');
   await expect(clusterDetails).toContainText('Waste near the same entrance.');
+  await page.getByRole('button', { name: 'Close report details' }).click();
   await clusterDetails.locator('.map-cluster-report').nth(1).click();
   await expect(page.locator(`.report-list-item[data-report-id="${secondId}"]`))
     .toHaveAttribute('aria-pressed', 'true');
@@ -212,7 +213,8 @@ test('preserves map filters, camera selection and expanded cluster when changing
   const reports = [first, { ...first, id: secondId, description: 'Waste near the same entrance.' }];
   const requestUrls: string[] = [];
   await page.route('**/api/reports**', async (route) => {
-    requestUrls.push(route.request().url());
+    const requestUrl = new URL(route.request().url());
+    if (requestUrl.pathname === '/api/reports') requestUrls.push(requestUrl.toString());
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -229,11 +231,13 @@ test('preserves map filters, camera selection and expanded cluster when changing
   await page.locator('.map-marker--cluster').click();
   const clusterDetails = page.getByRole('region', { name: 'Reports in selected map group' });
   await expect(clusterDetails).toBeVisible();
+  await page.getByRole('button', { name: 'Close report details' }).click();
   await clusterDetails.locator('.map-cluster-report').nth(1).click();
   await expect(page.locator(`.report-list-item[data-report-id="${secondId}"]`))
     .toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByRole('button', { name: 'Deutsch' }).click();
+  await page.getByRole('dialog', { name: 'Report details' })
+    .getByRole('button', { name: 'Deutsch' }).click();
 
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
   await expect(page.locator('.route-filter[data-route="RED"]')).toHaveAttribute('aria-pressed', 'false');

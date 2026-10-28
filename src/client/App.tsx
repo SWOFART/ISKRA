@@ -2,7 +2,15 @@ import { clientDesign, type SupportedLocale } from './designTokens';
 import { createClientApi } from './api';
 import type { FirebaseSession } from './auth';
 import { renderAuthPanel } from './auth-panel';
-import { errorMessageKey, storeLocale, translate, type MessageKey, type MessageValues } from './i18n';
+import {
+  errorMessageKey,
+  localeFromBrowserLanguages,
+  readStoredLocale,
+  storeLocale,
+  translate,
+  type MessageKey,
+  type MessageValues,
+} from './i18n';
 import { renderMapPage, type MapPageState, type MapPageView } from './MapPage';
 
 type ClientApi = ReturnType<typeof createClientApi>;
@@ -86,10 +94,14 @@ function renderDeferredPanel(
 
 export function App(
   api: ClientApi = createClientApi({ mode: import.meta.env.DEV ? 'fixture' : 'live' }),
-  initialLocale: SupportedLocale = 'en',
+  initialLocale: SupportedLocale = readStoredLocale()
+    ?? localeFromBrowserLanguages(typeof navigator === 'undefined'
+      ? []
+      : navigator.languages ?? [navigator.language]),
   session?: FirebaseSession,
 ): HTMLElement {
   let locale = initialLocale;
+  if (typeof document !== 'undefined') document.documentElement.lang = locale;
   const t: Translate = (key, values) => translate(locale, key, values);
   let authOpen = false;
   let authIntent: 'report' | TabId | null = null;
@@ -97,8 +109,13 @@ export function App(
   let authPanel: ReturnType<typeof renderAuthPanel> | undefined;
 
   const shell = makeElement('div', 'app-shell');
+  const skipLink = makeElement('a', 'skip-link', t('nav.skipToContent'));
+  skipLink.href = '#main-content';
+  skipLink.addEventListener('click', () => { window.location.hash = 'main-content'; });
   const header = makeElement('header', 'app-header');
   const main = makeElement('main', 'app-main');
+  main.id = 'main-content';
+  main.tabIndex = -1;
   const tablist = makeElement('nav', 'bottom-nav');
   tablist.setAttribute('role', 'tablist');
 
@@ -201,6 +218,7 @@ export function App(
       makeElement('span', 'header-caption', t('header.caption')),
       controls,
     );
+    skipLink.textContent = t('nav.skipToContent');
 
     tabs = new Map(tabOrder.map((tabId) => [tabId, createTab(tabId)]));
     tablist.setAttribute('aria-label', t('nav.main'));
@@ -261,12 +279,19 @@ export function App(
     } else if (selectedTab === 'map') {
       currentMapPage = renderMapPage(() => {
         if (session && (!session.uid || session.uid !== accountUid)) { openSignIn('report'); return; }
+        if (session?.uid && session.uid === accountUid) {
+          currentMapPage?.openCapture('report');
+          return;
+        }
         const notice = panel.querySelector<HTMLElement>('.map-notice');
         if (notice) {
           notice.textContent = t('map.cameraNotConnected');
           notice.hidden = false;
         }
-      }, api, t, locale, mapPageState);
+      }, api, t, locale, mapPageState, (inert) => {
+        header.inert = inert;
+        tablist.inert = inert;
+      }, setLocale);
       mapPageState = currentMapPage.state;
       appendElements(panel, currentMapPage.element);
     } else if (selectedTab === 'impact') {
@@ -311,7 +336,7 @@ export function App(
     activateTab(tabFromPath(window.location.pathname), false);
   });
 
-  appendElements(shell, header, main, tablist);
+  appendElements(shell, skipLink, header, main, tablist);
   renderChrome();
   activateTab(selectedTab, false);
   session?.subscribe(renderChrome);
