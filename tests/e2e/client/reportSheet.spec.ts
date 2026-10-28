@@ -103,6 +103,26 @@ test('opens the report sheet with stage labels and supports keyboard, touch and 
   await expect(sheet).toBeHidden();
 });
 
+test('keeps the selected report open and its authored description unchanged when switching locale', async ({ page }) => {
+  const detail = makeReportDetail();
+  await stubReportApi(page, () => detail);
+  await page.goto('/map');
+  await page.locator('.map-marker').click();
+
+  const sheet = page.getByRole('dialog', { name: 'Report details' });
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText('Cleanup verification: 2/3');
+  const authoredDescription = await sheet.locator('.report-detail-description').innerText();
+
+  await sheet.getByRole('button', { name: 'Deutsch' }).click();
+
+  const germanSheet = page.getByRole('dialog', { name: 'Meldungsdetails' });
+  await expect(germanSheet).toBeVisible();
+  await expect(germanSheet).toContainText('Reinigungsprüfung: 2/3');
+  await expect(germanSheet.locator('.report-detail-description')).toHaveText(authoredDescription);
+  await expect(page.locator('html')).toHaveAttribute('lang', 'de');
+});
+
 test('keeps one- and five-photo galleries independent with swipe and full-screen navigation', async ({ page }) => {
   const expiry = new Date(Date.now() + 60_000).toISOString();
   const detail = makeReportDetail(photos('before', 5, expiry), photos('after', 1, expiry));
