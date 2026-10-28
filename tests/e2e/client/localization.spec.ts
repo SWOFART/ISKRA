@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../fixtures';
 
 test('switches to German, persists the choice and keeps the selected tab', async ({ page }) => {
   await page.goto('/impact');

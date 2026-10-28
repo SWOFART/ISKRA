@@ -20,6 +20,7 @@
     "hono": "4.13.14",
     "jose": "6.2.13",
     "jpeg-js": "0.4.4",
+    "maplibre-gl": "6.16.0",
     "pg": "8.23.1"
   },
   "devDependencies": {

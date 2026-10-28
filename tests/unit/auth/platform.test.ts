@@ -35,7 +35,12 @@ describe('Worker API boundary', () => {
       const response = await app.request(path, {}, bindings);
       expect(response.status).toBe(200);
       expect(new URL(fetchAssets.mock.calls.at(-1)![0].url).pathname).toBe(path);
-      expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'self'");
+      const policy = response.headers.get('Content-Security-Policy') ?? '';
+      expect(policy).toContain("default-src 'self'");
+      expect(policy).toContain("connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://api.maptiler.com");
+      expect(policy).toContain("img-src 'self' data: blob: https://api.maptiler.com");
+      expect(policy).toContain("worker-src 'self'");
+      expect(policy).not.toContain("unsafe-inline");
     }
     for (const path of ['/api', '/api/unknown']) {
       const response = await app.request(path, {}, bindings);

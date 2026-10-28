@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../fixtures';
 
 test('email sign-in failure and cancellation keep guest browsing usable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
