@@ -3,12 +3,13 @@ import {
 } from '../../shared/contracts';
 import type { Infer } from '../../shared/schema';
 import { ApiError } from '../middleware/errors';
+import { importPKCS8, SignJWT } from 'jose';
 
 export type ReportAssessment = Infer<typeof ReportAssessmentSchema>;
 export type CleanupAssessment = Infer<typeof CleanupAssessmentSchema>;
 type Locale = Infer<typeof LocaleSchema>;
 
-export type GeminiConfig = { apiKey: string; modelId: string };
+export type GeminiConfig = { authJson: string; modelId: string };
 type ImageBytes = Uint8Array;
 
 type GeminiPart = { text: string } | { inlineData: { mimeType: 'image/jpeg'; data: string } };
@@ -18,6 +19,11 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024;
 const MAX_OUTPUT_TOKENS = 1024;
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const STS_URL = 'https://sts.googleapis.com/v1/token';
+type VertexIdentity = {
+  projectId: string; issuer: string; subject: string; audience: string; environment: string;
+  serviceAccountEmail: string; privateKey: string; keyId: string;
+};
 
 const reportOutputSchema: GeminiJsonSchema = {
   oneOf: [
@@ -145,11 +151,67 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function validateGeminiConfig(config: GeminiConfig) {
-  if (!config || typeof config.apiKey !== 'string' || !config.apiKey
-    || config.apiKey !== config.apiKey.trim() || /[\r\n]/.test(config.apiKey)
-    || typeof config.modelId !== 'string' || !modelIdPattern.test(config.modelId)) {
-    unavailable();
+  if (!config || typeof config.authJson !== 'string' || config.authJson.length > 16_384
+    || typeof config.modelId !== 'string' || !modelIdPattern.test(config.modelId)) unavailable();
+  let identity: unknown;
+  try { identity = JSON.parse(config.authJson); } catch { return unavailable(); }
+  if (!isRecord(identity) || typeof identity.projectId !== 'string'
+    || !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(identity.projectId)
+    || typeof identity.serviceAccountEmail !== 'string'
+    || !identity.serviceAccountEmail.endsWith('@' + identity.projectId + '.iam.gserviceaccount.com')
+    || !/^[a-z][a-z0-9-]+@/.test(identity.serviceAccountEmail)
+    || typeof identity.audience !== 'string'
+    || !/^\/\/iam\.googleapis\.com\/projects\/[0-9]+\/locations\/global\/workloadIdentityPools\/[a-z0-9-]+\/providers\/[a-z0-9-]+$/.test(identity.audience)
+    || typeof identity.issuer !== 'string' || !/^https:\/\/[a-z0-9.-]+$/.test(identity.issuer)
+    || typeof identity.subject !== 'string' || !/^[a-zA-Z0-9:_-]{1,127}$/.test(identity.subject)
+    || !['staging', 'production'].includes(String(identity.environment))
+    || typeof identity.keyId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(identity.keyId)
+    || typeof identity.privateKey !== 'string' || !identity.privateKey.startsWith('-----BEGIN PRIVATE KEY-----\n')
+    || !identity.privateKey.trimEnd().endsWith('-----END PRIVATE KEY-----')) unavailable();
+  return identity as VertexIdentity;
+}
+
+async function authResponse(response: Response) {
+  if (!response.ok) { try { await response.body?.cancel(); } catch {} return unavailable(); }
+  try {
+    const value: unknown = JSON.parse(await readProviderText(response));
+    if (isRecord(value)) return value;
+  } catch (error) {
+    if (isRecord(error) && ['AbortError', 'TimeoutError'].includes(String(error.name))) timedOut();
   }
+  return unavailable();
+}
+
+async function vertexToken(identity: VertexIdentity, fetcher: typeof fetch, signal: AbortSignal) {
+  const assertion = await new SignJWT({ environment: identity.environment })
+    .setProtectedHeader({ alg: 'RS256', typ: 'JWT', kid: identity.keyId })
+    .setIssuer(identity.issuer).setSubject(identity.subject).setAudience(identity.audience)
+    .setIssuedAt().setExpirationTime('5m').sign(await importPKCS8(identity.privateKey, 'RS256'));
+  const federated = await authResponse(await fetcher(STS_URL, {
+    method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ audience: identity.audience,
+      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+      scope: 'https://www.googleapis.com/auth/cloud-platform',
+      subject_token_type: 'urn:ietf:params:oauth:token-type:jwt', subject_token: assertion }).toString(),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
+  }));
+  if (federated.token_type !== 'Bearer' || typeof federated.access_token !== 'string'
+    || !/^[A-Za-z0-9._~+/=-]{20,4096}$/.test(federated.access_token)) unavailable();
+  const token = await authResponse(await fetcher(
+    'https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/'
+      + encodeURIComponent(identity.serviceAccountEmail) + ':generateAccessToken', {
+      method: 'POST', redirect: 'manual',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + federated.access_token },
+      body: JSON.stringify({ scope: ['https://www.googleapis.com/auth/cloud-platform'], lifetime: '900s' }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
+    },
+  ));
+  if (typeof token.accessToken !== 'string' || !/^[A-Za-z0-9._~+/=-]{20,4096}$/.test(token.accessToken)
+    || typeof token.expireTime !== 'string' || !Number.isFinite(Date.parse(token.expireTime))
+    || Date.parse(token.expireTime) <= Date.now()
+    || Date.parse(token.expireTime) > Date.now() + 930_000) unavailable();
+  return token.accessToken;
 }
 
 function validateImages(images: readonly ImageBytes[]) {
@@ -254,15 +316,18 @@ async function generate<T>(
   assessmentSchema: { safeParse(value: unknown): { success: true; data: T } | { success: false } },
   fetcher: typeof fetch,
 ): Promise<T> {
-  validateGeminiConfig(config);
+  const account = validateGeminiConfig(config);
   let response: Response;
   try {
+    const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const token = await vertexToken(account, fetcher, signal);
     response = await fetcher(
-      'https://generativelanguage.googleapis.com/v1beta/models/'
+      'https://aiplatform.googleapis.com/v1/projects/' + encodeURIComponent(account.projectId)
+        + '/locations/global/publishers/google/models/'
         + encodeURIComponent(config.modelId) + ':generateContent',
       {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-goog-api-key': config.apiKey },
+        method: 'POST', redirect: 'manual',
+        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + token },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: instruction }] },
           contents: [{ role: 'user', parts }],
@@ -271,7 +336,7 @@ async function generate<T>(
             responseMimeType: 'application/json', responseJsonSchema: outputSchema,
           },
         }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal,
       },
     );
   } catch (error) {
