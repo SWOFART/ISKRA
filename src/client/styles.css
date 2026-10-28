@@ -141,15 +141,53 @@ button {
   top: 20px;
   right: 18px;
   gap: 9px;
+  max-width: min(450px, calc(100% - 36px));
+  flex-wrap: wrap;
   padding: 11px 14px;
   border-radius: var(--client-radius-pill);
   color: var(--client-color-text-muted);
   font-size: 0.72rem;
 }
 
+.map-status-message {
+  min-width: 0;
+}
+
+.retry-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--client-radius-pill);
+  background: var(--client-color-brand);
+  color: var(--client-color-brand-text);
+  font-size: 0.72rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.fixture-banner {
+  position: absolute;
+  z-index: 1;
+  top: 82px;
+  right: 18px;
+  left: 18px;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 11px 15px;
+  border: 1px solid #765800;
+  border-radius: var(--client-radius-control);
+  background: #fff3c7;
+  color: #302400;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: 0 6px 24px rgb(22 53 43 / 10%);
+}
+
 @media (max-width: 380px) {
   .map-status {
-    top: 98px;
+    top: 146px;
     right: auto;
     left: 18px;
   }
@@ -183,6 +221,7 @@ button {
 .report-button:focus-visible,
 .nav-tab:focus-visible,
 .secondary-button:focus-visible,
+.retry-button:focus-visible,
 .brand:focus-visible {
   outline: 3px solid var(--client-color-focus);
   outline-offset: 3px;

@@ -30,6 +30,14 @@ for (const [path, selected] of [
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.route(
+      (url) => new URL(url).pathname === '/api/reports',
+      (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], nextCursor: null }),
+      }),
+    );
     const response = await page.goto(path);
     expect(response?.status()).toBe(200);
     expect(response?.headers()['content-type']).toContain('text/html');
@@ -43,6 +51,24 @@ for (const [path, selected] of [
   });
 }
 
+test('renders retryable Worker report failures and retries only after user action', async ({ page }) => {
+  const isReportResponse = (response: { url(): string }) => new URL(response.url()).pathname === '/api/reports';
+  const firstResponse = page.waitForResponse(isReportResponse);
+  await page.goto('/');
+
+  expect((await firstResponse).status()).toBe(503);
+  await expect(page.locator('.map-status')).toContainText('This domain endpoint is not integrated yet.');
+  const retryButton = page.getByRole('button', { name: 'Retry loading reports' });
+  await expect(retryButton).toBeVisible();
+  await expect(page.locator('.fixture-banner')).toBeHidden();
+
+  const retryResponse = page.waitForResponse(isReportResponse);
+  await retryButton.click();
+  expect((await retryResponse).status()).toBe(503);
+  await expect(page.locator('.map-status')).toContainText('This domain endpoint is not integrated yet.');
+  await expect(retryButton).toBeVisible();
+});
+
 test('mobile navigation, keyboard and browser Back work without requesting camera or location', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => {
@@ -55,7 +81,7 @@ test('mobile navigation, keyboard and browser Back work without requesting camer
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
   await page.getByRole('button', { name: 'Start a litter report' }).click();
-  await expect(page.getByRole('status')).toContainText('Camera reporting is not connected yet');
+  await expect(page.locator('.map-notice')).toContainText('Camera reporting is not connected yet');
   await page.getByRole('tab', { name: 'My Impact', exact: true }).click();
   await expect(page).toHaveURL(/\/impact$/);
   await page.getByRole('tab', { name: 'My Impact', exact: true }).press('ArrowRight');
