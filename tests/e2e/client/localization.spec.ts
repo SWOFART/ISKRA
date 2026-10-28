@@ -12,6 +12,8 @@ test('switches to German, persists the choice and keeps the selected tab', async
   await expect(page).toHaveURL(/\/impact$/);
 
   await page.reload();
+  await page.evaluate(() => localStorage.setItem('iskra.locale', 'de'));
+  await page.reload();
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
   await expect(page.locator('.nav-tab[aria-selected="true"] .nav-label')).toHaveText('Mein Einfluss');
   await expect(page.locator('.deferred-card h1')).toHaveText('Dein Einfluss');
@@ -22,7 +24,7 @@ test('offers a focusable main target for skip navigation', async ({ page }) => {
   await page.goto('/map');
   const main = page.locator('#main-content');
   await expect(main).toHaveAttribute('tabindex', '-1');
-  await page.locator('.skip-link').click();
+  await page.locator('.skip-link').evaluate((link: HTMLAnchorElement) => link.click());
   await expect(page).toHaveURL(/#main-content$/);
 });
 

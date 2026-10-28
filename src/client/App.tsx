@@ -111,6 +111,7 @@ export function App(
   const shell = makeElement('div', 'app-shell');
   const skipLink = makeElement('a', 'skip-link', t('nav.skipToContent'));
   skipLink.href = '#main-content';
+  skipLink.addEventListener('click', () => { window.location.hash = 'main-content'; });
   const header = makeElement('header', 'app-header');
   const main = makeElement('main', 'app-main');
   main.id = 'main-content';
