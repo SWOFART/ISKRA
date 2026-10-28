@@ -150,6 +150,15 @@ describe('PostgreSQL resident Impact projection', () => {
       await credit(pool, 'impact-resident', 'REPORT_FINAL', selfCleaned, 15);
       await credit(pool, 'impact-resident', 'CLEANUP', selfCleaned, 40);
 
+      const app = createApp(pool);
+      const selfCleanImpact = ImpactSchema.parse(await (await getImpact(app)).json());
+      expect(selfCleanImpact.reporter.earnedRp).toBe(20);
+      expect(selfCleanImpact.cleaner.earnedRp).toBe(40);
+      expect(selfCleanImpact.totals.earnedRp).toBe(60);
+      expect(selfCleanImpact.items.filter((item) => item.report.id === selfCleaned)).toHaveLength(1);
+      expect(selfCleanImpact.items.find((item) => item.report.id === selfCleaned)?.roles)
+        .toEqual(['CLEANER', 'REPORTER']);
+
       const reporterInProgress = await createReport(pool, 'impact-resident');
       await credit(pool, 'impact-resident', 'REPORT_INITIAL', reporterInProgress, 5);
 
@@ -159,7 +168,6 @@ describe('PostgreSQL resident Impact projection', () => {
       await vote(pool, twoStageYesReport, 'impact-resident', 'EXISTENCE', 'YES');
       await vote(pool, twoStageYesReport, 'impact-resident', 'RESOLUTION', 'YES');
 
-      const app = createApp(pool);
       const afterTwoYes = ImpactSchema.parse(await (await getImpact(app)).json());
       expect(afterTwoYes.verification).toEqual({ acceptedVotes: 2, confirmedReports: 1, earnedRp: 10 });
 
@@ -182,10 +190,10 @@ describe('PostgreSQL resident Impact projection', () => {
       expect(response.headers.get('Cache-Control')).toBe('no-store');
       const body = ImpactSchema.parse(await response.json());
 
-      expect(body.reporter).toEqual({ created: 2, inProgress: 1, resolved: 1, earnedRp: 20, pendingRp: 15 });
+      expect(body.reporter).toEqual({ created: 2, inProgress: 1, resolved: 1, earnedRp: 25, pendingRp: 15 });
       expect(body.cleaner).toEqual({ submitted: 2, pending: 1, verified: 1, earnedRp: 40, pendingRp: 40 });
       expect(body.verification).toEqual({ acceptedVotes: 3, confirmedReports: 1, earnedRp: 15 });
-      expect(body.totals).toEqual({ earnedRp: 75, balanceRp: 35 });
+      expect(body.totals).toEqual({ earnedRp: 80, balanceRp: 35 });
       expect(body.balanceVersion).toBe(9);
       expect(body.impactScore).toBeNull();
       expect(body.impactScoreState).toBe('NOT_CONFIGURED');
@@ -202,7 +210,7 @@ describe('PostgreSQL resident Impact projection', () => {
       // A later balance debit changes spendable RP, not the immutable credit history.
       await pool.query('UPDATE users SET rp_balance = 12, version = 10 WHERE id = $1', ['impact-resident']);
       const afterRedemption = ImpactSchema.parse(await (await getImpact(app)).json());
-      expect(afterRedemption.totals).toEqual({ earnedRp: 75, balanceRp: 12 });
+      expect(afterRedemption.totals).toEqual({ earnedRp: 80, balanceRp: 12 });
       expect(afterRedemption.verification).toEqual({ acceptedVotes: 3, confirmedReports: 1, earnedRp: 15 });
     }));
 
