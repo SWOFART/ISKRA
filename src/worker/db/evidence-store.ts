@@ -85,7 +85,7 @@ async function reportInputPhotos(client: CheckedOutClient, uid: string, ids: str
 
 /** Claims/reuses SQL work only. No model or object transfer is allowed inside this transaction. */
 export async function beginReportAnalysis(
-  database: TransactionDatabase, uid: string, key: string, input: ReportInput, modelId: string, now = Date.now(),
+  database: TransactionDatabase, uid: string, key: string, input: ReportInput, modelId: string, now = Date.now,
 ) {
   const account = await database.withTransaction((client) => client.query('SELECT id FROM users WHERE id = $1', [uid]));
   if (!account.rows.length) throw new ApiError(403, 'NOT_ELIGIBLE', 'Complete account setup before analysis.');
@@ -113,11 +113,9 @@ export async function beginReportAnalysis(
       ) : null;
       const previous = slot && current?.rows[0] ? { ...slot, ...current.rows[0] } : undefined;
       let analysisId = previous?.current_analysis_id;
-      const shared = previous && previous.consumed_at === null
-        && ((previous.status === 'RUNNING' && previous.active) || (previous.status === 'READY' && previous.unexpired));
+      const shared = previous && previous.consumed_at === null && previous.active && previous.unexpired
+        && ['RUNNING', 'READY'].includes(previous.status);
       if (!shared) {
-        const rejection = reportPinAdmission(input.measuredLocation, input.pin, now);
-        if (rejection) throw new ApiError(API_ERROR_POLICY[rejection].httpStatus, rejection, 'Acquire a fresh accurate location and keep the pin within 3 metres.');
         // Lock lease before photos, matching publication's lock order.
         const lockedPhotos = await reportInputPhotos(client, uid, input.photoIds, true);
         if (lockedPhotos.some((photo) => !photo.upload_active)) {
@@ -128,6 +126,8 @@ export async function beginReportAnalysis(
            WHERE owner_user_id = $1 AND created_at > clock_timestamp() - interval '1 minute'`, [uid],
         );
         if (count.rows[0].count >= 5) throw new ApiError(429, 'RATE_LIMITED', 'Wait a minute before starting another analysis.');
+        const rejection = reportPinAdmission(input.measuredLocation, input.pin, now());
+        if (rejection) throw new ApiError(API_ERROR_POLICY[rejection].httpStatus, rejection, 'Acquire a fresh accurate location and keep the pin within 3 metres.');
         analysisId = crypto.randomUUID();
         await client.query(
           `INSERT INTO ai_analyses (id, owner_user_id, kind, status, input_hash, photo_ids, context, model_id, prompt_version, expires_at)
@@ -136,10 +136,10 @@ export async function beginReportAnalysis(
         );
         await client.query(
           `INSERT INTO analysis_leases (owner_user_id, kind, input_hash, current_analysis_id, lease_until)
-           VALUES ($1, 'REPORT', $2, $3::uuid, clock_timestamp() + interval '45 seconds')
+           SELECT owner_user_id, kind, input_hash, id, expires_at FROM ai_analyses WHERE id = $1::uuid
            ON CONFLICT (owner_user_id, kind, input_hash) DO UPDATE
            SET current_analysis_id = EXCLUDED.current_analysis_id, lease_until = EXCLUDED.lease_until,
-               updated_at = clock_timestamp()`, [uid, inputHash, analysisId],
+               updated_at = clock_timestamp()`, [analysisId],
         );
       }
       return {
@@ -169,14 +169,25 @@ export async function finishReportAnalysis(
          AND lease_until > clock_timestamp() FOR UPDATE`, [uid, analysisId],
     );
     if (!lease.rows.length) return false;
-    const updated = await client.query(
+    const updated = await client.query<{ id: string }>(
       `UPDATE ai_analyses SET status = $3::analysis_status, result = $4::jsonb,
          expires_at = CASE WHEN $3 = 'READY' THEN clock_timestamp() + interval '30 minutes' ELSE NULL END,
          updated_at = clock_timestamp()
        WHERE id = $1::uuid AND owner_user_id = $2 AND kind = 'REPORT' AND status = 'RUNNING'
-         AND consumed_at IS NULL RETURNING id`,
+         AND consumed_at IS NULL AND expires_at > clock_timestamp() AND EXISTS (
+           SELECT 1 FROM analysis_leases l WHERE l.owner_user_id = $2 AND l.kind = 'REPORT'
+             AND l.current_analysis_id = $1::uuid AND l.lease_until > clock_timestamp()
+         ) RETURNING id`,
       [analysisId, uid, assessment === null ? 'FAILED' : 'READY', assessment === null ? null : JSON.stringify(assessment)],
     );
+    if (assessment !== null && updated.rows[0]) {
+      await client.query(
+        `UPDATE analysis_leases l SET lease_until = a.expires_at, updated_at = clock_timestamp()
+         FROM ai_analyses a WHERE l.owner_user_id = $1 AND l.kind = 'REPORT'
+           AND l.current_analysis_id = $2::uuid AND a.id = l.current_analysis_id`,
+        [uid, analysisId],
+      );
+    }
     return updated.rows.length === 1;
   });
 }
@@ -195,7 +206,7 @@ export async function readReportAnalysis(database: TransactionDatabase, uid: str
     const attempt = result.rows[0];
     if (!attempt) throw new ApiError(404, 'NOT_FOUND', 'Analysis not found.');
     if (attempt.status === 'READY') {
-      if (!attempt.current_attempt || !attempt.unexpired || attempt.consumed_at !== null) {
+      if (!attempt.current_attempt || !attempt.lease_active || !attempt.unexpired || attempt.consumed_at !== null) {
         throw new ApiError(410, 'EXPIRED', 'This analysis is no longer usable. Start a new attempt.');
       }
       const assessment = ReportAssessmentSchema.safeParse(attempt.result);
@@ -203,7 +214,7 @@ export async function readReportAnalysis(database: TransactionDatabase, uid: str
       return { analysisId: attempt.id, status: 'READY' as const, result: assessment.data,
         expiresAt: new Date(attempt.expires_at!).toISOString() };
     }
-    if (attempt.status === 'RUNNING' && attempt.current_attempt && attempt.lease_active) {
+    if (attempt.status === 'RUNNING' && attempt.current_attempt && attempt.lease_active && attempt.unexpired) {
       return { analysisId: attempt.id, status: 'RUNNING' as const };
     }
     return { analysisId: attempt.id, status: 'FAILED' as const, error: {

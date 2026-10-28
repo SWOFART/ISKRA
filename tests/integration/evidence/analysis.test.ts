@@ -5,6 +5,8 @@ import { ReportAnalysisSchema } from '../../../src/shared/contracts';
 import { PostgresTransactionDatabase, type TransactionDatabase } from '../../../src/worker/db/client';
 import { beginReportAnalysis, finishReportAnalysis, readReportAnalysis, removeExpiredPhotos } from '../../../src/worker/db/evidence-store';
 import { createApp } from '../../../src/worker/index';
+import { PostgresReportPublicationService } from '../../../src/worker/services/publication';
+import { createReportMediaResolver } from '../../../src/worker/services/media';
 import { withTestDatabase } from '../auth/postgres';
 
 const migration = await readFile(new URL('../../../migrations/0001_p0_core.sql', import.meta.url), 'utf8');
@@ -38,7 +40,7 @@ function modelResponse(result: unknown = assessment) {
   return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(result) }] } }] });
 }
 
-function appFor(database: TransactionDatabase, fetcher = vi.fn(async () => modelResponse())) {
+function appFor(database: TransactionDatabase, fetcher: typeof fetch = vi.fn(async () => modelResponse())) {
   vi.stubGlobal('fetch', fetcher);
   const app = createApp({ database, verify: async (token) => ({ uid: token }) });
   const get = vi.fn(async () => ({ size: jpeg.length, arrayBuffer: async () => jpeg.slice().buffer }));
@@ -57,6 +59,28 @@ function appFor(database: TransactionDatabase, fetcher = vi.fn(async () => model
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('SQL report-analysis attempts and leases', () => {
+  it('keeps the READY lease valid for its full accepted lifetime and produces consumable B publication inputs', () =>
+    withTestDatabase(async (pool) => {
+      const { database, input } = await prepare(pool);
+      const work = await beginReportAnalysis(database, 'resident', crypto.randomUUID(), input, model);
+      expect(await finishReportAnalysis(database, 'resident', work.analysisId, assessment)).toBe(true);
+      const lifetime = await pool.query(
+        `SELECT l.lease_until = a.expires_at AS matching,
+           extract(epoch FROM l.lease_until - clock_timestamp()) AS seconds
+         FROM analysis_leases l JOIN ai_analyses a ON a.id = l.current_analysis_id`,
+      );
+      expect(lifetime.rows[0].matching).toBe(true);
+      expect(Number(lifetime.rows[0].seconds)).toBeGreaterThan(1_790);
+      const publisher = new PostgresReportPublicationService(database,
+        createReportMediaResolver('https://iskra.test', 'test-only-signing-key-at-least-32-bytes'));
+      const result = await publisher.publish('resident', crypto.randomUUID(), {
+        analysisId: work.analysisId, description: assessment.description,
+      });
+      expect(result.receipt).toMatchObject({ rpAwarded: 5, report: { status: 'AWAITING_EXISTENCE', route: 'GREEN' } });
+      expect((await pool.query('SELECT state FROM report_photos')).rows[0].state).toBe('ATTACHED');
+      await expect(readReportAnalysis(database, 'resident', work.analysisId, crypto.randomUUID()))
+        .rejects.toMatchObject({ code: 'EXPIRED' });
+    }));
   it('shares active identical work across concurrent keys and resolves same-key replay before stale-location admission', () =>
     withTestDatabase(async (pool) => {
       const { database, input } = await prepare(pool);
@@ -66,12 +90,50 @@ describe('SQL report-analysis attempts and leases', () => {
       expect(results.filter((v) => v.started)).toHaveLength(1);
       expect((await pool.query('SELECT count(*)::int AS n FROM ai_analyses')).rows[0].n).toBe(1);
       expect((await pool.query('SELECT count(*)::int AS n FROM analysis_leases')).rows[0].n).toBe(1);
-      const replay = await beginReportAnalysis(database, 'resident', keys[0], input, model, Date.now() + 120_000);
+      const replay = await beginReportAnalysis(database, 'resident', keys[0], input, model, () => Date.now() + 120_000);
       expect(replay).toMatchObject({ analysisId: results[0].analysisId, started: false });
       await expect(beginReportAnalysis(database, 'resident', keys[0], { ...input, comment: 'Changed' }, model))
         .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
-      await expect(beginReportAnalysis(database, 'resident', crypto.randomUUID(), { ...input, comment: 'New' }, model, Date.now() + 120_000))
+      await expect(beginReportAnalysis(database, 'resident', crypto.randomUUID(), { ...input, comment: 'New' }, model, () => Date.now() + 120_000))
         .rejects.toMatchObject({ code: 'LOCATION_STALE' });
+    }));
+
+  it('checks the current location age after SQL admission waits rather than at request entry', () =>
+    withTestDatabase(async (pool) => {
+      const { database, input } = await prepare(pool);
+      let clock = Date.now();
+      const delayed: TransactionDatabase = { withTransaction: (work) => database.withTransaction((client) => work({
+        query: async <Row extends Record<string, unknown>>(sql: string, parameters?: readonly unknown[]) => {
+          const result = await client.query<Row>(sql, parameters);
+          if (sql.includes('pg_advisory_xact_lock')) clock += 120_000;
+          return result;
+        },
+      })) };
+      await expect(beginReportAnalysis(delayed, 'resident', crypto.randomUUID(), input, model, () => clock))
+        .rejects.toMatchObject({ code: 'LOCATION_STALE' });
+      expect((await pool.query('SELECT count(*)::int AS n FROM ai_analyses')).rows[0].n).toBe(0);
+    }));
+
+  it('cannot finish or share an expired RUNNING row even if its lease remains active', () =>
+    withTestDatabase(async (pool) => {
+      const { database, input } = await prepare(pool);
+      const first = await beginReportAnalysis(database, 'resident', crypto.randomUUID(), input, model);
+      await pool.query("UPDATE ai_analyses SET created_at = now() - interval '1 hour', expires_at = now() - interval '1 second'");
+      expect(await finishReportAnalysis(database, 'resident', first.analysisId, assessment)).toBe(false);
+      expect(await readReportAnalysis(database, 'resident', first.analysisId, crypto.randomUUID())).toMatchObject({ status: 'FAILED' });
+      const next = await beginReportAnalysis(database, 'resident', crypto.randomUUID(), input, model);
+      expect(next.started).toBe(true); expect(next.analysisId).not.toBe(first.analysisId);
+    }));
+
+  it('cannot advertise or share READY evidence after its lease is revoked or expires', () =>
+    withTestDatabase(async (pool) => {
+      const { database, input } = await prepare(pool);
+      const first = await beginReportAnalysis(database, 'resident', crypto.randomUUID(), input, model);
+      await finishReportAnalysis(database, 'resident', first.analysisId, assessment);
+      await pool.query("UPDATE analysis_leases SET lease_until = clock_timestamp() - interval '1 second'");
+      await expect(readReportAnalysis(database, 'resident', first.analysisId, crypto.randomUUID())).rejects.toMatchObject({ code: 'EXPIRED' });
+      const next = await beginReportAnalysis(database, 'resident', crypto.randomUUID(), input, model);
+      expect(next.started).toBe(true); expect(next.analysisId).not.toBe(first.analysisId);
     }));
 
   it('creates a fresh identity after failure and never retargets an old operation key', () =>
@@ -140,6 +202,7 @@ describe('SQL report-analysis attempts and leases', () => {
       const ttl = await pool.query("SELECT extract(epoch FROM expires_at - clock_timestamp()) AS seconds FROM ai_analyses");
       expect(Number(ttl.rows[0].seconds)).toBeGreaterThan(40);
       expect(Number(ttl.rows[0].seconds)).toBeLessThanOrEqual(45);
+      expect((await pool.query('SELECT a.expires_at = l.lease_until AS matching FROM ai_analyses a JOIN analysis_leases l ON a.id = l.current_analysis_id')).rows[0].matching).toBe(true);
       await pool.query("UPDATE ai_analyses SET created_at = now() - interval '1 hour', expires_at = now() - interval '1 second'");
       await pool.query("UPDATE report_photos SET upload_expires_at = now() - interval '25 hours'");
       const bucket = { delete: vi.fn(async () => {}) };
@@ -159,13 +222,13 @@ describe('report-analysis HTTP orchestration (real SQL; explicit R2/provider dou
       let release!: () => void; let started!: () => void;
       const began = new Promise<void>((resolve) => { started = resolve; });
       const hold = new Promise<void>((resolve) => { release = resolve; });
-      const fetcher = vi.fn(async (_url: unknown, init: RequestInit) => {
+      const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
         expect(insideTransaction).toBe(0);
-        const body = JSON.parse(String(init.body));
+        const body = JSON.parse(String(init?.body));
         expect(body.contents[0].parts.filter((p: { inlineData?: unknown }) => p.inlineData)).toHaveLength(5);
         started(); await hold; return modelResponse();
       });
-      const api = appFor(observedDatabase, fetcher as never);
+      const api = appFor(observedDatabase, fetcher);
       const first = api.start(input);
       try {
         await began;

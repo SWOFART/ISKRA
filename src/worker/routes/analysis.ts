@@ -44,7 +44,7 @@ export function createAnalysisRoutes({ database, verify, now = Date.now, fetcher
     const config = { apiKey: c.env.GEMINI_API_KEY ?? '', modelId: c.env.GEMINI_MODEL_ID ?? '' };
     validateGeminiConfig(config);
     const uid = c.get('identity')!.uid;
-    const work = await beginReportAnalysis(database, uid, key.data.toLowerCase(), input, config.modelId, now());
+    const work = await beginReportAnalysis(database, uid, key.data.toLowerCase(), input, config.modelId, now);
     if (work.started) {
       try {
         const photos = await loadReportBytes(c.env.PHOTOS, work.photos);
