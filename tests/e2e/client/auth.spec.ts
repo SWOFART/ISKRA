@@ -64,6 +64,7 @@ test('provider success still reports unavailable account setup and allows a retr
   await page.getByLabel('Password', { exact: true }).fill('test-password');
   await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.locator('.auth-status')).toContainText('Account setup');
+  await expect(page.locator('.auth-form')).toBeHidden();
   await expect(page.getByRole('button', { name: 'Retry account setup' })).toBeVisible();
   await page.getByRole('button', { name: 'Retry account setup' }).click();
   await expect.poll(() => bootstraps).toBe(2);
