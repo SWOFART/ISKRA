@@ -134,10 +134,13 @@ describe('immutable report JPEG finalization', () => {
     expect(query.mock.calls.some(([sql]) => sql.includes('INSERT'))).toBe(false);
   });
 
-  it('keeps cleanup writes disabled pending durable target agreement', async () => {
-    const { issue, upload, put } = setup();
+  it('stores a cleanup JPEG as unattached CLEANUP evidence', async () => {
+    const { issue, upload, query, put } = setup();
     const ticket = await issue({ purpose: 'CLEANUP', reportId: crypto.randomUUID() });
-    expect((await upload(ticket.uploadUrl)).status).toBe(503);
-    expect(put).not.toHaveBeenCalled();
+    expect((await upload(ticket.uploadUrl)).status).toBe(201);
+    const insert = query.mock.calls.map(([sql]) => String(sql)).find((sql) => sql.includes('INSERT INTO report_photos'));
+    expect(insert).toContain("'CLEANUP'");
+    expect(insert).not.toContain('report_id');
+    expect(put).toHaveBeenCalled();
   });
 });
