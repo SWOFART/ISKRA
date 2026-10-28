@@ -7,6 +7,7 @@ import { ApiError } from '../middleware/errors';
 import { createMeRoutes } from './me';
 import { createReportRoutes } from './reports';
 import { createVoteRoutes } from './votes';
+import { createCleanupRoutes } from './cleanups';
 import type { ReportMediaResolver } from '../services/report-context';
 
 const unavailable = () => {
@@ -28,6 +29,7 @@ export function createDomainRoutes({ database, reportMedia, verify, now }: Domai
     routes.route('/', createMeRoutes({ database, verify }));
     routes.route('/', createReportRoutes({ database, media: reportMedia, verify }));
     routes.route('/', createVoteRoutes({ database, media: reportMedia, verify, now }));
+    routes.route('/', createCleanupRoutes({ database, media: reportMedia, verify, now }));
   }
   else routes.post('/me/bootstrap', unavailable);
 

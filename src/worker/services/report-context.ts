@@ -45,6 +45,19 @@ interface ContextRow extends Record<string, unknown> {
   sha256: string | null;
 }
 
+export interface BeforeEvidencePhoto {
+  readonly id: string;
+  readonly ordinal: number;
+  readonly sha256: string;
+}
+
+/** Canonical binding for unchanged before evidence; intentionally excludes mutable report.version. */
+export async function hashBeforeEvidence(photos: readonly BeforeEvidencePhoto[]): Promise<string> {
+  const evidence = JSON.stringify(photos.map((photo) => [photo.ordinal, photo.id, photo.sha256]));
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(evidence));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 /** B-owned PostgreSQL projection for C's cleanup analysis; only verified GREEN reports are eligible. */
 export class PostgresReportContextReader implements ReportContextReader {
   constructor(private readonly database: TransactionDatabase) {}
@@ -67,10 +80,9 @@ export class PostgresReportContextReader implements ReportContextReader {
       if (photos.length < 1 || photos.length > 5 || photos.some((photo, index) =>
         photo.ordinal !== index || !photo.sha256)) return null;
 
-      const evidence = JSON.stringify(photos.map((photo) => [photo.ordinal, photo.photo_id, photo.sha256]));
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(evidence));
-      const beforeEvidenceHash = [...new Uint8Array(digest)]
-        .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+      const beforeEvidenceHash = await hashBeforeEvidence(photos.map((photo) => ({
+        id: photo.photo_id!, ordinal: photo.ordinal!, sha256: photo.sha256!,
+      })));
       return {
         reportId: first.report_id,
         route: 'GREEN',
