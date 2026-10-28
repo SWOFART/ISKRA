@@ -666,12 +666,25 @@ describe('PostgreSQL report voting', () => {
     withTestDatabase(async (pool) => {
       await installSchema(pool);
       const resolutionVoters = ['vote-close-one', 'vote-close-two', 'vote-close-three'];
+      const priorExistenceVoters = ['vote-close-existence-one', 'vote-close-existence-two', 'vote-close-existence-three'];
       const afterClose = 'vote-after-resolution';
-      await Promise.all([reportAuthor, reportCleaner, ...resolutionVoters, afterClose].map((id) => createUser(pool, id)));
+      await Promise.all([reportAuthor, reportCleaner, ...priorExistenceVoters, ...resolutionVoters, afterClose]
+        .map((id) => createUser(pool, id)));
       const report = await createReport(pool, {
         status: 'AWAITING_RESOLUTION', existenceYesCount: 3, resolutionYesCount: 0, cleaner: reportCleaner,
       });
       await seedReportAward(pool, reportAuthor, report.id);
+      for (const actor of priorExistenceVoters) {
+        const vote = await pool.query<{ id: string }>(
+          "INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m) VALUES ($1::uuid, 'EXISTENCE', $2::text, 'YES', 10, 10) RETURNING id",
+          [report.id, actor],
+        );
+        await pool.query(
+          "INSERT INTO reward_ledger (user_id, kind, delta, source_ref, report_id, vote_id) VALUES ($1::text, 'VOTE', 5, $2::varchar, $3::uuid, $4::uuid)",
+          [actor, 'vote:' + vote.rows[0].id, report.id, vote.rows[0].id],
+        );
+        await pool.query('UPDATE users SET rp_balance = rp_balance + 5 WHERE id = $1::text', [actor]);
+      }
       let nowValue = Date.now();
       const app = createApp(pool, () => nowValue);
       const finalKey = crypto.randomUUID();
@@ -733,6 +746,6 @@ describe('PostgreSQL report voting', () => {
            (SELECT count(*)::int FROM reward_ledger WHERE report_id = $1::uuid AND user_id = $2::text AND kind = 'VOTE') AS support_credits`,
         [report.id, afterClose],
       );
-      expect(state.rows[0]).toEqual({ existence_votes: 0, resolution_votes: 3, support_balance: 0, support_credits: 0 });
+      expect(state.rows[0]).toEqual({ existence_votes: 3, resolution_votes: 3, support_balance: 0, support_credits: 0 });
     }));
 });
