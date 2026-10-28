@@ -1,12 +1,25 @@
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rmdir, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 import { PostgresTransactionDatabase } from '../src/worker/db/client.ts';
-import { assertDemoSeedTarget, PostgresDemoSeedService } from '../src/worker/services/demo-seeds.ts';
+import {
+  assertDemoSeedTarget,
+  demoSeedPhotoObjectKeys,
+  PostgresDemoSeedService,
+} from '../src/worker/services/demo-seeds.ts';
 import type { ReportMediaResolver } from '../src/worker/services/report-context.ts';
 
 const schemaName = 'iskra_demo_seed';
+const demoPhotoBucket = 'iskra-demo';
+const execFileAsync = promisify(execFile);
+const repositoryRoot = fileURLToPath(new URL('../', import.meta.url));
+const wranglerCli = fileURLToPath(new URL('../node_modules/wrangler/bin/wrangler.js', import.meta.url));
+const localR2State = fileURLToPath(new URL('../.wrangler/state', import.meta.url));
 
 function usageFailure(message: string): never {
   throw new Error(message);
@@ -29,6 +42,69 @@ function readTarget(rawUrl: string | undefined) {
     hasHash: Boolean(url.hash),
     password: decodeURIComponent(url.password),
   };
+}
+
+async function runLocalR2(args: readonly string[]): Promise<void> {
+  try {
+    await execFileAsync(process.execPath, [wranglerCli, ...args], {
+      cwd: repositoryRoot,
+      timeout: 30_000,
+      maxBuffer: 16 * 1024,
+      windowsHide: true,
+    });
+  } catch {
+    usageFailure('The controlled demo photo could not be stored or read back from local R2.');
+  }
+}
+
+async function readLocalR2Photo(objectPath: string, destination: string): Promise<Uint8Array | null> {
+  try {
+    await execFileAsync(process.execPath, [
+      wranglerCli, 'r2', 'object', 'get', objectPath, `--file=${destination}`,
+      '--local', `--persist-to=${localR2State}`,
+    ], {
+      cwd: repositoryRoot,
+      timeout: 30_000,
+      maxBuffer: 16 * 1024,
+      windowsHide: true,
+    });
+    return await readFile(destination);
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { stderr?: string | Buffer };
+    const output = `${failure.message ?? ''}\n${failure.stderr?.toString() ?? ''}`;
+    if (output.includes('The specified key does not exist.')) return null;
+    usageFailure('The controlled demo photo could not be read from local R2.');
+  }
+}
+
+async function uploadAndVerifyDemoPhotos(photoPath: string, photo: { byteSize: number; sha256: string }) {
+  const objectPaths = Object.values(demoSeedPhotoObjectKeys(photo.sha256))
+    .map((key) => `${demoPhotoBucket}/${key}`);
+  const verificationDirectory = await mkdtemp(join(tmpdir(), 'iskra-demo-r2-'));
+  try {
+    for (const [index, objectPath] of objectPaths.entries()) {
+      const verificationFile = join(verificationDirectory, `controlled-photo-${index}.jpg`);
+      let storedBytes = await readLocalR2Photo(objectPath, verificationFile);
+      if (storedBytes === null) {
+        await runLocalR2([
+          'r2', 'object', 'put', objectPath, `--file=${photoPath}`, '--content-type=image/jpeg',
+          '--local', `--persist-to=${localR2State}`, '--force',
+        ]);
+        storedBytes = await readLocalR2Photo(objectPath, verificationFile);
+      }
+      if (storedBytes === null) usageFailure('A controlled demo photo is missing after its local R2 upload.');
+      const storedHash = createHash('sha256').update(storedBytes).digest('hex');
+      if (storedBytes.byteLength !== photo.byteSize || storedHash !== photo.sha256) {
+        usageFailure('A controlled demo photo did not match its verified fixture bytes in local R2.');
+      }
+    }
+  } finally {
+    for (let index = 0; index < objectPaths.length; index++) {
+      await unlink(join(verificationDirectory, `controlled-photo-${index}.jpg`)).catch(() => undefined);
+    }
+    await rmdir(verificationDirectory).catch(() => undefined);
+  }
+  return objectPaths.length;
 }
 
 async function ensureMarkedSchema(pool: Pool, config: PoolConfig) {
@@ -155,6 +231,7 @@ async function main() {
       byteSize: photoBytes.byteLength,
       sha256: createHash('sha256').update(photoBytes).digest('hex'),
     };
+    const verifiedPhotoObjects = await uploadAndVerifyDemoPhotos(photoPath, photo);
     const media: ReportMediaResolver = {
       async resolveAttachedPhotos(photos) {
         return photos.map((item) => ({
@@ -168,7 +245,10 @@ async function main() {
     const result = await new PostgresDemoSeedService(
       new PostgresTransactionDatabase(demoPool), media, photo,
     ).seed();
-    console.log(JSON.stringify({ environment: 'demo', schema: schemaName, ...result }, null, 2));
+    console.log(JSON.stringify({
+      environment: 'demo', schema: schemaName, photoStorage: 'local R2',
+      photoBucket: demoPhotoBucket, verifiedPhotoObjects, ...result,
+    }, null, 2));
   } finally {
     await demoPool.end();
   }

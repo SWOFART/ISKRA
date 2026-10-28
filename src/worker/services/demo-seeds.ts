@@ -50,6 +50,23 @@ export interface DemoPhotoFixture {
   readonly sha256: string;
 }
 
+export interface DemoSeedPhotoObjectKeys {
+  readonly greenBefore: string;
+  readonly yellowBefore: string;
+  readonly redBefore: string;
+  readonly greenAfter: string;
+}
+
+export function demoSeedPhotoObjectKeys(sha256: string): DemoSeedPhotoObjectKeys {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error('The controlled demo photo hash is invalid.');
+  return {
+    greenBefore: `${OBJECT_PREFIX}green-resolved/before-${sha256}.jpg`,
+    yellowBefore: `${OBJECT_PREFIX}yellow-pending/before-${sha256}.jpg`,
+    redBefore: `${OBJECT_PREFIX}red-pending/before-${sha256}.jpg`,
+    greenAfter: `${OBJECT_PREFIX}green-resolved/after-${sha256}.jpg`,
+  };
+}
+
 export interface DemoSeedResult {
   readonly alreadySeeded: boolean;
   readonly reports: { readonly greenResolved: string; readonly yellowPending: string; readonly redPending: string };
@@ -175,6 +192,7 @@ async function createReportAnalysis(
   route: 'GREEN' | 'YELLOW' | 'RED',
   confidence: number,
   photo: DemoPhotoFixture,
+  objectKey: string,
 ) {
   const analysisId = await stableUuid(`analysis/report/${key}`);
   const photoId = await stableUuid(`photo/report/${key}/before`);
@@ -194,7 +212,7 @@ async function createReportAnalysis(
        id, owner_user_id, purpose, state, object_key, ordinal, mime_type, byte_size, sha256, upload_expires_at
      ) VALUES ($1::uuid, $2::text, 'REPORT', 'UPLOADED', $3::varchar, 0, 'image/jpeg', $4::integer,
        $5::char(64), clock_timestamp() + interval '15 minutes')`,
-    [photoId, ownerId, `${OBJECT_PREFIX}${key}/before-${photo.sha256}.jpg`, photo.byteSize, photo.sha256],
+    [photoId, ownerId, objectKey, photo.byteSize, photo.sha256],
   );
   await client.query(
     `INSERT INTO ai_analyses (
@@ -234,6 +252,7 @@ async function createCleanupCandidate(
   cleanerId: string,
   beforePhotoId: string,
   photo: DemoPhotoFixture,
+  objectKey: string,
 ) {
   const analysisId = await stableUuid('analysis/cleanup/green-resolved');
   const photoId = await stableUuid('photo/cleanup/green-resolved/after');
@@ -267,7 +286,7 @@ async function createCleanupCandidate(
        id, owner_user_id, purpose, state, object_key, ordinal, mime_type, byte_size, sha256, upload_expires_at
      ) VALUES ($1::uuid, $2::text, 'CLEANUP', 'UPLOADED', $3::varchar, 0, 'image/jpeg', $4::integer,
        $5::char(64), clock_timestamp() + interval '15 minutes')`,
-    [photoId, cleanerId, `${OBJECT_PREFIX}green-resolved/after-${photo.sha256}.jpg`, photo.byteSize, photo.sha256],
+    [photoId, cleanerId, objectKey, photo.byteSize, photo.sha256],
   );
   await client.query(
     `INSERT INTO ai_analyses (
@@ -386,18 +405,23 @@ async function verifyDemoSeed(
     throw new Error('Demo seed reporter/verifier/cleaner balances do not match the 20/5/40 snapshot.');
   }
 
-  const demoRows = await client.query<{ analyses: number; photos: number; ledger: number }>(
+  const demoRows = await client.query<{ analyses: number; photos: number; object_keys: string[] | null; ledger: number }>(
     `SELECT
        (SELECT count(*)::int FROM ai_analyses WHERE owner_user_id = ANY($1::text[])
          AND is_demo = true AND model_id = $2::varchar AND prompt_version = $3::varchar) AS analyses,
        (SELECT count(*)::int FROM report_photos WHERE object_key LIKE $4::varchar
          AND byte_size = $5::integer AND sha256 = $6::char(64)) AS photos,
+       (SELECT array_agg(object_key ORDER BY object_key) FROM report_photos WHERE object_key LIKE $4::varchar
+         AND byte_size = $5::integer AND sha256 = $6::char(64)) AS object_keys,
        (SELECT count(*)::int FROM reward_ledger WHERE report_id = ANY($7::uuid[]) AND is_demo = true) AS ledger`,
     [allUserIds, MODEL_ID, PROMPT_VERSION, `${OBJECT_PREFIX}%`, photo.byteSize, photo.sha256,
       [reportIds.greenResolved, reportIds.yellowPending, reportIds.redPending]],
   );
   if (demoRows.rows[0]?.analyses !== 4 || demoRows.rows[0]?.photos !== 4
-    || demoRows.rows[0]?.ledger !== 15) {
+    || demoRows.rows[0]?.ledger !== 15
+    || JSON.stringify(demoRows.rows[0]?.object_keys ?? []) !== JSON.stringify(
+      Object.values(demoSeedPhotoObjectKeys(photo.sha256)).sort(),
+    )) {
     throw new Error('Demo AI labels, controlled photo fixture metadata, or demo ledger marks failed verification.');
   }
 
@@ -443,6 +467,7 @@ export class PostgresDemoSeedService {
       yellowPending: await stableUuid('report/yellow-pending'),
       redPending: await stableUuid('report/red-pending'),
     };
+    const photoKeys = demoSeedPhotoObjectKeys(this.photo.sha256);
     const requestHash = 'demo-seed-v1:reporter-20:verifier-5:cleaner-40:green-5-existence-3-resolution';
 
     return this.database.withTransaction(async (client) => {
@@ -478,9 +503,15 @@ export class PostgresDemoSeedService {
         );
       }
 
-      const green = await createReportAnalysis(client, 'green-resolved', userIds.reporterGreen, 'GREEN', 0.91, this.photo);
-      const yellow = await createReportAnalysis(client, 'yellow-pending', userIds.reporterYellow, 'YELLOW', 0.78, this.photo);
-      const red = await createReportAnalysis(client, 'red-pending', userIds.reporterRed, 'RED', 0.84, this.photo);
+      const green = await createReportAnalysis(
+        client, 'green-resolved', userIds.reporterGreen, 'GREEN', 0.91, this.photo, photoKeys.greenBefore,
+      );
+      const yellow = await createReportAnalysis(
+        client, 'yellow-pending', userIds.reporterYellow, 'YELLOW', 0.78, this.photo, photoKeys.yellowBefore,
+      );
+      const red = await createReportAnalysis(
+        client, 'red-pending', userIds.reporterRed, 'RED', 0.84, this.photo, photoKeys.redBefore,
+      );
       const scopedDatabase: TransactionDatabase = { withTransaction: (work) => work(client) };
       const publication = new PostgresReportPublicationService(scopedDatabase, this.media);
       await publication.publish(userIds.reporterGreen, await stableUuid('idempotency/publish/green-resolved'), {
@@ -505,7 +536,7 @@ export class PostgresDemoSeedService {
       }
 
       const cleanupCandidate = await createCleanupCandidate(
-        client, green.reportId, userIds.cleaner, green.photoId, this.photo,
+        client, green.reportId, userIds.cleaner, green.photoId, this.photo, photoKeys.greenAfter,
       );
       const cleanup = new PostgresCleanupSubmissionService(scopedDatabase, this.media);
       await cleanup.submit(userIds.cleaner, await stableUuid('idempotency/cleanup/green-resolved'), green.reportId, {
