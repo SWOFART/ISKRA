@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from cloudflare_env import (
     SMOKE_MAX_ATTEMPTS, deployment_summary, main, validate_config,
-    validate_health, write_private_json,
+    validate_health, write_private_json, write_hyperdrive_config,
 )
 
 
@@ -83,6 +83,22 @@ class CloudConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "projects must match"):
             validate_config(json.dumps(values), self.template, "staging", "application")
 
+    def test_hyperdrive_binding_is_generated_only_for_selected_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "wrangler.json"
+            write_hyperdrive_config(path, "staging", "a" * 32)
+            config = json.loads(path.read_text())
+            self.assertEqual(config["env"]["staging"]["hyperdrive"], [{"binding": "HYPERDRIVE", "id": "a" * 32}])
+            self.assertNotIn("hyperdrive", config["env"]["production"])
+            self.assertTrue(Path(config["main"]).is_absolute())
+            self.assertEqual(Path(config["env"]["staging"]["assets"]["directory"]), Path.cwd() / "dist/client")
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertNotIn("CLOUDFLARE_API_TOKEN", path.read_text())
+
+    def test_malformed_hyperdrive_identifier_is_rejected_before_deploy(self):
+        with self.assertRaisesRegex(ValueError, "HYPERDRIVE_ID"):
+            validate_config(self.valid(HYPERDRIVE_ID="../wrong"), self.template, "staging", "application")
+
     def test_smoke_retries_stale_200_until_exact_release_matches(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "iskra-environment.json"
@@ -151,6 +167,7 @@ class CloudConfigurationTests(unittest.TestCase):
             "VITE_FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_AUTH_DOMAIN": "sample-project.firebaseapp.com",
             "VITE_FIREBASE_APP_ID": "sample-app",
             "VITE_MAPTILER_KEY": "sample-map-key", "MIGRATION_DATABASE_URL": "postgres://operator",
+            "HYPERDRIVE_ID": "a" * 32,
         }
         with tempfile.TemporaryDirectory() as directory:
             env = os.environ | {
@@ -164,8 +181,22 @@ class CloudConfigurationTests(unittest.TestCase):
             self.assertEqual(runtime["GEMINI_API_KEY"], "sample-gemini-key")
             self.assertIn("target_url=https://app.example.test\n", outputs)
             self.assertNotIn("sample-token", outputs)
-            for name in ("CLOUDFLARE_API_TOKEN", "MIGRATION_DATABASE_URL", "VITE_MAPTILER_KEY"):
+            generated = json.loads((Path(directory) / "iskra-wrangler.json").read_text())
+            self.assertEqual(generated["env"]["staging"]["hyperdrive"][0]["id"], "a" * 32)
+            for name in ("CLOUDFLARE_API_TOKEN", "MIGRATION_DATABASE_URL", "VITE_MAPTILER_KEY", "HYPERDRIVE_ID"):
                 self.assertNotIn(name, runtime)
+
+    def test_deployment_passes_generated_hyperdrive_config_to_wrangler(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "iskra-environment.json").write_text(self.valid(HYPERDRIVE_ID="a" * 32))
+            env = {"RUNNER_TEMP": directory, "GITHUB_SHA": "release-sha"}
+            with patch.dict(os.environ, env), patch.object(sys, "argv", ["cloudflare_env.py", "deploy", "staging", "application"]):
+                with patch("cloudflare_env.subprocess.run") as deploy:
+                    main()
+            command = deploy.call_args.args[0]
+            self.assertIn("--config", command)
+            self.assertEqual(command[command.index("--config") + 1], str(Path(directory) / "iskra-wrangler.json"))
+            self.assertNotIn("HYPERDRIVE_ID", deploy.call_args.kwargs["env"])
 
     def test_preparation_selects_the_infrastructure_check_origin(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -3,6 +3,7 @@
 import html
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -51,6 +52,8 @@ def validate_config(raw, template, environment, target):
             or url.query or url.fragment or url.path not in ("", "/")):
         raise ValueError(f"{url_name} must be an HTTPS origin")
     if target == "application":
+        if values.get("HYPERDRIVE_ID") and not re.fullmatch(r"[0-9a-f]{32}", values["HYPERDRIVE_ID"]):
+            raise ValueError("HYPERDRIVE_ID must be a Cloudflare configuration identifier")
         required = ["FIREBASE_PROJECT_ID", "VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN",
                     "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID"]
         if environment == "production":
@@ -72,6 +75,20 @@ def validate_config(raw, template, environment, target):
 def write_private_json(path, values):
     with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:
         json.dump(values, output)
+
+
+def write_hyperdrive_config(path, environment, configuration_id):
+    root = Path.cwd().resolve()
+    config = json.loads((root / "wrangler.jsonc").read_text())
+    config["env"][environment]["hyperdrive"] = [{"binding": "HYPERDRIVE", "id": configuration_id}]
+    # Wrangler resolves paths relative to this temporary config, not the repository.
+    for settings in [config, *config.get("env", {}).values()]:
+        if "main" in settings:
+            settings["main"] = str((root / settings["main"]).resolve())
+        if "assets" in settings:
+            settings["assets"]["directory"] = str((root / settings["assets"]["directory"]).resolve())
+    config.pop("$schema", None)
+    write_private_json(path, config)
 
 
 def deployment_summary(enabled, target, target_url, release, smoke_outcome):
@@ -124,6 +141,7 @@ def main():
     folder = Path(os.environ["RUNNER_TEMP"])
     config_path = folder / "iskra-environment.json"
     runtime_path = folder / "iskra-worker-secrets.json"
+    wrangler_path = folder / "iskra-wrangler.json"
 
     if mode == "prepare":
         values = validate_config(os.environ["CLOUD_ENV_JSON"],
@@ -145,6 +163,8 @@ def main():
         if target == "application":
             runtime = {name: value for name, value in values.items() if name in RUNTIME_KEYS and value}
             write_private_json(runtime_path, runtime)
+            if values.get("HYPERDRIVE_ID"):
+                write_hyperdrive_config(wrangler_path, environment, values["HYPERDRIVE_ID"])
         return
 
     values = json.loads(config_path.read_text())
@@ -161,6 +181,8 @@ def main():
                        "--var", "RELEASE_SHA:" + os.environ["GITHUB_SHA"]]
             if target == "application":
                 command += ["--secrets-file", str(runtime_path)]
+                if values.get("HYPERDRIVE_ID"):
+                    command += ["--config", str(wrangler_path)]
         subprocess.run(command, cwd=project, env=process_env, check=True)
     elif mode == "smoke":
         url_name = "APP_URL" if target == "application" else "DEPLOYMENT_CHECK_URL"

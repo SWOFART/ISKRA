@@ -154,4 +154,4 @@ jobs:
 
       - name: Remove temporary secret material
         if: always()
-        run: rm -f -- "$RUNNER_TEMP/iskra-environment.json" "$RUNNER_TEMP/iskra-worker-secrets.json"
+        run: rm -f -- "$RUNNER_TEMP/iskra-environment.json" "$RUNNER_TEMP/iskra-worker-secrets.json" "$RUNNER_TEMP/iskra-wrangler.json"
