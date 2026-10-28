@@ -1,4 +1,4 @@
-import { ReportDetailSchema, ReportListSchema, type Photo, type ReportSummary, type Route } from '../shared/contracts';
+import { ReportDetailSchema, ReportListSchema, type ErrorCode, type Photo, type Point, type ReportSummary, type Route } from '../shared/contracts';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { ApiClientError, createClientApi } from './api';
@@ -7,6 +7,15 @@ import { errorMessageKey, type MessageKey, type MessageValues } from './i18n';
 import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from './mapModel';
 import { renderPhotoCapture, type CapturedPhoto, type CaptureStage } from './PhotoCapture';
 import { renderReportSheet } from './ReportSheet';
+import {
+  acquireFreshLocation,
+  bindCleanupLocation,
+  bindReportLocation,
+  isLocationRecoveryError,
+  LocationCaptureError,
+  type AnalysisLocationBinding,
+  type LocationCaptureFailure,
+} from './locationCapture';
 
 type ClientApi = ReturnType<typeof createClientApi>;
 type Translate = (key: MessageKey, values?: MessageValues) => string;
@@ -23,7 +32,10 @@ export interface MapPageView {
   element: HTMLElement;
   state: MapPageState;
   mount(): void;
-  openCapture(stage: CaptureStage): void;
+  openCapture(stage: 'report'): void;
+  openCapture(stage: 'cleanup', reportPin: Point): void;
+  getLocationBinding(): AnalysisLocationBinding | null;
+  locationRejected(code: ErrorCode): void;
   dispose(): void;
 }
 
@@ -339,7 +351,7 @@ export function renderMapPage(
   };
   const photoCapture = renderPhotoCapture({
     t,
-    onContinue: (photos, stage) => showCaptureHandoff(photos, stage),
+    onContinue: (photos, stage) => showCaptureHandoff(photos, stage, captureTarget),
     onExit: () => reportButton.focus(),
     onVisibilityChange: setCaptureModalInert,
   });
@@ -356,23 +368,91 @@ export function renderMapPage(
   const handoffMessage = makeElement('p', 'photo-capture-handoff-message');
   const handoffPhotosLabel = makeElement('p', 'photo-capture-count');
   const handoffPhotosList = makeElement('ol', 'photo-capture-list photo-capture-handoff-list');
+  const handoffLocationStatus = makeElement('p', 'photo-capture-location-status');
+  handoffLocationStatus.setAttribute('role', 'status');
+  handoffLocationStatus.setAttribute('aria-live', 'polite');
+  handoffLocationStatus.setAttribute('aria-busy', 'false');
   const handoffActions = makeElement('div', 'photo-capture-handoff-actions');
   const editPhotosButton = makeButton(t('capture.editPhotos'), 'photo-capture-edit');
+  const requestLocationButton = makeButton(t('capture.getLocation'), 'photo-capture-location');
   const discardPhotosButton = makeButton(t('capture.discardSession'), 'photo-capture-discard');
-  appendElements(handoffActions, editPhotosButton, discardPhotosButton);
-  appendElements(handoffCard, handoffHeading, handoffMessage, handoffPhotosLabel, handoffPhotosList, handoffActions);
+  appendElements(handoffActions, editPhotosButton, requestLocationButton, discardPhotosButton);
+  appendElements(handoffCard, handoffHeading, handoffMessage, handoffPhotosLabel, handoffPhotosList, handoffLocationStatus, handoffActions);
   captureHandoff.appendChild(handoffCard);
   page.appendChild(captureHandoff);
 
   let handoffPhotos: readonly CapturedPhoto[] = [];
   let handoffStage: CaptureStage = 'report';
+  let captureTarget: Point | undefined;
+  let handoffTarget: Point | undefined;
+  let handoffLocationBinding: AnalysisLocationBinding | null = null;
+  let locationRequestGeneration = 0;
 
-  function showCaptureHandoff(photos: readonly CapturedPhoto[], stage: CaptureStage): void {
+  function locationFailureKey(failure: LocationCaptureFailure): MessageKey {
+    switch (failure) {
+      case 'unsupported': return 'capture.locationUnsupported';
+      case 'permission': return 'capture.locationPermission';
+      case 'timeout': return 'capture.locationTimeout';
+      case 'unavailable': return 'capture.locationUnavailable';
+      case 'inaccurate': return 'capture.locationInaccurate';
+      case 'stale': return 'capture.locationStale';
+      case 'tooFar': return 'capture.locationTooFar';
+    }
+  }
+
+  function resetHandoffLocation(): void {
+    locationRequestGeneration += 1;
+    handoffLocationBinding = null;
+    handoffLocationStatus.textContent = t('capture.locationNotRequested');
+    handoffLocationStatus.setAttribute('aria-busy', 'false');
+    requestLocationButton.disabled = false;
+    requestLocationButton.textContent = t('capture.getLocation');
+  }
+
+  async function requestHandoffLocation(): Promise<void> {
+    const generation = ++locationRequestGeneration;
+    handoffLocationBinding = null;
+    handoffLocationStatus.textContent = t('capture.locationRequesting');
+    handoffLocationStatus.setAttribute('aria-busy', 'true');
+    requestLocationButton.disabled = true;
+    try {
+      const fix = await acquireFreshLocation();
+      const binding = handoffStage === 'report'
+        ? bindReportLocation(fix)
+        : handoffTarget
+          ? bindCleanupLocation(fix, handoffTarget)
+          : null;
+      if (!binding) throw new Error('Cleanup location capture requires the report pin.');
+      if (generation !== locationRequestGeneration || captureHandoff.hidden) return;
+      handoffLocationBinding = binding;
+      handoffLocationStatus.textContent = binding.purpose === 'report'
+        ? t('capture.locationSuccessReport', { accuracy: Math.round(binding.location.accuracyM) })
+        : t('capture.locationSuccessCleanup', {
+          accuracy: Math.round(binding.location.accuracyM),
+          distance: Math.round(binding.distanceM),
+        });
+      requestLocationButton.textContent = t('capture.refreshLocation');
+    } catch (error) {
+      if (generation !== locationRequestGeneration || captureHandoff.hidden) return;
+      const reason = error instanceof LocationCaptureError ? error.reason : 'unavailable';
+      handoffLocationStatus.textContent = t(locationFailureKey(reason));
+      requestLocationButton.textContent = t('capture.retryLocation');
+    } finally {
+      if (generation === locationRequestGeneration && !captureHandoff.hidden) {
+        handoffLocationStatus.setAttribute('aria-busy', 'false');
+        requestLocationButton.disabled = false;
+      }
+    }
+  }
+
+  function showCaptureHandoff(photos: readonly CapturedPhoto[], stage: CaptureStage, target?: Point): void {
     handoffPhotos = [...photos];
     handoffStage = stage;
+    handoffTarget = target ? { lat: target.lat, lng: target.lng } : undefined;
     handoffHeading.textContent = t('capture.handoffHeading');
     handoffMessage.textContent = t('capture.handoffMessage', { count: handoffPhotos.length });
     handoffPhotosLabel.textContent = t('capture.photoCount', { count: handoffPhotos.length });
+    resetHandoffLocation();
     handoffPhotosList.replaceChildren();
     handoffPhotos.forEach((photo, index) => {
       const item = makeElement('li', 'photo-capture-item');
@@ -391,12 +471,17 @@ export function renderMapPage(
   editPhotosButton.addEventListener('click', () => {
     captureHandoff.hidden = true;
     handoffPhotos = [];
+    resetHandoffLocation();
     setCaptureModalInert(false);
     photoCapture.open(handoffStage);
   });
+  requestLocationButton.addEventListener('click', () => { void requestHandoffLocation(); });
   discardPhotosButton.addEventListener('click', () => {
     captureHandoff.hidden = true;
     handoffPhotos = [];
+    handoffTarget = undefined;
+    captureTarget = undefined;
+    resetHandoffLocation();
     setCaptureModalInert(false);
     photoCapture.discard();
   });
@@ -407,13 +492,16 @@ export function renderMapPage(
       return;
     }
     if (event.key !== 'Tab') return;
-    const buttons = [editPhotosButton, discardPhotosButton];
-    if (event.shiftKey && document.activeElement === buttons[0]) {
+    const buttons = [editPhotosButton, requestLocationButton, discardPhotosButton]
+      .filter((button) => !button.hidden && !button.disabled);
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
       event.preventDefault();
-      buttons[1].focus();
-    } else if (!event.shiftKey && document.activeElement === buttons[1]) {
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
       event.preventDefault();
-      buttons[0].focus();
+      first.focus();
     }
   });
 
@@ -824,6 +912,10 @@ export function renderMapPage(
     mapReady = false;
     reportSheet.dispose();
     handoffPhotos = [];
+    handoffLocationBinding = null;
+    handoffTarget = undefined;
+    captureTarget = undefined;
+    locationRequestGeneration += 1;
     captureHandoff.hidden = true;
     photoCapture.dispose();
   }
@@ -833,7 +925,25 @@ export function renderMapPage(
     element: page,
     state: pageState,
     mount: () => { void initializeMap(); },
-    openCapture: (stage) => photoCapture.open(stage),
+    openCapture: ((stage: CaptureStage, target?: Point) => {
+      if (stage === 'cleanup' && !target) throw new TypeError('Cleanup capture requires the report pin.');
+      captureTarget = target ? { lat: target.lat, lng: target.lng } : undefined;
+      photoCapture.open(stage);
+    }) as MapPageView['openCapture'],
+    getLocationBinding: () => handoffLocationBinding,
+    locationRejected: (code) => {
+      if (!isLocationRecoveryError(code) || captureHandoff.hidden) return;
+      resetHandoffLocation();
+      handoffLocationStatus.textContent = t(code === 'TOO_FAR'
+        ? 'capture.locationTooFar'
+        : code === 'LOCATION_INACCURATE'
+          ? 'capture.locationInaccurate'
+          : code === 'PIN_TOO_FAR'
+            ? 'capture.locationPinRejected'
+            : 'capture.locationStale');
+      requestLocationButton.textContent = t('capture.retryLocation');
+      requestLocationButton.focus();
+    },
     dispose: disposeMap,
   };
 }
