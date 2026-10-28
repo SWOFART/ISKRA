@@ -1,5 +1,6 @@
 """Read Google-sourced configuration without storing values in GitHub settings."""
 
+import html
 import json
 import os
 from pathlib import Path
@@ -36,13 +37,14 @@ def validate_config(raw, template, environment, target):
         raise ValueError("DEPLOY_ENABLED must be explicitly true or false in Google Cloud")
     if values["DEPLOY_ENABLED"] == "false":
         return values
-    for name in ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "APP_URL"):
+    url_name = "APP_URL" if target == "application" else "DEPLOYMENT_CHECK_URL"
+    for name in ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", url_name):
         if not values.get(name):
             raise ValueError(f"Required cloud configuration is missing: {name}")
-    url = urlsplit(values["APP_URL"])
+    url = urlsplit(values[url_name])
     if (url.scheme != "https" or not url.hostname or url.username or url.password
             or url.query or url.fragment or url.path not in ("", "/")):
-        raise ValueError("APP_URL must be an HTTPS origin")
+        raise ValueError(f"{url_name} must be an HTTPS origin")
     if target == "application":
         for name in ("GEMINI_API_KEY", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID",
                      "FIREBASE_PROJECT_ID", "VITE_FIREBASE_API_KEY", "VITE_MAPTILER_KEY"):
@@ -60,8 +62,45 @@ def write_private_json(path, values):
         json.dump(values, output)
 
 
+def deployment_summary(enabled, target, target_url, release, smoke_outcome):
+    if enabled == "false":
+        return "Google configuration was retrieved. Deployment is disabled; no Cloudflare write occurred.\n"
+    if enabled != "true":
+        return "Deployment configuration did not validate; no deployment link is available.\n"
+    if smoke_outcome != "success":
+        return "Deployment did not pass its release health check; no deployment link is being reported as live.\n"
+    if not target_url:
+        return "Deployment passed its release health check, but no target URL was provided.\n"
+    url = html.escape(target_url, quote=True)
+    return ("## Cloudflare deployment\n\n"
+            f"- Target: `{target}`\n"
+            f"- Release: `{release}`\n"
+            f'- <a href="{url}">Open deployed {html.escape(target)}</a>\n'
+            "- Exact-release health check: PASS\n"
+            "- Product acceptance is tracked separately.\n")
+
+
+def validate_health(health, target, release):
+    if health.get("ok") is not True or health.get("release") != release:
+        raise ValueError("The expected release is not healthy")
+    if target == "application" and health.get("service") == "iskra-deployment-check":
+        raise ValueError("APP_URL points to the infrastructure-check Worker, not the application")
+    if target == "deployment-check" and (
+        health.get("service") != "iskra-deployment-check"
+        or health.get("applicationReady") is not False
+    ):
+        raise ValueError("Expected the infrastructure-check Worker")
+
+
 def main():
     mode, environment, target = sys.argv[1:]
+    if mode == "summary":
+        print(deployment_summary(
+            os.environ.get("DEPLOY_ENABLED", ""), target,
+            os.environ.get("TARGET_URL", ""), os.environ.get("GITHUB_SHA", ""),
+            os.environ.get("SMOKE_OUTCOME", ""),
+        ), end="")
+        return
     if environment not in ("staging", "production"):
         raise ValueError("Unknown deployment environment")
     if target == "auto":
@@ -84,6 +123,9 @@ def main():
         enabled = values["DEPLOY_ENABLED"]
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write(f"enabled={enabled}\ntarget={target}\n")
+            if enabled == "true":
+                url_name = "APP_URL" if target == "application" else "DEPLOYMENT_CHECK_URL"
+                output.write(f"target_url={values[url_name]}\n")
         if enabled == "false":
             print("::notice::Deployment is disabled in Google Cloud; no Cloudflare write occurred.")
             return
@@ -109,16 +151,14 @@ def main():
                 command += ["--secrets-file", str(runtime_path)]
         subprocess.run(command, cwd=project, env=process_env, check=True)
     elif mode == "smoke":
-        url = values["APP_URL"].rstrip("/") + "/api/health?release=" + os.environ["GITHUB_SHA"]
+        url_name = "APP_URL" if target == "application" else "DEPLOYMENT_CHECK_URL"
+        url = values[url_name].rstrip("/") + "/api/health?release=" + os.environ["GITHUB_SHA"]
         result = subprocess.check_output([
             "curl", "--fail", "--silent", "--show-error", "--retry", "5",
             "--retry-all-errors", "--retry-delay", "3", "--max-time", "15", url,
         ], text=True)
         health = json.loads(result)
-        if health.get("ok") is not True or health.get("release") != os.environ["GITHUB_SHA"]:
-            raise ValueError("The expected release is not healthy")
-        if target == "deployment-check" and health.get("applicationReady") is not False:
-            raise ValueError("Expected the infrastructure-check Worker")
+        validate_health(health, target, os.environ["GITHUB_SHA"])
         print("Deployment release health check passed")
     else:
         raise ValueError("Unknown configuration operation")

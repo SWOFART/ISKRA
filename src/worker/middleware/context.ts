@@ -3,6 +3,7 @@ export type WorkerEnv = {
     ASSETS?: Fetcher;
     FIREBASE_PROJECT_ID?: string;
     MEDIA_SIGNING_SECRET?: string;
+    HYPERDRIVE?: { readonly connectionString: string };
     RELEASE_SHA?: string;
   };
   Variables: {

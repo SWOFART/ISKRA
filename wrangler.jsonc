@@ -14,7 +14,7 @@
   "env": {
     "staging": {
       "name": "iskra-staging",
-      "workers_dev": false,
+      "workers_dev": true,
       "assets": {
         "directory": "./dist/client",
         "binding": "ASSETS",

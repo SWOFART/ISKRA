@@ -1,0 +1,13 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "iskra-demo-seed-local",
+  "main": "demo-seed-r2-worker.ts",
+  "compatibility_date": "2026-10-27",
+  "workers_dev": false,
+  "r2_buckets": [
+    {
+      "binding": "DEMO_PHOTOS",
+      "bucket_name": "iskra-demo"
+    }
+  ]
+}
