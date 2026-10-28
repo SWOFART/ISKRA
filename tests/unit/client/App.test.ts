@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/client/App';
 import { createClientApi, DEVELOPMENT_FIXTURE_LABEL, type FixtureResponse } from '../../../src/client/api';
 import { clientDesign, type SupportedLocale } from '../../../src/client/designTokens';
+import { ReportSummarySchema } from '../../../src/shared/contracts';
 
 type TestListener = (event: Record<string, unknown>) => void;
 
@@ -148,6 +149,22 @@ function selectedTab(root: TestElement): TestElement | undefined {
   );
 }
 
+const confirmedUnresolvedReport = ReportSummarySchema.parse({
+  id: '11111111-1111-4111-8111-111111111111',
+  route: 'GREEN',
+  status: 'AWAITING_RESOLUTION',
+  location: { lat: 49.14, lng: 9.22 },
+  coverPhotoId: '22222222-2222-4222-8222-222222222222',
+  description: 'Litter remains beside the path.',
+  existenceYesCount: 8,
+  resolutionYesCount: 2,
+  existenceVerifiedAt: '2026-10-27T11:00:00.000Z',
+  lastExistenceConfirmedAt: '2026-10-27T12:00:00.000Z',
+  version: 8,
+  updatedAt: '2026-10-27T12:00:00.000Z',
+  isDemo: false,
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -273,6 +290,58 @@ describe('client shell', () => {
     expect(mapCanvas?.getAttribute('data-longitude')).toBe(String(clientDesign.map.center.longitude));
     expect(mapCanvas?.getAttribute('data-zoom')).toBe(String(clientDesign.map.zoom));
     expect(accessAttempts).toEqual([]);
+  });
+
+  it('shows confirmed unresolved reports as active and keeps verification queries citywide', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: (request) => {
+        requests.push(request.path);
+        return { status: 200, body: { items: [confirmedUnresolvedReport], nextCursor: null } };
+      },
+    });
+    const { root } = createHarness('/map', api);
+
+    await vi.waitFor(() => expect(root.querySelector('.report-list-item')).not.toBeNull());
+
+    const reportRow = root.querySelector('.report-list-item');
+    expect(reportRow?.textContent).toContain('Cleanup awaiting verification');
+    expect(reportRow?.textContent).toContain('Existence: 3/3 threshold · 8 confirmations');
+    expect(new URL(requests[0], 'https://iskra.invalid').searchParams.get('resolved')).toBe('false');
+    expect(new URL(requests[0], 'https://iskra.invalid').searchParams.get('needsVerification')).toBe('false');
+
+    root.querySelectorAll('.map-filter-button')[0].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    const verificationQuery = new URL(requests[1], 'https://iskra.invalid').searchParams;
+    expect(verificationQuery.get('needsVerification')).toBe('true');
+    expect(verificationQuery.get('bbox')).toBeNull();
+
+    root.querySelectorAll('.map-filter-button')[1].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    const resolvedQuery = new URL(requests[2], 'https://iskra.invalid').searchParams;
+    expect(resolvedQuery.get('resolved')).toBe('true');
+  });
+
+  it('filters the three route layers with readable route labels', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: (request) => {
+        requests.push(request.path);
+        return { status: 200, body: { items: [], nextCursor: null } };
+      },
+    });
+    const { root } = createHarness('/map', api);
+
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(root.querySelectorAll('.route-filter').map((button) => button.textContent))
+      .toEqual(['Green', 'Yellow', 'Red']);
+
+    root.querySelectorAll('.route-filter')[2].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expect(new URL(requests[1], 'https://iskra.invalid').searchParams.get('routes'))
+      .toBe('GREEN,YELLOW');
   });
 
   it.each([

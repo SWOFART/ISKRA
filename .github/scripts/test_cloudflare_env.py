@@ -72,12 +72,15 @@ class CloudConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_config(self.valid(), self.template, "production", "application")
 
-    def test_staging_auth_can_deploy_before_media_ai_and_map_are_connected(self):
+    def test_staging_requires_a_public_map_key_but_media_ai_can_remain_off(self):
         values = json.loads(self.valid()) | {
             "APP_ENV": "staging", "FIREBASE_PROJECT_ID": "sample-project",
             "VITE_FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_API_KEY": "browser-key",
             "VITE_FIREBASE_AUTH_DOMAIN": "sample-project.firebaseapp.com", "VITE_FIREBASE_APP_ID": "sample-app",
         }
+        with self.assertRaisesRegex(ValueError, "VITE_MAPTILER_KEY"):
+            validate_config(json.dumps(values), self.template, "staging", "application")
+        values["VITE_MAPTILER_KEY"] = "sample-map-key"
         self.assertEqual(validate_config(json.dumps(values), self.template, "staging", "application"), values)
         values["VITE_FIREBASE_PROJECT_ID"] = "another-project"
         with self.assertRaisesRegex(ValueError, "projects must match"):
