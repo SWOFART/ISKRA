@@ -11,7 +11,6 @@ import {
   type MessageKey,
   type MessageValues,
 } from './i18n';
-import { errorMessageKey, storeLocale, translate, type MessageKey, type MessageValues } from './i18n';
 import { renderMapPage, type MapPageState, type MapPageView } from './MapPage';
 
 type ClientApi = ReturnType<typeof createClientApi>;
