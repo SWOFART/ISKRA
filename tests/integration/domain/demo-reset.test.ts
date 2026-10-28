@@ -235,6 +235,7 @@ describe('guarded demo reset', () => {
         "INSERT INTO users (id, nickname, is_demo) VALUES ($1::text, 'Foreign ledger user', false)", [outsider],
       );
       const voteId = await stableUuid('vote/green-existence-1');
+      await pool.query('DELETE FROM reward_ledger WHERE source_ref = $1::varchar', ['vote:' + voteId]);
       await pool.query(
         `INSERT INTO reward_ledger (user_id, kind, delta, source_ref, vote_id, is_demo)
          VALUES ($1::text, 'VOTE', 5, 'foreign-vote-ledger', $2::uuid, false)`,
@@ -253,7 +254,7 @@ describe('guarded demo reset', () => {
       )).rows[0]?.count).toBe(1);
     }));
 
-  it('holds seeded vote FK locks while deleting objects so concurrent foreign references cannot race the reset', () =>
+  it('holds seeded FK parent locks while deleting objects so concurrent foreign references cannot race the reset', () =>
     withTestDatabase(async (pool) => {
       await installDemoSchema(pool);
       await seedDemo(pool);
@@ -275,9 +276,9 @@ describe('guarded demo reset', () => {
       await objectDeleteEntered;
 
       const insertion = pool.query(
-        `INSERT INTO reward_ledger (user_id, kind, delta, source_ref, vote_id, is_demo)
-         VALUES ($1::text, 'VOTE', 5, 'concurrent-vote-ledger', $2::uuid, false)`,
-        [outsider, voteId],
+        `INSERT INTO reward_ledger (user_id, kind, delta, source_ref, report_id, is_demo)
+         VALUES ($1::text, 'VOTE', 5, 'concurrent-report-ledger', $2::uuid, false)`,
+        [outsider, await stableUuid('report/green-resolved')],
       ).then(() => ({ status: 'inserted' as const }), (error: unknown) => ({ status: 'rejected' as const, error }));
       const raced = await Promise.race([
         insertion.then(() => 'settled' as const),
@@ -293,7 +294,7 @@ describe('guarded demo reset', () => {
         expect(insertResult.error).toMatchObject({ code: '23503' });
       }
       expect((await pool.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM reward_ledger WHERE source_ref = 'concurrent-vote-ledger'",
+        "SELECT count(*)::int AS count FROM reward_ledger WHERE source_ref = 'concurrent-report-ledger'",
       )).rows[0]?.count).toBe(0);
     }));
 

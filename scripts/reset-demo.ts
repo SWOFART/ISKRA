@@ -210,7 +210,7 @@ async function getSeedManifest(): Promise<SeedManifest> {
     ...reports.map((report, index) => ({
       userId: report.authorUserId, operation: 'REPORT_PUBLICATION',
       key: '', resourceId: report.id, responseStatus: 201,
-      label: ['green-resolved', 'yellow-pending', 'red-pending'][index]!,
+      label: 'publish/' + ['green-resolved', 'yellow-pending', 'red-pending'][index]!,
     })),
     ...voteDefinitions.map((vote, index) => ({
       userId: vote.voterUserId, operation: 'REPORT_VOTE',
