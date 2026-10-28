@@ -3,7 +3,7 @@ import { createClientApi } from './api';
 import type { FirebaseSession } from './auth';
 import { renderAuthPanel } from './auth-panel';
 import { errorMessageKey, storeLocale, translate, type MessageKey, type MessageValues } from './i18n';
-import { renderMapPage } from './MapPage';
+import { renderMapPage, type MapPageView } from './MapPage';
 
 type ClientApi = ReturnType<typeof createClientApi>;
 type Translate = (key: MessageKey, values?: MessageValues) => string;
@@ -114,6 +114,7 @@ export function App(
     rewards: 'nav.rewards',
   };
   let tabs = new Map<TabId, HTMLButtonElement>();
+  let currentMapPage: MapPageView | undefined;
 
   function createTab(tabId: TabId): HTMLButtonElement {
     const label = t(tabLabelKeys[tabId]);
@@ -217,6 +218,8 @@ export function App(
     authIntent = null;
   }
   function activateTab(tabId: TabId, updateHistory: boolean): void {
+    currentMapPage?.dispose();
+    currentMapPage = undefined;
     authPanel?.dispose();
     authPanel = undefined;
     selectedTab = tabId;
@@ -255,7 +258,7 @@ export function App(
       });
       panel.appendChild(authPanel.element);
     } else if (selectedTab === 'map') {
-      const map = renderMapPage(() => {
+      currentMapPage = renderMapPage(() => {
         if (session && (!session.uid || session.uid !== accountUid)) { openSignIn('report'); return; }
         const notice = panel.querySelector<HTMLElement>('.map-notice');
         if (notice) {
@@ -263,7 +266,7 @@ export function App(
           notice.hidden = false;
         }
       }, api, t, locale);
-      appendElements(panel, map);
+      appendElements(panel, currentMapPage.element);
     } else if (selectedTab === 'impact') {
       appendElements(panel,
         renderDeferredPanel(
@@ -287,6 +290,7 @@ export function App(
     }
 
     main.replaceChildren(panel);
+    currentMapPage?.mount();
     if (authPanel) panel.querySelector<HTMLElement>('#auth-heading')?.focus();
   }
 

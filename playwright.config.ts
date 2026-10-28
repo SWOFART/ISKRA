@@ -14,6 +14,7 @@ export default defineConfig({
       VITE_FIREBASE_PROJECT_ID: 'iskra-browser-test',
       VITE_FIREBASE_AUTH_DOMAIN: 'iskra-browser-test.firebaseapp.com',
       VITE_FIREBASE_APP_ID: 'local-browser-fixture-app',
+      VITE_MAPTILER_KEY: 'local-map-fixture-key',
     },
     url: 'http://127.0.0.1:8789/api/health',
     reuseExistingServer: false,

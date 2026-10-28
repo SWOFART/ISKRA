@@ -179,6 +179,7 @@ button {
 
 .map-marker-layer {
   position: absolute;
+  z-index: 1;
   inset: 0;
   pointer-events: none;
 }
@@ -272,13 +273,28 @@ button {
 }
 
 .fixture-banner { z-index: 2; top: 128px; right: 14px; left: 14px; }
-.report-button { z-index: 3; right: 14px; bottom: 14px; min-height: 48px; }
+.report-button { z-index: 3; right: 14px; bottom: 52px; min-height: 48px; }
 .map-notice { z-index: 3; bottom: 74px; }
+.map-tile-status {
+  position: absolute;
+  z-index: 3;
+  right: 14px;
+  bottom: 108px;
+  max-width: min(440px, calc(100% - 28px));
+  padding: 10px 13px;
+  border: 1px solid var(--client-color-border);
+  border-radius: var(--client-radius-control);
+  background: var(--client-color-surface);
+  color: var(--client-color-text);
+  font-size: 0.76rem;
+  box-shadow: 0 6px 24px rgb(22 53 43 / 12%);
+}
+.map-tile-status:not([hidden]) { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 
 .report-list-fallback {
   display: grid;
   min-height: 0;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   overflow: hidden;
   padding: 12px 16px 8px;
   border-top: 1px solid var(--client-color-border);
@@ -300,6 +316,33 @@ button {
 .report-list-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .report-list-header h2 { margin: 0; font-size: 0.95rem; }
 .report-list-summary { color: var(--client-color-text-muted); font-size: 0.72rem; }
+.map-cluster-details {
+  max-height: min(24vh, 145px);
+  margin: 7px 0 0;
+  padding: 6px 8px;
+  overflow-y: auto;
+  border: 1px solid var(--client-color-border);
+  border-radius: var(--client-radius-control);
+  background: var(--client-color-surface-muted);
+}
+.map-cluster-details-heading { margin: 0 0 4px; font-size: 0.76rem; }
+.map-cluster-details-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.map-cluster-report {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 7px;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--client-color-surface);
+  color: var(--client-color-text);
+  text-align: left;
+  cursor: pointer;
+}
+.map-cluster-report[aria-pressed="true"] { border-color: var(--client-color-brand); }
+.map-cluster-report .report-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-cluster-report:focus-visible { outline: 3px solid var(--client-color-focus); outline-offset: 2px; }
 .map-report-list { min-height: 0; margin: 7px -4px 0; padding: 0 4px; overflow-y: auto; list-style: none; }
 .report-list-row { border-top: 1px solid var(--client-color-border); }
 .report-list-item {
@@ -330,7 +373,8 @@ button {
   .route-filter, .map-filter-button { min-height: 36px; padding: 0 8px; font-size: 0.67rem; }
   .map-status { max-width: calc(100% - 174px); font-size: 0.66rem; }
   .map-fit-button { bottom: 12px; left: 10px; }
-  .report-button { right: 10px; bottom: 10px; min-height: 44px; padding: 0 14px; font-size: 0.8rem; }
+  .report-button { right: 10px; bottom: 52px; min-height: 44px; padding: 0 14px; font-size: 0.8rem; }
+  .map-tile-status { right: 10px; bottom: 104px; }
   .report-list-fallback { padding-right: 10px; padding-left: 10px; }
 }
 
@@ -338,11 +382,12 @@ button {
   position: absolute;
   inset: 0;
   background-color: var(--client-color-surface-muted);
-  background-image:
-    linear-gradient(to right, rgb(82 96 89 / 11%) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(82 96 89 / 11%) 1px, transparent 1px);
-  background-size: 56px 56px;
 }
+
+.map-canvas.maplibregl-map { background: var(--client-color-surface-muted); }
+.maplibregl-ctrl-bottom-right { bottom: 48px; }
+.maplibregl-ctrl-group { overflow: hidden; border: 1px solid var(--client-color-border); border-radius: 9px; box-shadow: 0 3px 12px rgb(22 53 43 / 14%); }
+.maplibregl-ctrl button:focus-visible { outline: 3px solid var(--client-color-focus); outline-offset: -3px; }
 
 .map-location,
 .map-status {
@@ -392,7 +437,8 @@ button {
   min-width: 0;
 }
 
-.retry-button {
+.retry-button,
+.retry-tiles-button {
   min-height: 34px;
   padding: 0 12px;
   border: 0;

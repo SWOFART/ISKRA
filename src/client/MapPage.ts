@@ -1,4 +1,6 @@
 import { ReportListSchema, type ReportSummary, type Route } from '../shared/contracts';
+import type { Map as MapLibreMap } from 'maplibre-gl';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { ApiClientError, createClientApi } from './api';
 import { clientDesign, type SupportedLocale } from './designTokens';
 import { errorMessageKey, type MessageKey, type MessageValues } from './i18n';
@@ -13,6 +15,29 @@ const routeKeys: Record<Route, MessageKey> = {
   YELLOW: 'map.route.yellow',
   RED: 'map.route.red',
 };
+const defaultMapStyleUrl = 'https://api.maptiler.com/maps/streets-v4/style.json';
+
+export interface MapPageView {
+  element: HTMLElement;
+  mount(): void;
+  dispose(): void;
+}
+
+function mapStyleUrl(): string | null {
+  const key = import.meta.env.VITE_MAPTILER_KEY?.trim();
+  if (!key) return null;
+
+  try {
+    const url = new URL(import.meta.env.VITE_MAP_STYLE_URL?.trim() || defaultMapStyleUrl);
+    if (url.protocol !== 'https:' || url.hostname !== 'api.maptiler.com'
+      || !/^\/maps\/[a-zA-Z0-9_-]+\/style\.json$/.test(url.pathname)) return null;
+    url.search = '';
+    url.searchParams.set('key', key);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
 
 function makeElement<K extends keyof HTMLElementTagNameMap>(
   tagName: K,
@@ -115,7 +140,7 @@ export function renderMapPage(
   api: ClientApi,
   t: Translate,
   locale: SupportedLocale,
-): HTMLElement {
+): MapPageView {
   const page = makeElement('section', 'map-page');
   page.setAttribute('aria-label', t('map.region'));
 
@@ -124,7 +149,6 @@ export function renderMapPage(
   mapCanvas.setAttribute('data-latitude', String(clientDesign.map.center.latitude));
   mapCanvas.setAttribute('data-longitude', String(clientDesign.map.center.longitude));
   mapCanvas.setAttribute('data-zoom', String(clientDesign.map.zoom));
-  mapCanvas.setAttribute('aria-hidden', 'true');
 
   const markerLayer = makeElement('div', 'map-marker-layer');
   markerLayer.setAttribute('aria-label', t('map.markersLabel'));
@@ -132,6 +156,17 @@ export function renderMapPage(
   mapViewport.setAttribute('role', 'region');
   mapViewport.setAttribute('aria-label', t('map.canvasLabel'));
   appendElements(mapViewport, mapCanvas, markerLayer);
+
+  const tileStatus = makeElement('div', 'map-tile-status');
+  tileStatus.setAttribute('role', 'status');
+  tileStatus.setAttribute('aria-live', 'polite');
+  tileStatus.setAttribute('aria-busy', 'false');
+  tileStatus.hidden = true;
+  const tileStatusText = makeElement('span', undefined, t('map.tilesUnavailable'));
+  const retryTilesButton = makeButton(t('map.retryTiles'), 'retry-tiles-button');
+  retryTilesButton.setAttribute('aria-label', t('map.retryTilesLabel'));
+  retryTilesButton.hidden = true;
+  appendElements(tileStatus, tileStatusText, retryTilesButton);
 
   const mapLabel = makeElement('div', 'map-location');
   appendElements(mapLabel,
@@ -208,12 +243,20 @@ export function renderMapPage(
   listHeading.id = 'map-report-list-heading';
   const listSummary = makeElement('span', 'report-list-summary');
   appendElements(listHeader, listHeading, listSummary);
+  const clusterDetails = makeElement('section', 'map-cluster-details');
+  clusterDetails.setAttribute('aria-label', t('map.clusterDetails.region'));
+  clusterDetails.setAttribute('aria-live', 'polite');
+  clusterDetails.hidden = true;
+  const clusterDetailsHeading = makeElement('h3', 'map-cluster-details-heading');
+  const clusterDetailsList = makeElement('ul', 'map-cluster-details-list');
+  appendElements(clusterDetails, clusterDetailsHeading, clusterDetailsList);
   const reportList = makeElement('ul', 'map-report-list');
   reportList.id = 'map-report-list';
-  appendElements(listPanel, fixtureBanner, listHeader, reportList);
+  appendElements(listPanel, fixtureBanner, listHeader, clusterDetails, reportList);
 
   appendElements(mapArea,
     mapViewport,
+    tileStatus,
     mapLabel,
     mapStatus,
     filterBar,
@@ -224,10 +267,15 @@ export function renderMapPage(
   appendElements(page, mapArea, listPanel);
 
   let reports: ReportSummary[] = [];
-  let viewport: GeoBounds = cityViewport(clientDesign.map.center);
+  let mapInstance: MapLibreMap | null = null;
+  let mapReady = false;
+  let tileFailureSeen = false;
+  let resizeObserver: ResizeObserver | undefined;
+  let mapGeneration = 0;
   let needsVerification = false;
   let includeResolved = false;
   let selectedReportId: string | null = null;
+  let expandedClusterReportIds: string[] | null = null;
   let reportLoadBusy = true;
   let reportLoadFailed = false;
   let loadGeneration = 0;
@@ -265,12 +313,29 @@ export function renderMapPage(
     scheduleEnable();
   }
 
+  function fitMapToReports(targetReports: readonly ReportSummary[]): void {
+    if (!mapInstance || !mapReady || targetReports.length === 0) return;
+    const bounds = viewportForReports(targetReports, cityViewport(clientDesign.map.center));
+    mapInstance.fitBounds([[bounds.west, bounds.south], [bounds.east, bounds.north]], {
+      padding: 72,
+      maxZoom: 16,
+      duration: 300,
+    });
+  }
+
   function renderReports(): void {
     const visibleReports = reports.filter((report) => selectedRoutes.has(report.route)
       && (includeResolved || report.status !== 'RESOLVED'));
     const mapWidth = mapViewport.clientWidth || 1000;
     const mapHeight = mapViewport.clientHeight || 700;
-    const clusters = clusterReports(visibleReports, viewport, 54, mapWidth, mapHeight);
+    const clusters = mapInstance && mapReady
+      ? clusterReports(visibleReports, cityViewport(clientDesign.map.center), 54, mapWidth, mapHeight,
+        (location) => {
+          if (!mapInstance?.getBounds().contains([location.lng, location.lat])) return null;
+          const point = mapInstance.project([location.lng, location.lat]);
+          return { x: point.x, y: point.y };
+        })
+      : [];
     markerLayer.replaceChildren();
     reportList.replaceChildren();
 
@@ -288,7 +353,8 @@ export function renderMapPage(
       const marginY = (19 / mapHeight) * 100;
       const left = Math.max(marginX, Math.min(100 - marginX, (cluster.x / mapWidth) * 100));
       const top = Math.max(marginY, Math.min(100 - marginY, (cluster.y / mapHeight) * 100));
-      marker.setAttribute('style', `left:${left}%;top:${top}%;`);
+      marker.style.left = `${left}%`;
+      marker.style.top = `${top}%`;
       marker.setAttribute('aria-label', cluster.reports.length > 1
         ? t('map.clusterLabel', { count: cluster.reports.length, routes: routeSummary })
         : t('map.markerLabel', {
@@ -298,12 +364,47 @@ export function renderMapPage(
       marker.setAttribute('aria-controls', reportList.id);
       marker.setAttribute('aria-pressed', String(cluster.reports.some(({ id }) => id === selectedReportId)));
       marker.addEventListener('click', () => {
-        if (cluster.reports.length > 1) viewport = viewportForReports(cluster.reports, viewport);
+        expandedClusterReportIds = cluster.reports.length > 1
+          ? cluster.reports.map(({ id }) => id)
+          : null;
+        if (cluster.reports.length > 1) fitMapToReports(cluster.reports);
         selectedReportId = cluster.reports[0].id;
         renderReports();
         reportList.querySelector<HTMLButtonElement>(`[data-report-id="${selectedReportId}"]`)?.focus();
       });
       markerLayer.appendChild(marker);
+    }
+
+    const expandedClusterReports = expandedClusterReportIds
+      ? visibleReports.filter(({ id }) => expandedClusterReportIds?.includes(id))
+      : [];
+    clusterDetails.hidden = expandedClusterReports.length === 0;
+    clusterDetailsHeading.textContent = expandedClusterReports.length > 0
+      ? t('map.clusterDetails.heading', { count: expandedClusterReports.length })
+      : '';
+    clusterDetailsList.replaceChildren();
+    for (const report of expandedClusterReports) {
+      const item = makeElement('li', 'map-cluster-report-row');
+      const select = makeButton('', 'map-cluster-report');
+      select.setAttribute('data-report-id', report.id);
+      select.setAttribute('aria-pressed', String(report.id === selectedReportId));
+      select.setAttribute('aria-label', t('map.clusterDetails.itemLabel', {
+        route: routeLabel(report.route, t),
+        status: statusLabel(report, t),
+        description: report.description,
+      }));
+      appendElements(select,
+        makeElement('span', `report-route report-route--${report.route.toLowerCase()}`, routeLabel(report.route, t)),
+        makeElement('span', 'report-status-text', statusLabel(report, t)),
+        makeElement('span', 'report-description', report.description));
+      select.addEventListener('click', () => {
+        selectedReportId = report.id;
+        fitMapToReports([report]);
+        renderReports();
+        reportList.querySelector<HTMLButtonElement>(`[data-report-id="${report.id}"]`)?.focus();
+      });
+      item.appendChild(select);
+      clusterDetailsList.appendChild(item);
     }
 
     for (const report of visibleReports) {
@@ -322,7 +423,7 @@ export function renderMapPage(
       appendElements(select, route, status, description, progress);
       select.addEventListener('click', () => {
         selectedReportId = report.id;
-        viewport = viewportForReports([report], viewport);
+        fitMapToReports([report]);
         renderReports();
       });
       item.appendChild(select);
@@ -355,6 +456,7 @@ export function renderMapPage(
     reportLoadFailed = false;
     reports = [];
     selectedReportId = null;
+    expandedClusterReportIds = null;
     fixtureBanner.hidden = true;
     renderReports();
 
@@ -429,12 +531,100 @@ export function renderMapPage(
     if (!retryButton.hidden && !retryButton.disabled) void loadReports();
   });
   fitButton.addEventListener('click', () => {
-    viewport = viewportForReports(reports.filter((report) => selectedRoutes.has(report.route)
+    fitMapToReports(reports.filter((report) => selectedRoutes.has(report.route)
       && (includeResolved || report.status !== 'RESOLVED')),
-      cityViewport(clientDesign.map.center));
+    );
     renderReports();
   });
 
+  function showTileFailure(missingKey = false): void {
+    tileStatusText.textContent = t(missingKey ? 'map.tilesMissingKey' : 'map.tilesUnavailable');
+    retryTilesButton.hidden = missingKey;
+    retryTilesButton.disabled = false;
+    tileStatus.setAttribute('aria-busy', 'false');
+    tileStatus.hidden = false;
+  }
+
+  async function initializeMap(): Promise<void> {
+    if (typeof HTMLElement === 'undefined' || !(mapCanvas instanceof HTMLElement)) return;
+    const style = mapStyleUrl();
+    if (!style) {
+      showTileFailure(true);
+      return;
+    }
+
+    const generation = ++mapGeneration;
+    tileStatusText.textContent = t('map.tilesLoading');
+    tileStatus.setAttribute('aria-busy', 'true');
+    tileStatus.hidden = false;
+    retryTilesButton.hidden = true;
+    retryTilesButton.disabled = true;
+    try {
+      const { Map: MapLibreMapConstructor, setWorkerUrl } = await import('maplibre-gl');
+      if (generation !== mapGeneration || !mapCanvas.isConnected) return;
+      setWorkerUrl(maplibreWorkerUrl);
+      const cityBounds = cityViewport(clientDesign.map.center);
+      const instance = new MapLibreMapConstructor({
+        container: mapCanvas,
+        style,
+        center: [clientDesign.map.center.longitude, clientDesign.map.center.latitude],
+        zoom: clientDesign.map.zoom,
+        minZoom: 11,
+        maxZoom: 18,
+        maxBounds: [[cityBounds.west, cityBounds.south], [cityBounds.east, cityBounds.north]],
+        pitchWithRotate: false,
+        dragRotate: false,
+      });
+      mapInstance = instance;
+      mapReady = false;
+      tileFailureSeen = false;
+      instance.on('error', () => {
+        if (mapInstance !== instance) return;
+        tileFailureSeen = true;
+        showTileFailure();
+      });
+      instance.once('load', () => {
+        if (mapInstance !== instance) return;
+        mapReady = true;
+        instance.resize();
+        if (!tileFailureSeen) {
+          tileStatus.hidden = true;
+          tileStatus.setAttribute('aria-busy', 'false');
+          retryTilesButton.disabled = false;
+        }
+        renderReports();
+      });
+      instance.on('moveend', renderReports);
+      resizeObserver = new ResizeObserver(() => instance.resize());
+      resizeObserver.observe(mapViewport);
+    } catch {
+      if (generation === mapGeneration) showTileFailure();
+    }
+  }
+
+  retryTilesButton.addEventListener('click', () => {
+    if (retryTilesButton.hidden) return;
+    retryTilesButton.disabled = true;
+    mapInstance?.remove();
+    mapInstance = null;
+    mapReady = false;
+    mapGeneration += 1;
+    resizeObserver?.disconnect();
+    resizeObserver = undefined;
+    void initializeMap();
+  });
+
+  function disposeMap(): void {
+    loadGeneration += 1;
+    mapGeneration += 1;
+    clearRetryTimer();
+    resizeObserver?.disconnect();
+    resizeObserver = undefined;
+    mapInstance?.remove();
+    mapInstance = null;
+    mapReady = false;
+  }
+
   void loadReports();
-  return page;
+  return { element: page, mount: () => { void initializeMap(); }, dispose: disposeMap };
 }

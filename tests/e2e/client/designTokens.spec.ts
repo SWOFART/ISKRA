@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../fixtures';
 
 test('client design defaults are applied to the rendered shell and map preview', async ({ page }) => {
   await page.goto('/');

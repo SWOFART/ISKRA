@@ -16,6 +16,8 @@ export interface ReportCluster extends MapPoint {
   reports: ReportSummary[];
 }
 
+export type LocationProjector = (location: ReportSummary['location']) => MapPoint | null;
+
 const WORLD_WIDTH = 1000;
 const WORLD_HEIGHT = 700;
 export function cityViewport(center: { latitude: number; longitude: number }): GeoBounds {
@@ -47,6 +49,7 @@ export function clusterReports(
   radius = 54,
   width = WORLD_WIDTH,
   height = WORLD_HEIGHT,
+  projector?: LocationProjector,
 ): ReportCluster[] {
   const groups: ReportCluster[] = [];
   const bins = new Map<string, Set<ReportCluster>>();
@@ -66,7 +69,9 @@ export function clusterReports(
   };
 
   for (const report of [...reports].sort((a, b) => a.id.localeCompare(b.id))) {
-    const point = projectLocation(report.location, bounds, width, height);
+    const point = projector
+      ? projector(report.location)
+      : projectLocation(report.location, bounds, width, height);
     if (!point) continue;
 
     const [column, row] = keyFor(point).split(',').map(Number);

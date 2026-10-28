@@ -55,9 +55,9 @@ def validate_config(raw, template, environment, target):
         if values.get("HYPERDRIVE_ID") and not re.fullmatch(r"[0-9a-f]{32}", values["HYPERDRIVE_ID"]):
             raise ValueError("HYPERDRIVE_ID must be a Cloudflare configuration identifier")
         required = ["FIREBASE_PROJECT_ID", "VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN",
-                    "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID"]
+                    "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID", "VITE_MAPTILER_KEY"]
         if environment == "production":
-            required += ["GEMINI_API_KEY", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID", "VITE_MAPTILER_KEY"]
+            required += ["GEMINI_API_KEY", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID"]
         for name in required:
             if not values.get(name):
                 raise ValueError(f"Required cloud configuration is missing: {name}")
