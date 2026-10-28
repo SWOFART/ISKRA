@@ -1,5 +1,8 @@
 import './styles.css';
 import { App } from './App';
+import { applyClientDesignTokens } from './applyDesignTokens';
+
+applyClientDesignTokens(document.documentElement.style);
 
 const root = document.querySelector<HTMLElement>('#root');
 
