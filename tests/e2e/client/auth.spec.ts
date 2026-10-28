@@ -71,3 +71,34 @@ test('provider success still reports unavailable account setup and allows a retr
   await page.getByRole('button', { name: 'Back to browsing' }).click();
   await expect(page.getByRole('button', { name: 'Start a litter report' })).toBeVisible();
 });
+
+test('cancelling an unresolved sign-in permits another attempt without waiting for the old request', async ({ page }) => {
+  let started!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+  let release!: () => void;
+  const holdFirst = new Promise<void>((resolve) => { release = resolve; });
+  let requests = 0;
+  await page.route('https://identitytoolkit.googleapis.com/**', async (route) => {
+    requests += 1;
+    if (requests === 1) { started(); await holdFirst; }
+    await route.fulfill({ status: 400, contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 400, message: 'INVALID_LOGIN_CREDENTIALS' } }),
+    }).catch(() => {});
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start a litter report' }).click();
+  await expect(page.getByLabel('Email', { exact: true })).toBeEnabled();
+  await page.getByLabel('Email', { exact: true }).fill('resident@example.test');
+  await page.getByLabel('Password', { exact: true }).fill('test-password');
+  await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await firstStarted;
+  await page.getByRole('button', { name: 'Back to browsing' }).click();
+  await page.getByRole('button', { name: 'Start a litter report' }).click();
+  await expect(page.getByLabel('Email', { exact: true })).toBeEnabled();
+  await page.getByLabel('Email', { exact: true }).fill('resident@example.test');
+  await page.getByLabel('Password', { exact: true }).fill('test-password');
+  await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.locator('.auth-status')).toContainText('Sign-in could not be completed');
+  release();
+  await expect(page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true })).toBeEnabled();
+});
