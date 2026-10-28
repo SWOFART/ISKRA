@@ -63,10 +63,10 @@ export interface DemoSeedPhotoObjectKeys {
 export function demoSeedPhotoObjectKeys(sha256: string): DemoSeedPhotoObjectKeys {
   if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error('The controlled demo photo hash is invalid.');
   return {
-    greenBefore: `${OBJECT_PREFIX}green-resolved/before-${sha256}.jpg`,
-    yellowBefore: `${OBJECT_PREFIX}yellow-pending/before-${sha256}.jpg`,
-    redBefore: `${OBJECT_PREFIX}red-pending/before-${sha256}.jpg`,
-    greenAfter: `${OBJECT_PREFIX}green-resolved/after-${sha256}.jpg`,
+    greenBefore: `${DEMO_SEED_OBJECT_PREFIX}green-resolved/before-${sha256}.jpg`,
+    yellowBefore: `${DEMO_SEED_OBJECT_PREFIX}yellow-pending/before-${sha256}.jpg`,
+    redBefore: `${DEMO_SEED_OBJECT_PREFIX}red-pending/before-${sha256}.jpg`,
+    greenAfter: `${DEMO_SEED_OBJECT_PREFIX}green-resolved/after-${sha256}.jpg`,
   };
 }
 
