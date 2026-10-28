@@ -12,14 +12,16 @@ import { PostgresReportPublicationService } from './publication';
 import { hashBeforeEvidence, type ReportMediaResolver } from './report-context';
 import { PostgresReportVotingService } from './voting';
 
-const DEMO_SCHEMA_VERSION = 1;
-const DEMO_MARKER_OPERATION = 'DEMO_SEED';
-const DEMO_MARKER_KEY = 'seed-v1';
-const USER_PREFIX = 'iskra-demo-seed:v1:';
-const OBJECT_PREFIX = 'demo-fixtures/seed-v1/';
+export const DEMO_SCHEMA_VERSION = 1;
+export const DEMO_MARKER_OPERATION = 'DEMO_SEED';
+export const DEMO_MARKER_KEY = 'seed-v1';
+export const DEMO_SEED_LOCK_KEY = 'iskra-demo-seed-v1';
+export const DEMO_SEED_USER_PREFIX = 'iskra-demo-seed:v1:';
+export const DEMO_SEED_OBJECT_PREFIX = 'demo-fixtures/seed-v1/';
 const MODEL_ID = 'demo-recorded-fixture-v1';
 const PROMPT_VERSION = 'demo-seed-v1';
 const UUID_NAMESPACE = '6ba7b8109dad11d180b400c04fd430c8';
+export const DEMO_SEED_REQUEST_HASH = 'demo-seed-v1:reporter-20:verifier-5:cleaner-40:green-5-existence-3-resolution';
 
 export interface DemoSeedTarget {
   readonly protocol: string;
@@ -84,13 +86,13 @@ export interface DemoSeedResult {
 }
 
 const userIds = {
-  reporterGreen: `${USER_PREFIX}reporter-resolved`,
-  reporterYellow: `${USER_PREFIX}reporter-yellow`,
-  reporterRed: `${USER_PREFIX}reporter-red`,
-  cleaner: `${USER_PREFIX}cleaner-green`,
-  existence: Array.from({ length: 5 }, (_, index) => `${USER_PREFIX}existence-voter-${index + 1}`),
-  resolution: Array.from({ length: 3 }, (_, index) => `${USER_PREFIX}resolution-voter-${index + 1}`),
-  yellow: Array.from({ length: 2 }, (_, index) => `${USER_PREFIX}yellow-voter-${index + 1}`),
+  reporterGreen: `${DEMO_SEED_USER_PREFIX}reporter-resolved`,
+  reporterYellow: `${DEMO_SEED_USER_PREFIX}reporter-yellow`,
+  reporterRed: `${DEMO_SEED_USER_PREFIX}reporter-red`,
+  cleaner: `${DEMO_SEED_USER_PREFIX}cleaner-green`,
+  existence: Array.from({ length: 5 }, (_, index) => `${DEMO_SEED_USER_PREFIX}existence-voter-${index + 1}`),
+  resolution: Array.from({ length: 3 }, (_, index) => `${DEMO_SEED_USER_PREFIX}resolution-voter-${index + 1}`),
+  yellow: Array.from({ length: 2 }, (_, index) => `${DEMO_SEED_USER_PREFIX}yellow-voter-${index + 1}`),
 };
 
 const allUserIds = [
@@ -103,7 +105,9 @@ const allUserIds = [
   ...userIds.yellow,
 ];
 
-async function stableUuid(label: string): Promise<string> {
+export const DEMO_SEED_USER_IDS: readonly string[] = Object.freeze([...allUserIds]);
+
+export async function stableUuid(label: string): Promise<string> {
   const namespace = Uint8Array.from(UUID_NAMESPACE.match(/.{2}/g)!.map((part) => Number.parseInt(part, 16)));
   const name = new TextEncoder().encode(`swofart.iskra.${label}`);
   const bytes = new Uint8Array(namespace.length + name.length);
@@ -117,7 +121,7 @@ async function stableUuid(label: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-async function assertMarkedDemoSchema(client: CheckedOutClient): Promise<void> {
+export async function assertMarkedDemoSchema(client: CheckedOutClient): Promise<void> {
   let marker;
   try {
     marker = await client.query<{
@@ -314,7 +318,7 @@ async function assertNoPartialSeed(client: CheckedOutClient, reportIds: readonly
        UNION ALL SELECT 1 FROM report_photos WHERE object_key LIKE $3::varchar
        UNION ALL SELECT 1 FROM reward_ledger WHERE source_ref LIKE 'demo-seed:v1:%'
      ) AS present`,
-    [allUserIds, reportIds, `${OBJECT_PREFIX}%`],
+    [allUserIds, reportIds, `${DEMO_SEED_OBJECT_PREFIX}%`],
   );
   if (result.rows[0]?.present) {
     throw new Error('Reserved demo seed data exists without its completion marker; refusing to overwrite it.');
@@ -415,7 +419,7 @@ async function verifyDemoSeed(
        (SELECT array_agg(object_key ORDER BY object_key) FROM report_photos WHERE object_key LIKE $4::varchar
          AND byte_size = $5::integer AND sha256 = $6::char(64)) AS object_keys,
        (SELECT count(*)::int FROM reward_ledger WHERE report_id = ANY($7::uuid[]) AND is_demo = true) AS ledger`,
-    [allUserIds, MODEL_ID, PROMPT_VERSION, `${OBJECT_PREFIX}%`, photo.byteSize, photo.sha256,
+    [allUserIds, MODEL_ID, PROMPT_VERSION, `${DEMO_SEED_OBJECT_PREFIX}%`, photo.byteSize, photo.sha256,
       [reportIds.greenResolved, reportIds.yellowPending, reportIds.redPending]],
   );
   if (demoRows.rows[0]?.analyses !== 4 || demoRows.rows[0]?.photos !== 4
@@ -472,14 +476,23 @@ export class PostgresDemoSeedService {
     const requestHash = 'demo-seed-v1:reporter-20:verifier-5:cleaner-40:green-5-existence-3-resolution';
 
     return this.database.withTransaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))', [DEMO_SEED_LOCK_KEY]);
       await assertMarkedDemoSchema(client);
-      const marker = await client.query<{ request_hash: string; resource_id: string | null }>(
-        `SELECT request_hash, resource_id FROM idempotency_keys
+      const marker = await client.query<{
+        request_hash: string;
+        resource_id: string | null;
+        response_body: unknown;
+      }>(
+        `SELECT request_hash, resource_id, response_body FROM idempotency_keys
          WHERE user_id = $1::text AND operation = $2::varchar AND key = $3::varchar`,
         [userIds.reporterGreen, DEMO_MARKER_OPERATION, DEMO_MARKER_KEY],
       );
       if (marker.rows[0]) {
-        if (marker.rows[0].request_hash !== requestHash || marker.rows[0].resource_id !== reportIds.greenResolved) {
+        if (marker.rows[0].response_body !== null) {
+          throw new Error('Demo seed reset is pending; complete the guarded reset before replaying the seed.');
+        }
+        if (marker.rows[0].request_hash !== DEMO_SEED_REQUEST_HASH
+          || marker.rows[0].resource_id !== reportIds.greenResolved) {
           throw new Error('Demo seed marker conflicts with the current deterministic seed definition.');
         }
         const snapshots = await verifyDemoSeed(this.database, client, reportIds, this.photo);
@@ -557,7 +570,8 @@ export class PostgresDemoSeedService {
       await client.query(
         `INSERT INTO idempotency_keys (user_id, operation, key, request_hash, resource_id, response_status)
          VALUES ($1::text, $2::varchar, $3::varchar, $4::varchar, $5::uuid, 200)`,
-        [userIds.reporterGreen, DEMO_MARKER_OPERATION, DEMO_MARKER_KEY, requestHash, reportIds.greenResolved],
+        [userIds.reporterGreen, DEMO_MARKER_OPERATION, DEMO_MARKER_KEY,
+          DEMO_SEED_REQUEST_HASH, reportIds.greenResolved],
       );
       return { alreadySeeded: false, reports: reportIds, snapshots };
     });
