@@ -1,7 +1,7 @@
 import { ReportDetailSchema, type Photo, type ReportSummary, type Route, type Stage } from '../shared/contracts';
 import type { Infer } from '../shared/schema';
 import type { SupportedLocale } from './designTokens';
-import type { MessageKey, MessageValues } from './i18n';
+import { formatDateTime, type MessageKey, type MessageValues } from './i18n';
 import { renderPhotoGallery, type PhotoGalleryView } from './PhotoGallery';
 
 type Translate = (key: MessageKey, values?: MessageValues) => string;
@@ -168,10 +168,7 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     }));
     appendElements(progress, progressHeading, existence);
     if (detail.lastExistenceConfirmedAt) {
-      const date = new Intl.DateTimeFormat(options.locale === 'de' ? 'de-DE' : 'en-GB', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      }).format(new Date(detail.lastExistenceConfirmedAt));
+      const date = formatDateTime(options.locale, detail.lastExistenceConfirmedAt);
       progress.appendChild(makeElement('p', 'report-latest-confirmation', options.t('map.progress.latest', { date })));
     }
     if (detail.afterPhotos.length > 0 || detail.status === 'AWAITING_RESOLUTION' || detail.status === 'RESOLVED') {

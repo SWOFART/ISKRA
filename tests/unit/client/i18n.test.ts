@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   errorMessageKey,
+  formatDateTime,
+  formatNumber,
   LOCALE_STORAGE_KEY,
   localeFromBrowserLanguages,
   readStoredLocale,
@@ -34,6 +36,19 @@ describe('client localization', () => {
       .toBe('2 Meldungen geladen.');
     expect(translate('de', 'nav.impact')).toBe('Mein Einfluss');
     expect(translate('en', 'nav.impact')).toBe('My Impact');
+  });
+
+  it('formats numeric values using the selected locale', () => {
+    expect(formatNumber('en', 1234.5)).toBe('1,234.5');
+    expect(formatNumber('de', 1234.5)).toBe('1.234,5');
+    expect(translate('en', 'map.list.count', { count: 1234 })).toBe('1,234 reports');
+    expect(translate('de', 'map.list.count', { count: 1234 })).toBe('1.234 Meldungen');
+  });
+
+  it('formats dates using the selected locale', () => {
+    const date = '2026-10-28T13:05:00.000Z';
+    expect(formatDateTime('en', date)).toMatch(/Oct/);
+    expect(formatDateTime('de', date)).toMatch(/28\.10\.2026/);
   });
 
   it('maps known API error codes to localized copy and unknown codes to a generic message', () => {
