@@ -109,29 +109,33 @@ test('captures at most five camera photos, supports retake and explicit discard 
   await expect(dialog.locator('.photo-capture-item')).toHaveCount(5);
 
   await dialog.getByRole('button', { name: 'Continue with photos' }).click();
-  await expect(dialog).toContainText('Photos are held in memory only. Upload and analysis will be connected in a later step.');
+  const handoff = page.getByRole('dialog', { name: 'Photos ready for the next step' });
+  await expect(dialog).toBeHidden();
+  await expect(handoff).toBeVisible();
+  await expect(handoff).toContainText('5 photos were handed to this report session and remain in memory.');
+  await expect(handoff.locator('.photo-capture-preview')).toHaveCount(5);
   await expect.poll(async () => (await captureState(page)).stopped).toBe(1);
 
+  await handoff.getByRole('button', { name: 'Edit photos' }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('video')).toBeVisible();
+  await expect(dialog.locator('.photo-capture-item')).toHaveCount(5);
   await dialog.getByRole('button', { name: 'Delete photo 5', exact: true }).click();
   await dialog.getByRole('button', { name: 'Delete photo 4', exact: true }).click();
   await dialog.getByRole('button', { name: 'Delete photo 3', exact: true }).click();
   await dialog.getByRole('button', { name: 'Delete photo 2', exact: true }).click();
   await dialog.getByRole('button', { name: 'Delete photo 1', exact: true }).click();
+  await expect(dialog.locator('.photo-capture-count')).toHaveText('0 of 5 photos');
   await expect(dialog.getByRole('button', { name: 'Continue with photos' })).toBeDisabled();
-  await dialog.getByRole('button', { name: 'Retry camera' }).click();
-  await expect(dialog.locator('video')).toBeVisible();
   await dialog.getByRole('button', { name: 'Take photo', exact: true }).click();
   await expect(dialog.locator('.photo-capture-item')).toHaveCount(1);
+  await dialog.getByRole('button', { name: 'Continue with photos' }).click();
+  await expect(handoff).toBeVisible();
+  await expect(handoff.locator('.photo-capture-preview')).toHaveCount(1);
+  await expect.poll(async () => (await captureState(page)).stopped).toBe(2);
 
-  await dialog.locator('.photo-capture-close').click();
-  const exitPrompt = page.getByRole('alertdialog', { name: 'Leave photo capture?' });
-  await expect(exitPrompt).toBeVisible();
-  await exitPrompt.getByRole('button', { name: 'Continue creating' }).click();
-  await expect(dialog.locator('.photo-capture-item')).toHaveCount(1);
-
-  await dialog.locator('.photo-capture-close').click();
-  await page.getByRole('alertdialog', { name: 'Leave photo capture?' })
-    .getByRole('button', { name: 'Discard and exit' }).click();
+  await handoff.getByRole('button', { name: 'Discard photos and exit' }).click();
+  await expect(handoff).toBeHidden();
   await expect(dialog).toBeHidden();
   await expect(page.locator('.app-header')).toHaveJSProperty('inert', false);
   await expect(page.locator('.bottom-nav')).toHaveJSProperty('inert', false);

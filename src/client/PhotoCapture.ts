@@ -195,6 +195,7 @@ export interface PhotoCaptureOptions {
 export interface PhotoCaptureView {
   element: HTMLElement;
   open(stage: CaptureStage): void;
+  discard(): void;
   dispose(): void;
 }
 
@@ -398,6 +399,14 @@ export function renderPhotoCapture(options: PhotoCaptureOptions): PhotoCaptureVi
     render();
   }
 
+  function discard(): void {
+    session.discardAndExit();
+    clearVideo();
+    root.hidden = true;
+    options.onVisibilityChange(false);
+    options.onExit();
+  }
+
   function focusableElements(): HTMLButtonElement[] {
     return Array.from(dialog.querySelectorAll<HTMLButtonElement>('button:not([disabled])'))
       .filter((button) => !button.hidden && !button.closest('[hidden]') && !button.closest('[inert]'));
@@ -432,13 +441,7 @@ export function renderPhotoCapture(options: PhotoCaptureOptions): PhotoCaptureVi
     render();
     closeButton.focus();
   });
-  discardButton.addEventListener('click', () => {
-    session.discardAndExit();
-    clearVideo();
-    root.hidden = true;
-    options.onVisibilityChange(false);
-    options.onExit();
-  });
+  discardButton.addEventListener('click', discard);
   retryButton.addEventListener('click', () => {
     retryButton.disabled = true;
     const cameraRequest = session.requestCamera();
@@ -455,13 +458,15 @@ export function renderPhotoCapture(options: PhotoCaptureOptions): PhotoCaptureVi
     const photos = session.continueWithPhotos();
     if (!photos) return;
     clearVideo();
+    root.hidden = true;
+    options.onVisibilityChange(false);
     options.onContinue(photos, stage);
-    render();
   });
 
   return {
     element: root,
     open,
+    discard,
     dispose() {
       if (disposed) return;
       disposed = true;

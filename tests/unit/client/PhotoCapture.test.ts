@@ -134,4 +134,21 @@ describe('camera-only photo capture session', () => {
     await request;
     expect(harness.stopped).toContain(99);
   });
+
+  it('stops the camera and revokes previews on idempotent disposal', async () => {
+    const harness = cameraHarness();
+    const session = new PhotoCaptureSession(harness.runtime);
+    await session.requestCamera();
+    expect(session.addPhoto(jpeg())).toBe(true);
+    const previewUrl = session.photos[0].previewUrl;
+
+    session.dispose();
+    session.dispose();
+
+    expect(session.phase).toBe('closed');
+    expect(session.photos).toHaveLength(0);
+    expect(session.stream).toBeNull();
+    expect(harness.stopped).toEqual([1]);
+    expect(harness.revoked).toEqual([previewUrl]);
+  });
 });
