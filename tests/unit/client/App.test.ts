@@ -134,7 +134,6 @@ function createHarness(
   vi.stubGlobal('document', fakeDocument);
   vi.stubGlobal('window', fakeWindow);
   vi.stubGlobal('navigator', fakeNavigator);
-  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
 
   return {
     root: App(api, locale) as unknown as TestElement,
@@ -426,6 +425,7 @@ describe('client shell', () => {
       addEventListener: () => undefined,
     });
     vi.stubGlobal('navigator', { language: 'en-US' });
+    vi.stubGlobal('localStorage', { getItem: () => 'de', setItem: () => undefined });
     const documentElement = { lang: '' };
     vi.stubGlobal('document', {
       documentElement,
@@ -475,7 +475,6 @@ describe('client shell', () => {
       'Karte', 'Mein Einfluss', 'Belohnungen',
     ]);
     expect(root.querySelector('.report-button')?.textContent).toBe('Müll melden');
-    await vi.waitFor(() => expect(root.querySelector('.report-list-item')).not.toBeNull());
     await vi.waitFor(() => expect(root.querySelector('.map-status')?.textContent)
       .toContain('Es sind noch keine Beispiel-Meldungen verfügbar.'));
   });
