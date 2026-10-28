@@ -4,6 +4,9 @@ import type { WorkerEnv } from './middleware/context';
 import { ApiError, handleError } from './middleware/errors';
 import { apiSecurity } from './middleware/security';
 import { createHealthRoutes } from './routes/health';
+import { createPhotoRoutes } from './routes/photos';
+import { createReportMediaResolver } from './services/media';
+import { removeExpiredPhotos } from './db/evidence-store';
 import { createDomainRoutes, type DomainRouteDependencies } from './routes/domain';
 import { createRequestScopedDatabase, type RequestScopedDatabaseFactory } from './db/runtime';
 import type { verifyFirebaseToken } from './middleware/auth';
@@ -14,6 +17,7 @@ export function createApp(domainDependencies: DomainRouteDependencies = {}) {
   app.use('/api/*', boundedBody);
   app.route('/api', createHealthRoutes());
   app.route('/api', createDomainRoutes(domainDependencies));
+  app.route('/api', createPhotoRoutes(domainDependencies));
   app.notFound(async (c) => {
     if (c.req.path === '/api' || c.req.path.startsWith('/api/')) {
       throw new ApiError(404, 'NOT_FOUND', 'This API route does not exist.');
@@ -58,6 +62,14 @@ export function createWorkerHandler({
   verify,
 }: WorkerHandlerDependencies = {}) {
   return {
+    async scheduled(_event: ScheduledController, env: WorkerEnv['Bindings']) {
+      if (!env.HYPERDRIVE?.connectionString.trim() || !env.PHOTOS) {
+        throw new ApiError(503, 'UNAVAILABLE', 'Photo cleanup is not configured.');
+      }
+      const runtime = createDatabase(env.HYPERDRIVE.connectionString);
+      try { await removeExpiredPhotos(runtime.database, env.PHOTOS); }
+      finally { await runtime.close(); }
+    },
     async fetch(request: Request, env: WorkerEnv['Bindings'], executionContext: ExecutionContext) {
       const binding = env.HYPERDRIVE;
       if (!binding?.connectionString.trim()) {
@@ -66,7 +78,9 @@ export function createWorkerHandler({
 
       const runtime = createDatabase(binding.connectionString);
       try {
-        return await createApp({ database: runtime.database, verify }).fetch(request, env, executionContext);
+        const reportMedia = env.PHOTOS && env.MEDIA_SIGNING_SECRET
+          ? createReportMediaResolver(new URL(request.url).origin, env.MEDIA_SIGNING_SECRET) : undefined;
+        return await createApp({ database: runtime.database, reportMedia, verify }).fetch(request, env, executionContext);
       } finally {
         await runtime.close();
       }
