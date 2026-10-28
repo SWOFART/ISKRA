@@ -34,6 +34,26 @@ export async function admitUpload(
   });
 }
 
+/** Storage first: a rolled-back SQL insert leaves an object that cannot be used as evidence. */
+export async function finalizeReportPhoto(database: TransactionDatabase, photo: {
+  uid: string; photoId: string; objectKey: string; byteSize: number; sha256: string;
+  ordinal: number; expiresAt: string;
+}) {
+  await database.withTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO report_photos (id, owner_user_id, purpose, state, object_key, ordinal,
+         mime_type, byte_size, sha256, upload_expires_at)
+       SELECT $1::uuid, $2, 'REPORT', 'UPLOADED', $3, $4, 'image/jpeg', $5, $6, $7::timestamptz
+       WHERE clock_timestamp() < $7::timestamptz
+       ON CONFLICT (id) DO NOTHING RETURNING id`,
+      [photo.photoId, photo.uid, photo.objectKey, photo.ordinal - 1, photo.byteSize, photo.sha256, photo.expiresAt],
+    );
+    if (!result.rows.length) {
+      throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', 'This photo ID has already been used.');
+    }
+  });
+}
+
 export interface StoredPhoto extends Record<string, unknown> {
   id: string;
   owner_user_id: string;

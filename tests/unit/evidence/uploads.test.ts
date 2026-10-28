@@ -60,6 +60,7 @@ describe('owner-bound upload tickets', () => {
     expect(reservation).toEqual({
       uid: 'resident', photoId: result.photoId, request: { ...request, byteSize: POLICY.maxPhotoBytes, ordinal: 5 },
       objectKey: `photos/${result.photoId}`,
+      expiresAt: result.expiresAt,
     });
     expect(JSON.stringify(result)).not.toContain('photos/');
     expect(JSON.stringify(result)).not.toContain(secret);
@@ -165,7 +166,7 @@ describe('owner-bound upload tickets', () => {
     }
   });
 
-  it('authorizes the content route but returns honest 503 until #28 finalization exists', async () => {
+  it('returns honest 503 without private storage', async () => {
     const { app, query } = setup();
     const result = await ticket(app);
     query.mockResolvedValueOnce({ rows: [{ id: 'resident', route: 'GREEN', status: 'VERIFIED' }], rowCount: 1 });

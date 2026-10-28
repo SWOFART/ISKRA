@@ -4,7 +4,7 @@ import { literal, object, union } from '../../shared/schema';
 import type { AttachedPhotoReference, ReportMediaResolver } from './report-context';
 import type { TransactionDatabase } from '../db/client';
 import { readPhoto } from '../db/evidence-store';
-import { decode } from 'jpeg-js';
+import { decode, encode } from 'jpeg-js';
 import { POLICY } from '../../shared/contracts';
 import { ApiError } from '../middleware/errors';
 
@@ -91,8 +91,7 @@ function inspectJpeg(bytes: Uint8Array): { width: number; height: number } {
   return invalid();
 }
 
-// shortcut: validation only; add authenticated upload/finalization after contracts freeze.
-export function validateJpeg(bytes: Uint8Array, contentType: string): { width: number; height: number } {
+function decodeJpeg(bytes: Uint8Array, contentType: string) {
   if (bytes.byteLength > POLICY.maxPhotoBytes) {
     throw new ApiError(413, 'PHOTO_TOO_LARGE', 'Photos must be at most 1 MiB.');
   }
@@ -108,14 +107,29 @@ export function validateJpeg(bytes: Uint8Array, contentType: string): { width: n
       throw new ApiError(413, 'PHOTO_TOO_LARGE', 'Resize the photo to at most 1600 pixels per side.');
     }
     image = decode(bytes, {
-      useTArray: true, formatAsRGBA: false, tolerantDecoding: false,
+      useTArray: true, formatAsRGBA: true, tolerantDecoding: false,
       maxResolutionInMP: 2.56, maxMemoryUsageInMB: 64,
     });
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(415, 'UNSUPPORTED_MEDIA', 'The JPEG photo is invalid or exceeds image limits.');
   }
-  return { width: image.width, height: image.height };
+  return image;
+}
+
+export function validateJpeg(bytes: Uint8Array, contentType: string): { width: number; height: number } {
+  const { width, height } = decodeJpeg(bytes, contentType);
+  return { width, height };
+}
+
+/** Encode pixels only; never carry EXIF, thumbnails or source comments into storage. */
+export function prepareJpeg(bytes: Uint8Array, contentType: string): Uint8Array<ArrayBuffer> {
+  const { width, height, data } = decodeJpeg(bytes, contentType);
+  const encoded = new Uint8Array(encode({ width, height, data }, 80).data);
+  if (encoded.byteLength > POLICY.maxPhotoBytes) {
+    throw new ApiError(413, 'PHOTO_TOO_LARGE', 'The re-encoded photo exceeds 1 MiB. Resize and retry.');
+  }
+  return encoded;
 }
 
 const READ_SECONDS = 300;
