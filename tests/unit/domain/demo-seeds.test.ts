@@ -11,6 +11,7 @@ const sandbox: DemoSeedTarget = {
   port: 55432,
   database: 'iskra_test',
   user: 'iskra_test',
+  hasPassword: false,
   hasSearch: false,
   hasHash: false,
   appEnvironment: 'demo',
@@ -25,6 +26,7 @@ describe('demo seed target guard', () => {
     expect(() => assertDemoSeedTarget({ ...sandbox, user: 'iskra_runtime' })).toThrow();
     expect(() => assertDemoSeedTarget({ ...sandbox, appEnvironment: 'production' })).toThrow();
     expect(() => assertDemoSeedTarget({ ...sandbox, demoData: 'false' })).toThrow();
+    expect(() => assertDemoSeedTarget({ ...sandbox, hasPassword: true })).toThrow();
     expect(() => assertDemoSeedTarget({ ...sandbox, hasSearch: true })).toThrow();
     expect(() => assertDemoSeedTarget({ ...sandbox, hasHash: true })).toThrow();
   });

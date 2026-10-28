@@ -27,6 +27,7 @@ export interface DemoSeedTarget {
   readonly port: number;
   readonly database: string;
   readonly user: string;
+  readonly hasPassword: boolean;
   readonly hasSearch: boolean;
   readonly hasHash: boolean;
   readonly appEnvironment: string | undefined;
@@ -39,9 +40,9 @@ export function assertDemoSeedTarget(target: DemoSeedTarget): void {
     || !['127.0.0.1', 'localhost'].includes(target.hostname.toLowerCase())
     || !Number.isInteger(target.port) || target.port < 1 || target.port > 65_535
     || target.database !== 'iskra_test' || target.user !== 'iskra_test'
-    || target.hasSearch || target.hasHash
+    || target.hasPassword || target.hasSearch || target.hasHash
     || target.appEnvironment !== 'demo' || target.demoData !== 'true') {
-    throw new Error('Demo seeding requires APP_ENV=demo, DEMO_DATA=true, and the explicit loopback iskra_test database.');
+    throw new Error('Demo seeding requires APP_ENV=demo, DEMO_DATA=true, and the password-free loopback iskra_test test fixture.');
   }
 }
 

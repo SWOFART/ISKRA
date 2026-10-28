@@ -26,6 +26,7 @@ function readTarget(rawUrl: string | undefined) {
     port: Number(url.port),
     database: url.pathname.slice(1),
     user: decodeURIComponent(url.username),
+    hasPassword: Boolean(url.password),
     hasSearch: Boolean(url.search),
     hasHash: Boolean(url.hash),
     password: decodeURIComponent(url.password),
