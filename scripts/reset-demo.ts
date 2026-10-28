@@ -358,6 +358,15 @@ async function loadResetPlan(client: CheckedOutClient, manifest: SeedManifest): 
       + 'WHERE user_id = ANY($1::text[]) ORDER BY user_id, operation, key', [manifest.userIds],
   );
 
+  const artifactCounts = [users.rows.length, reports.rows.length, analyses.rows.length, leases.rows.length,
+    cleanups.rows.length, photos.rows.length, votes.rows.length, ledger.rows.length, notifications.rows.length];
+  const noArtifacts = artifactCounts.every((count) => count === 0);
+  if (!marker && noArtifacts && idempotency.rows.length === 0) {
+    return { ...manifest, alreadyReset: true, pendingObjectKeys: null, objectKeys: [], photoIds: [] };
+  }
+  if (!marker) fail('Seed data exists without its completion marker; refusing partial reset.');
+  if (noArtifacts) fail('Demo seed marker exists but its dataset is missing; refusing reset.');
+
   requireThat(users.rows.every((row) => row.is_demo), 'A reserved seed user is not marked demo; refusing deletion.');
   requireThat(reports.rows.length === manifest.reports.length && reports.rows.every((row) => {
     const expected = manifest.reports.find((item) => item.id === row.id);
@@ -400,16 +409,6 @@ async function loadResetPlan(client: CheckedOutClient, manifest: SeedManifest): 
       && item.resourceId === row.resource_id && item.responseStatus === row.response_status)),
     'An unknown idempotency row is attached to the seed; refusing deletion.');
 
-  const artifactCounts = [users.rows.length, reports.rows.length, analyses.rows.length, leases.rows.length,
-    cleanups.rows.length, photos.rows.length, votes.rows.length, ledger.rows.length, notifications.rows.length];
-  const noArtifacts = artifactCounts.every((count) => count === 0);
-  if (!marker) {
-    if (noArtifacts && idempotency.rows.length === 0) {
-      return { ...manifest, alreadyReset: true, pendingObjectKeys: null, objectKeys: [], photoIds: [] };
-    }
-    fail('Seed data exists without its completion marker; refusing partial reset.');
-  }
-
   const pending = pendingObjectKeys !== null;
   if (!noArtifacts) {
     const complete = users.rows.length === DEMO_SEED_USER_IDS.length
@@ -419,8 +418,6 @@ async function loadResetPlan(client: CheckedOutClient, manifest: SeedManifest): 
       && notifications.rows.length === manifest.notifications.length
       && idempotency.rows.length === manifest.idempotencyKeys.length;
     requireThat(complete, 'Demo seed data is partial or contains attached foreign rows; refusing reset.');
-  } else if (marker) {
-    fail('Demo seed marker exists but its dataset is missing; refusing reset.');
   }
 
   if (pending && photos.rows.length > 0) {
