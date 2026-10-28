@@ -1,3 +1,9 @@
+import { errors, jwtVerify, SignJWT } from 'jose';
+import { PhotoSchema, UidSchema, UuidSchema } from '../../shared/contracts';
+import { literal, object, union } from '../../shared/schema';
+import type { AttachedPhotoReference, ReportMediaResolver } from './report-context';
+import type { TransactionDatabase } from '../db/client';
+import { readPhoto } from '../db/evidence-store';
 import { decode } from 'jpeg-js';
 import { POLICY } from '../../shared/contracts';
 import { ApiError } from '../middleware/errors';
@@ -110,4 +116,98 @@ export function validateJpeg(bytes: Uint8Array, contentType: string): { width: n
     throw new ApiError(415, 'UNSUPPORTED_MEDIA', 'The JPEG photo is invalid or exceeds image limits.');
   }
   return { width: image.width, height: image.height };
+}
+
+const READ_SECONDS = 300;
+const READ_ISSUER = 'iskra:photo';
+const READ_TYPE = 'iskra-photo+jwt';
+const publicAccess = object({ scope: literal('PUBLIC'), photoId: UuidSchema });
+const ownerAccess = object({ scope: literal('OWNER'), photoId: UuidSchema, uid: UidSchema });
+const readAccess = union(publicAccess, ownerAccess);
+
+function photoSigningKey(secret: string | undefined) {
+  const key = new TextEncoder().encode(secret);
+  if (!secret || key.byteLength < 32) {
+    throw new ApiError(503, 'UNAVAILABLE', 'Photo access is not configured.');
+  }
+  return key;
+}
+
+function photoOrigin(origin: string) {
+  const url = new URL(origin);
+  if (url.protocol !== 'https:' || url.origin !== origin) {
+    throw new ApiError(503, 'UNAVAILABLE', 'Photo access requires an HTTPS application origin.');
+  }
+  return origin;
+}
+
+/** Owner scope is for authenticated preview callers; public scope is for B's attached-photo projection only. */
+export async function createPhotoReadCapability(
+  reference: AttachedPhotoReference,
+  origin: string,
+  secret: string | undefined,
+  ownerUid?: string,
+) {
+  const key = photoSigningKey(secret);
+  const audience = photoOrigin(origin);
+  const access = readAccess.parse(ownerUid === undefined
+    ? { scope: 'PUBLIC', photoId: reference.id }
+    : { scope: 'OWNER', photoId: reference.id, uid: ownerUid });
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const token = await new SignJWT({ access })
+    .setProtectedHeader({ alg: 'HS256', typ: READ_TYPE }).setIssuer(READ_ISSUER)
+    .setAudience(audience).setIssuedAt(issuedAt).setExpirationTime(issuedAt + READ_SECONDS).sign(key);
+  return PhotoSchema.parse({
+    id: reference.id, ordinal: reference.ordinal,
+    mediaUrl: `${audience}/api/photos/${reference.id}/content?token=${encodeURIComponent(token)}`,
+    expiresAt: new Date((issuedAt + READ_SECONDS) * 1000).toISOString(),
+  });
+}
+
+export function createReportMediaResolver(origin: string, secret: string | undefined): ReportMediaResolver {
+  return {
+    resolveAttachedPhotos: (photos) => Promise.all(photos.map((photo) =>
+      createPhotoReadCapability(photo, origin, secret))),
+  };
+}
+
+export async function authorizePhotoRead(
+  database: TransactionDatabase,
+  photoId: string,
+  token: string | undefined,
+  origin: string,
+  secret: string | undefined,
+  uid?: string,
+) {
+  const key = photoSigningKey(secret);
+  if (!token || token.length > 4096 || !UuidSchema.safeParse(photoId).success) {
+    throw new ApiError(403, 'FORBIDDEN', 'Invalid photo access.');
+  }
+  let access;
+  try {
+    const { payload } = await jwtVerify(token, key, {
+      algorithms: ['HS256'], issuer: READ_ISSUER, audience: photoOrigin(origin), typ: READ_TYPE,
+      requiredClaims: ['iat', 'exp'],
+    });
+    if (!Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp)
+      || payload.iat! > Math.floor(Date.now() / 1000) || payload.exp! - payload.iat! !== READ_SECONDS) {
+      throw new Error('Invalid photo capability lifetime');
+    }
+    access = readAccess.parse(payload.access);
+  } catch (error) {
+    if (error instanceof errors.JWTExpired) {
+      throw new ApiError(410, 'EXPIRED', 'Photo link expired. Refresh the report to try again.');
+    }
+    throw new ApiError(403, 'FORBIDDEN', 'Invalid photo access.');
+  }
+  if (access.photoId.toLowerCase() !== photoId.toLowerCase()
+    || (access.scope === 'OWNER' && access.uid !== uid)) {
+    throw new ApiError(403, 'FORBIDDEN', 'Invalid photo access.');
+  }
+  const photo = await readPhoto(database, photoId);
+  if (!photo || photo.state === 'RESERVED') throw new ApiError(404, 'NOT_FOUND', 'Photo not found.');
+  if (access.scope === 'PUBLIC' ? !photo.published : photo.owner_user_id !== uid) {
+    throw new ApiError(403, 'FORBIDDEN', 'Photo access is not allowed.');
+  }
+  return photo;
 }

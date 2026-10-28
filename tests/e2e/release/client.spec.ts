@@ -46,7 +46,7 @@ for (const [path, selected] of [
     await expect(page.getByRole('tab', { name: selected, exact: true })).toHaveAttribute('aria-selected', 'true');
     expect(new URL(page.url()).pathname).toBe(path);
     await expect(page.locator('.app-shell')).toHaveCSS('display', 'grid');
-    if (selected !== 'Map') await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    if (selected !== 'Map') await expect(page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   });
 }
@@ -81,7 +81,8 @@ test('mobile navigation, keyboard and browser Back work without requesting camer
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
   await page.getByRole('button', { name: 'Start a litter report' }).click();
-  await expect(page.locator('.map-notice')).toContainText('Camera reporting is not connected yet');
+  await expect(page.getByRole('heading', { name: 'Welcome to ISKRA' })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to browsing' }).click();
   await page.getByRole('tab', { name: 'My Impact', exact: true }).click();
   await expect(page).toHaveURL(/\/impact$/);
   await page.getByRole('tab', { name: 'My Impact', exact: true }).press('ArrowRight');

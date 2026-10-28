@@ -1,6 +1,7 @@
 export type WorkerEnv = {
   Bindings: {
     ASSETS?: Fetcher;
+    PHOTOS?: R2Bucket;
     FIREBASE_PROJECT_ID?: string;
     MEDIA_SIGNING_SECRET?: string;
     HYPERDRIVE?: { readonly connectionString: string };
