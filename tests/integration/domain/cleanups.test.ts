@@ -104,7 +104,7 @@ async function createCandidate(
          owner_user_id, purpose, state, object_key, ordinal, mime_type, byte_size, sha256, upload_expires_at
        ) VALUES ($1::text, 'CLEANUP', 'UPLOADED', $2::varchar, $3::smallint, 'image/jpeg', 128,
          $4::char(64), now() + interval '5 minutes') RETURNING id`,
-      [owner, `private/after/${crypto.randomUUID()}`, ordinal, String.fromCharCode(107 + ordinal).repeat(64)],
+      [owner, `private/after/${crypto.randomUUID()}`, ordinal, 'c'.repeat(64)],
     );
     photoIds.push(photo.rows[0].id);
   }
