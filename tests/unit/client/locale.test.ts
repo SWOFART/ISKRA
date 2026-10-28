@@ -57,8 +57,8 @@ describe('client locale', () => {
   });
 
   it('translates UI copy with interpolation without translating resident content', () => {
-    expect(translate('en', 'reportsLoaded', { count: 2, noun: 'reports', source: '' })).toBe('2 reports loaded.');
-    expect(translate('de', 'reportsLoaded', { count: 2, noun: 'Meldungen', source: '' })).toBe('2 Meldungen geladen.');
+    expect(translate('en', 'map.countLoaded', { count: 2, noun: 'reports', source: '' })).toBe('2 reports loaded.');
+    expect(translate('de', 'map.countLoaded', { count: 2, noun: 'Meldungen', source: '' })).toBe('2 Meldungen geladen.');
     const authoredDescription = 'Glass near the school';
     expect(authoredDescription).toBe('Glass near the school');
   });
