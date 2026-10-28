@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/client/App';
 import { createClientApi, DEVELOPMENT_FIXTURE_LABEL, type FixtureResponse } from '../../../src/client/api';
-import { clientDesign } from '../../../src/client/designTokens';
+import { clientDesign, type SupportedLocale } from '../../../src/client/designTokens';
 
 type TestListener = (event: Record<string, unknown>) => void;
 
@@ -93,6 +93,7 @@ function createHarness(
     mode: 'fixture',
     fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
   }),
+  locale: SupportedLocale = 'en',
 ) {
   focusedElement = null;
   const location = { pathname };
@@ -100,6 +101,7 @@ function createHarness(
   const accessAttempts: string[] = [];
   const fakeDocument = {
     createElement: (tagName: string) => new TestElement(tagName),
+    documentElement: { lang: '' },
   };
   const fakeWindow = {
     location,
@@ -125,8 +127,13 @@ function createHarness(
   vi.stubGlobal('window', fakeWindow);
   vi.stubGlobal('navigator', fakeNavigator);
 
+  vi.stubGlobal('localStorage', {
+    getItem: () => null,
+    setItem: () => undefined,
+  });
+
   return {
-    root: App(api) as unknown as TestElement,
+    root: App(api, locale) as unknown as TestElement,
     location,
     accessAttempts,
     dispatchWindowEvent(name: string) {
@@ -346,5 +353,35 @@ describe('client shell', () => {
     expect(panel?.textContent).toContain(
       'Sign-in will be available when account access is connected.',
     );
+  });
+
+  it('renders German navigation and map copy for the German locale', async () => {
+    const { root } = createHarness('/map', createClientApi({
+      mode: 'fixture',
+      fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
+    }), 'de');
+
+    expect(root.querySelectorAll('[role="tab"]')
+      .map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual([
+      'Karte', 'Mein Einfluss', 'Belohnungen',
+    ]);
+    expect(root.querySelector('.report-button')?.textContent).toBe('Müll melden');
+    await vi.waitFor(() => expect(root.querySelector('.map-status')?.textContent)
+      .toContain('Es sind noch keine Beispiel-Meldungen verfügbar.'));
+  });
+
+  it('switches language without losing the selected tab', () => {
+    const { root, location } = createHarness('/impact');
+    const germanButton = root.querySelectorAll('.locale-button')
+      .find((button) => button.getAttribute('lang') === 'de');
+
+    germanButton?.dispatch('click');
+
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
+    expect(location.pathname).toBe('/impact');
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Dein Einfluss');
+    const activeLocale = root.querySelectorAll('.locale-button')
+      .find((button) => button.getAttribute('aria-pressed') === 'true');
+    expect(activeLocale?.getAttribute('lang')).toBe('de');
   });
 });

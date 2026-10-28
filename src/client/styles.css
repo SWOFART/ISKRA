@@ -73,6 +73,37 @@ button {
   font-size: 0.78rem;
 }
 
+.locale-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--client-color-border);
+  border-radius: var(--client-radius-pill);
+}
+
+.locale-button {
+  min-width: 44px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--client-radius-pill);
+  background: transparent;
+  color: var(--client-color-text);
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.locale-button[aria-pressed="true"] {
+  background: var(--client-color-brand);
+  color: var(--client-color-brand-text);
+}
+
+.locale-button:focus-visible {
+  outline: 3px solid var(--client-color-focus);
+  outline-offset: 2px;
+}
+
 .app-main {
   position: relative;
   min-height: 0;
