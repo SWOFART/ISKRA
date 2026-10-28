@@ -94,10 +94,14 @@ function renderDeferredPanel(
 
 export function App(
   api: ClientApi = createClientApi({ mode: import.meta.env.DEV ? 'fixture' : 'live' }),
-  initialLocale: SupportedLocale = readStoredLocale() ?? 'en',
+  initialLocale: SupportedLocale = readStoredLocale()
+    ?? localeFromBrowserLanguages(typeof navigator === 'undefined'
+      ? []
+      : navigator.languages ?? [navigator.language]),
   session?: FirebaseSession,
 ): HTMLElement {
   let locale = initialLocale;
+  if (typeof document !== 'undefined') document.documentElement.lang = locale;
   const t: Translate = (key, values) => translate(locale, key, values);
   let authOpen = false;
   let authIntent: 'report' | TabId | null = null;
