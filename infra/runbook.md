@@ -359,7 +359,9 @@ The subsequent genuine Firebase test caught a runtime defect that unit mocks mis
 
 The user confirmed that no database has been created. SQL/Hyperdrive and private R2 remain unprovisioned; identity verification cannot count as successful account bootstrap, G1 or Green. No new keys are required for staging delivery or email sign-in. Gemini later requires `GEMINI_API_KEY` and an approved `GEMINI_MODEL_ID`; private media requires `MEDIA_SIGNING_SECRET` and the R2 binding. All configuration continues to originate in Google Secret Manager.
 
-## Upload ticket foundation — task 4.1 / issue #27
+## Historical upload ticket foundation — task 4.1 / issue #27
+
+This section records #84 before report finalization. The report-only PUT implementation at the top of this runbook supersedes its unavailable-PUT observation; cleanup PUT remains unavailable.
 
 Contract `v1-candidate.2`; C-owned routes and evidence admission. This is a partial implementation candidate. #27 remains open until the reservation/quota decisions and integrated acceptance below are reviewed. No canonical OpenSpec task is checked off.
 
