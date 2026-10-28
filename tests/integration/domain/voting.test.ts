@@ -672,7 +672,7 @@ describe('PostgreSQL report voting', () => {
         [report.id, supportVoters[0]],
       );
       expect(state.rows[0]).toEqual({
-        status: 'AWAITING_RESOLUTION', existence_yes_count: 8, resolution_yes_count: 0, version: 5,
+        status: 'AWAITING_RESOLUTION', existence_yes_count: 8, resolution_yes_count: 0, version: 6,
         last_existence_confirmed_at: expect.any(Date), cleanup_status: 'AWAITING_VERIFICATION',
         existence_notifications: 1, resolution_notifications: 0,
         voter_balance: 5, voter_version: 1, vote_rows: 9, vote_credits: 9,
