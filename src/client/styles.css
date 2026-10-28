@@ -60,12 +60,39 @@ button {
   border-bottom: 1px solid var(--client-color-border);
 }
 
+.skip-link {
+  position: fixed;
+  z-index: 10;
+  top: 8px;
+  left: 8px;
+  padding: 10px 14px;
+  transform: translateY(-160%);
+  border-radius: var(--client-radius-control);
+  background: var(--client-color-surface);
+  color: var(--client-color-text);
+  box-shadow: 0 4px 18px rgb(22 53 43 / 18%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 .brand {
   color: var(--client-color-brand);
   font-size: 1.16rem;
   font-weight: 850;
   letter-spacing: 0.13em;
   text-decoration: none;
+}
+
+.language-select {
+  min-height: 40px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--client-color-border);
+  border-radius: var(--client-radius-control);
+  background: var(--client-color-surface);
+  color: var(--client-color-text);
+  font-size: 0.8rem;
 }
 
 .header-caption {
@@ -219,6 +246,8 @@ button {
 }
 
 .report-button:focus-visible,
+.skip-link:focus-visible,
+.language-select:focus-visible,
 .nav-tab:focus-visible,
 .secondary-button:focus-visible,
 .retry-button:focus-visible,

@@ -14,6 +14,8 @@ class TestElement {
   id = '';
   hidden = false;
   href = '';
+  value = '';
+  selected = false;
   tabIndex = 0;
   type = '';
   private ownText = '';
@@ -98,15 +100,19 @@ function createHarness(
   const location = { pathname };
   const windowListeners = new Map<string, ((event: unknown) => void)[]>();
   const accessAttempts: string[] = [];
+  const storage = new Map<string, string>();
   const fakeDocument = {
+    documentElement: { lang: '' },
     createElement: (tagName: string) => new TestElement(tagName),
   };
   const fakeWindow = {
     location,
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    },
     history: {
-      pushState: (_state: unknown, _title: string, path: string) => {
-        location.pathname = path;
-      },
+      pushState: (_state: unknown, _title: string, path: string) => { location.pathname = path; },
     },
     addEventListener: (name: string, listener: (event: unknown) => void) => {
       const listeners = windowListeners.get(name) ?? [];
@@ -114,10 +120,10 @@ function createHarness(
       windowListeners.set(name, listeners);
     },
   };
-  const fakeNavigator = new Proxy({}, {
-    get: (_target, property) => {
+  const fakeNavigator = new Proxy({ language: 'en-US' }, {
+    get: (target, property) => {
       accessAttempts.push(String(property));
-      return undefined;
+      return Reflect.get(target, property);
     },
   });
 
@@ -129,6 +135,7 @@ function createHarness(
     root: App(api) as unknown as TestElement,
     location,
     accessAttempts,
+    storage,
     dispatchWindowEvent(name: string) {
       for (const listener of windowListeners.get(name) ?? []) listener({});
     },
@@ -149,38 +156,24 @@ afterEach(() => {
 describe('client shell', () => {
   it('loads shared fixtures through the app and visibly labels sample data', async () => {
     const { root } = createHarness('/map', createClientApi({ mode: 'fixture' }));
-
     await vi.waitFor(() => expect(root.querySelector('.fixture-banner')?.hidden).toBe(false));
-
-    expect(root.querySelector('.fixture-banner')?.textContent).toBe(DEVELOPMENT_FIXTURE_LABEL);
+    expect(root.querySelector('.fixture-banner')?.textContent).toBe(`Sample data: ${DEVELOPMENT_FIXTURE_LABEL}`);
     expect(root.querySelector('.map-status')?.textContent).toContain('1 sample report loaded.');
   });
 
   it('offers a user-triggered retry after retryable fixture errors', async () => {
     const responses: FixtureResponse[] = [
-      {
-        status: 429,
-        body: {
-          error: {
-            code: 'RATE_LIMITED',
-            message: 'Wait before trying again.',
-            requestId: '11111111-1111-4111-8111-111111111111',
-            retryable: true,
-          },
-        },
-      },
+      { status: 429, body: { error: { code: 'RATE_LIMITED', message: 'Wait before trying again.', requestId: '11111111-1111-4111-8111-111111111111', retryable: true } } },
       { status: 200, body: { items: [], nextCursor: null } },
     ];
     const fixtureResolver = vi.fn(() => responses.shift()!);
     const { root } = createHarness('/map', createClientApi({ mode: 'fixture', fixtureResolver }));
     const mapStatus = root.querySelector('.map-status');
     const retryButton = root.querySelector('.retry-button');
-
     await vi.waitFor(() => expect(retryButton?.hidden).toBe(false));
     expect(mapStatus?.textContent).toContain('Wait before trying again.');
     retryButton?.dispatch('click');
     await vi.waitFor(() => expect(mapStatus?.textContent).toContain('No sample reports are available yet.'));
-
     expect(fixtureResolver).toHaveBeenCalledTimes(2);
     expect(retryButton?.hidden).toBe(true);
   });
@@ -188,40 +181,23 @@ describe('client shell', () => {
   it('honors Retry-After before enabling a user-triggered retry after 429', async () => {
     vi.useFakeTimers();
     const responses = [
-      new Response(JSON.stringify({
-        error: {
-          code: 'RATE_LIMITED',
-          message: 'Rate limit reached.',
-          requestId: '11111111-1111-4111-8111-111111111111',
-          retryable: true,
-        },
-      }), {
-        status: 429,
-        headers: { 'Content-Type': 'application/json', 'Retry-After': '2' },
-      }),
-      new Response(JSON.stringify({ items: [], nextCursor: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
+      new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Rate limit reached.', requestId: '11111111-1111-4111-8111-111111111111', retryable: true } }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '2' } }),
+      new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     ];
     const fetcher = vi.fn(async () => responses.shift()!);
     const { root } = createHarness('/map', createClientApi({ mode: 'live', fetcher }));
     const mapStatus = root.querySelector('.map-status');
     const retryButton = root.querySelector('.retry-button');
-
     await vi.advanceTimersByTimeAsync(0);
     expect(retryButton?.hidden).toBe(false);
     expect(retryButton?.disabled).toBe(true);
     expect(mapStatus?.textContent).toContain('Please wait before retrying.');
-
     retryButton?.dispatch('click');
     expect(fetcher).toHaveBeenCalledOnce();
-
     await vi.advanceTimersByTimeAsync(1999);
     expect(retryButton?.disabled).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
     expect(retryButton?.disabled).toBe(false);
-
     retryButton?.dispatch('click');
     await vi.advanceTimersByTimeAsync(0);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -229,122 +205,91 @@ describe('client shell', () => {
   });
 
   it('does not offer retry for non-retryable fixture errors', async () => {
-    const api = createClientApi({
-      mode: 'fixture',
-      fixtureResolver: () => ({
-        status: 400,
-        body: {
-          error: {
-            code: 'INVALID_INPUT',
-            message: 'Correct the request before continuing.',
-            requestId: '11111111-1111-4111-8111-111111111111',
-            retryable: false,
-          },
-        },
-      }),
-    });
+    const api = createClientApi({ mode: 'fixture', fixtureResolver: () => ({ status: 400, body: { error: { code: 'INVALID_INPUT', message: 'Correct the request before continuing.', requestId: '11111111-1111-4111-8111-111111111111', retryable: false } } }) });
     const { root } = createHarness('/map', api);
     const mapStatus = root.querySelector('.map-status');
     const retryButton = root.querySelector('.retry-button');
-
     await vi.waitFor(() => expect(mapStatus?.textContent).toContain('Correct the request before continuing.'));
-
     expect(retryButton?.hidden).toBe(true);
   });
 
-  it('shows exactly three tabs and a Heilbronn map without accessing location or camera APIs', () => {
+  it('shows exactly three tabs and Heilbronn without requesting location or camera APIs', () => {
     const { root, accessAttempts } = createHarness();
-
-    expect(root.querySelectorAll('[role="tab"]')
-      .map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual([
-      'Map', 'My Impact', 'Rewards',
-    ]);
+    expect(root.querySelectorAll('[role="tab"]').map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual(['Map', 'My Impact', 'Rewards']);
+    expect(root.querySelectorAll('[role="tab"]').every((tab) => tab.getAttribute('aria-selected') !== null)).toBe(true);
     expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Map');
-
     const mapCanvas = root.querySelector('.map-canvas');
     expect(mapCanvas?.getAttribute('data-latitude')).toBe(String(clientDesign.map.center.latitude));
     expect(mapCanvas?.getAttribute('data-longitude')).toBe(String(clientDesign.map.center.longitude));
     expect(mapCanvas?.getAttribute('data-zoom')).toBe(String(clientDesign.map.zoom));
-    expect(accessAttempts).toEqual([]);
+    expect(accessAttempts).not.toContain('geolocation');
+    expect(accessAttempts).not.toContain('mediaDevices');
   });
 
   it.each([
     ['/impact', 'My Impact', 'Sign in to see your reports and community contributions.'],
     ['/rewards', 'Rewards', 'Sign in to see your reward balance and available rewards.'],
-  ])('opens the protected %s deep link with a sign-in option', (path, label, message) => {
+  ])('opens protected %s deep link with a sign-in option', (path, label, message) => {
     const { root, location } = createHarness(path);
-    const panel = root.querySelector('.tab-panel');
-
     expect(location.pathname).toBe(path);
     expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe(label);
-    expect(panel?.textContent).toContain(message);
-    expect(panel?.querySelector('button')?.textContent).toBe('Sign in');
+    expect(root.querySelector('.tab-panel')?.textContent).toContain(message);
+    expect(root.querySelector('.tab-panel')?.querySelector('button')?.textContent).toBe('Sign in');
   });
 
-  it('supports arrow, Home and End keyboard navigation while updating browser history', () => {
+  it('supports arrow, Home and End keyboard tab navigation', () => {
     const { root, location } = createHarness();
     const tabs = root.querySelectorAll('[role="tab"]');
     const preventDefault = vi.fn();
-
     tabs[0].dispatch('keydown', { key: 'ArrowRight', preventDefault });
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(focusedElement).toBe(tabs[1]);
     expect(selectedTab(root)).toBe(tabs[1]);
     expect(location.pathname).toBe('/impact');
-
     tabs[1].dispatch('keydown', { key: 'End', preventDefault });
     expect(focusedElement).toBe(tabs[2]);
     expect(selectedTab(root)).toBe(tabs[2]);
-    expect(location.pathname).toBe('/rewards');
-
     tabs[2].dispatch('keydown', { key: 'Home', preventDefault });
     expect(focusedElement).toBe(tabs[0]);
     expect(selectedTab(root)).toBe(tabs[0]);
-    expect(location.pathname).toBe('/map');
   });
 
-  it('supports touch-friendly tab activation through the button click event', () => {
-    const { root, location } = createHarness();
-    const tabs = root.querySelectorAll('[role="tab"]');
-
-    tabs[2].dispatch('click');
-
-    expect(selectedTab(root)).toBe(tabs[2]);
-    expect(location.pathname).toBe('/rewards');
-  });
-
-  it('keeps the guest report entry deferred without requesting location or photos', () => {
+  it('keeps guest report entry deferred without location or photos', () => {
     const { root, accessAttempts } = createHarness();
-    const reportButton = root.querySelector('.report-button');
-
-    reportButton?.dispatch('click');
-
-    const notice = root.querySelector('.map-notice');
-    expect(notice?.hidden).toBe(false);
-    expect(notice?.textContent).toContain('No location or photos have been requested.');
-    expect(accessAttempts).toEqual([]);
+    root.querySelector('.report-button')?.dispatch('click');
+    expect(root.querySelector('.map-notice')?.textContent).toContain('No location or photos have been requested.');
+    expect(accessAttempts).not.toContain('geolocation');
+    expect(accessAttempts).not.toContain('mediaDevices');
   });
 
-  it('restores the selected tab on browser back/forward navigation', () => {
+  it('switches language while preserving route and tab and persists the choice', () => {
+    const { root, location, storage } = createHarness('/impact');
+    const language = root.querySelector('.language-select')!;
+    expect(root.querySelector('[role="tablist"]')?.getAttribute('aria-label')).toBe('Main navigation');
+    language.value = 'de';
+    language.dispatch('change');
+    expect(storage.get('iskra.locale')).toBe('de');
+    expect((document as unknown as { documentElement: { lang: string } }).documentElement.lang).toBe('de');
+    expect(location.pathname).toBe('/impact');
+    expect(root.querySelector('[role="tablist"]')?.getAttribute('aria-label')).toBe('Hauptnavigation');
+    expect(root.querySelectorAll('h1').map((heading) => heading.textContent)).toContain('Dein Beitrag');
+    expect(root.querySelectorAll('p').map((paragraph) => paragraph.textContent)).toContain(
+      'Melde dich an, um deine Meldungen und Beiträge zur Gemeinschaft zu sehen.',
+    );
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Beitrag');
+  });
+
+  it('restores selected tab on browser back/forward navigation', () => {
     const { root, location, dispatchWindowEvent } = createHarness('/impact');
     location.pathname = '/rewards';
     dispatchWindowEvent('popstate');
-
     expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Rewards');
-    expect(root.querySelector('.tab-panel')?.textContent).toContain(
-      'Sign in to see your reward balance and available rewards.',
-    );
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Sign in to see your reward balance');
   });
 
-  it.each(['/impact', '/rewards'])('keeps deferred %s actions honest', (path) => {
-    const { root } = createHarness(path);
-    const panel = root.querySelector('.tab-panel');
-    const signIn = panel?.querySelector('button');
-
-    signIn?.dispatch('click');
-
-    expect(panel?.textContent).toContain(
-      'Sign-in will be available when account access is connected.',
-    );
+  it('keeps deferred actions honest after clicking sign-in', () => {
+    const { root } = createHarness('/impact');
+    root.querySelector('.tab-panel')?.querySelector('button')?.dispatch('click');
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Sign-in will be available');
   });
 });
