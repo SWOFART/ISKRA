@@ -192,9 +192,9 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
     editPhotosButton.textContent = t(retaking ? 'capture.retakePhotos' : 'capture.editPhotos');
     editPhotosButton.hidden = busy;
     requestLocationButton.hidden = !!assessment || busy;
-    requestLocationButton.disabled = busy;
+    requestLocationButton.disabled = busy || retryIsBlocked();
     analyzeButton.hidden = !!assessment || busy;
-    analyzeButton.disabled = busy || !locationBinding || (failureStep === 'upload' && retryIsBlocked());
+    analyzeButton.disabled = busy || !locationBinding || retryIsBlocked();
     analyzeButton.textContent = t(failureStep === 'upload' ? 'capture.retryUpload' : 'capture.analyzePhotos');
     retryButton.hidden = busy || retryAction === null || !!accepting || !!retaking;
     retryButton.disabled = busy || retryIsBlocked();
@@ -202,6 +202,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
     publishButton.textContent = t(retryAction === 'publication' ? 'capture.retryPublish' : 'capture.publishReport');
     publishButton.disabled = busy || description.value.trim().length === 0
       || (retryAction === 'publication' && retryIsBlocked());
+    description.disabled = busy;
     discardButton.disabled = busy;
   }
 
@@ -272,7 +273,9 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   }
 
   async function requestLocation(): Promise<void> {
+    if (busy || retryIsBlocked()) return;
     const generation = ++locationGeneration;
+    analysisOperation.complete();
     locationBinding = null;
     setLocationMessage('capture.locationRequesting');
     locationStatus.setAttribute('aria-busy', 'true');
@@ -409,7 +412,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   }
 
   async function analyzePhotos(): Promise<void> {
-    if (!locationBinding || photos.length < 1 || busy || (failureStep === 'upload' && retryIsBlocked())) return;
+    if (!locationBinding || photos.length < 1 || busy || retryIsBlocked()) return;
     const generation = ++flowGeneration;
     retryAction = null;
     failureStep = activeAnalysisId ? 'analysis' : 'upload';
@@ -472,7 +475,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
 
   async function publishReport(): Promise<void> {
     if (!assessment || assessment.decision !== 'ACCEPT' || !lastAcceptedAnalysisId || busy
-      || (retryAction === 'publication' && retryIsBlocked())) return;
+      || retryIsBlocked()) return;
     const generation = ++flowGeneration;
     retryAction = null;
     setBusy(true, 'capture.publishing');
@@ -512,7 +515,10 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
     else void analyzePhotos();
   });
   publishButton.addEventListener('click', () => { void publishReport(); });
-  description.addEventListener('input', updateActions);
+  description.addEventListener('input', () => {
+    if (retryAction === 'publication') publishOperation.complete();
+    updateActions();
+  });
   editPhotosButton.addEventListener('click', () => {
     if (busy) return;
     close();

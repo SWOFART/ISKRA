@@ -80,7 +80,7 @@ async function enableCameraHarness(page: import('@playwright/test').Page): Promi
 }
 
 type ReportApiScenario = 'accept-running' | 'retake' | 'retry-analysis'
-  | 'retry-after-upload' | 'retry-after-analysis' | 'retry-after-publication';
+  | 'retry-after-upload' | 'retry-after-photo-content' | 'retry-after-analysis' | 'retry-after-publication';
 
 async function signIn(
   page: import('@playwright/test').Page,
@@ -140,8 +140,10 @@ async function installReportApi(
   const photoIds: string[] = [];
   const analysisRequests: { body: Record<string, unknown>; operationKey: string | undefined }[] = [];
   let uploadRequests = 0;
+  let photoUploadRequests = 0;
   let publicationRequest: Record<string, unknown> | null = null;
   let publicationRequests = 0;
+  const publicationOperationKeys: (string | undefined)[] = [];
   let analysisPolls = 0;
   const response = (
     route: import('@playwright/test').Route,
@@ -180,6 +182,7 @@ async function installReportApi(
     if (route.request().method() === 'GET') return response(route, 200, { items: [], nextCursor: null });
     publicationRequest = route.request().postDataJSON() as Record<string, unknown>;
     publicationRequests += 1;
+    publicationOperationKeys.push(route.request().headers()['idempotency-key']);
     if (scenario === 'retry-after-publication' && publicationRequests === 1) return rateLimitResponse(route);
     const reportId = '11111111-1111-4111-8111-111111111121';
     const description = String(publicationRequest.description);
@@ -239,6 +242,8 @@ async function installReportApi(
     expect(route.request().method()).toBe('PUT');
     expect(route.request().headers()['content-type']).toBe('image/jpeg');
     expect(route.request().postDataBuffer()?.byteLength).toBeGreaterThan(0);
+    photoUploadRequests += 1;
+    if (scenario === 'retry-after-photo-content' && photoUploadRequests === 1) return rateLimitResponse(route);
     const photoId = new URL(route.request().url()).pathname.split('/')[3];
     return response(route, 201, { photoId, state: 'UPLOADED' });
   });
@@ -298,8 +303,10 @@ async function installReportApi(
     photoIds,
     analysisRequests,
     get uploadRequests() { return uploadRequests; },
+    get photoUploadRequests() { return photoUploadRequests; },
     get publicationRequest() { return publicationRequest; },
     get publicationRequests() { return publicationRequests; },
+    publicationOperationKeys,
     get analysisPolls() { return analysisPolls; },
   };
 }
@@ -558,21 +565,49 @@ test('honors Retry-After before retrying a failed photo upload', async ({ page }
   expect(apiState?.uploadRequests).toBe(2);
 });
 
+test('honors Retry-After before retrying a failed JPEG upload', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-photo-content'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  const retryButton = dialog.getByRole('button', { name: 'Retry photo upload' });
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await expect(retryButton).toBeDisabled();
+  await retryButton.dispatchEvent('click');
+  expect(apiState?.uploadRequests).toBe(1);
+  expect(apiState?.photoUploadRequests).toBe(1);
+  await expect(retryButton).toBeEnabled();
+  await retryButton.click();
+  await expect(dialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.uploadRequests).toBe(1);
+  expect(apiState?.photoUploadRequests).toBe(2);
+});
+
 test('honors Retry-After before retrying a failed analysis', async ({ page }) => {
   await enableCameraHarness(page);
   let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
   await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-analysis'); });
   const dialog = await submitOneReportPhoto(page, 'en');
   const retryButton = dialog.getByRole('button', { name: 'Retry assessment with these photos' });
+  const analyzeButton = dialog.getByRole('button', { name: 'Upload and assess photos' });
+  const locationButton = dialog.getByRole('button', { name: 'Refresh location' });
   await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
   await expect(retryButton).toBeDisabled();
+  await expect(analyzeButton).toBeDisabled();
+  await expect(locationButton).toBeDisabled();
   await retryButton.dispatchEvent('click');
+  await analyzeButton.dispatchEvent('click');
   expect(apiState?.analysisRequests).toHaveLength(1);
   await expect(retryButton).toBeEnabled();
+  await expect(locationButton).toBeEnabled();
+  await locationButton.click();
+  await expect(dialog.locator('.photo-capture-location-status')).toContainText('Fresh location captured');
   await retryButton.click();
   await expect(dialog.locator('.report-safety-guidance'))
     .toHaveText('Avoid touching the sharp material and keep others away.');
   expect(apiState?.analysisRequests).toHaveLength(2);
+  expect(apiState?.analysisRequests[1].operationKey).not.toBe(apiState?.analysisRequests[0].operationKey);
 });
 
 test('honors Retry-After before retrying publication', async ({ page }) => {
@@ -580,15 +615,21 @@ test('honors Retry-After before retrying publication', async ({ page }) => {
   let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
   await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-publication'); });
   const dialog = await submitOneReportPhoto(page, 'en');
-  await dialog.getByLabel('Factual description').fill('Sharp broken glass beside the curb.');
+  const description = dialog.getByLabel('Factual description');
+  await description.fill('Sharp broken glass beside the curb.');
   const retryButton = dialog.getByRole('button', { name: 'Retry publication' });
   await dialog.getByRole('button', { name: 'Publish report' }).click();
   await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
   await expect(retryButton).toBeDisabled();
+  await description.fill('Updated sharp glass location beside the curb.');
   await retryButton.dispatchEvent('click');
   expect(apiState?.publicationRequests).toBe(1);
   await expect(retryButton).toBeEnabled();
   await retryButton.click();
   await expect(dialog).toBeHidden();
   expect(apiState?.publicationRequests).toBe(2);
+  expect(apiState?.publicationOperationKeys[1]).not.toBe(apiState?.publicationOperationKeys[0]);
+  expect(apiState?.publicationRequest).toMatchObject({
+    description: 'Updated sharp glass location beside the curb.',
+  });
 });
