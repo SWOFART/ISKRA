@@ -15,6 +15,7 @@ class TestElement {
   id = '';
   hidden = false;
   href = '';
+  value = '';
   tabIndex = 0;
   type = '';
   private ownText = '';
@@ -41,6 +42,7 @@ class TestElement {
 
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
+    if (name === 'tabindex') this.tabIndex = Number(value);
   }
 
   getAttribute(name: string): string | null {
@@ -100,12 +102,17 @@ function createHarness(
   const location = { pathname };
   const windowListeners = new Map<string, ((event: unknown) => void)[]>();
   const accessAttempts: string[] = [];
+  const storage = new Map<string, string>();
   const fakeDocument = {
     createElement: (tagName: string) => new TestElement(tagName),
     documentElement: { lang: '' },
   };
   const fakeWindow = {
     location,
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    },
     history: {
       pushState: (_state: unknown, _title: string, path: string) => {
         location.pathname = path;
@@ -118,9 +125,9 @@ function createHarness(
     },
   };
   const fakeNavigator = new Proxy({}, {
-    get: (_target, property) => {
+    get: (target, property) => {
       accessAttempts.push(String(property));
-      return undefined;
+      return Reflect.get(target, property);
     },
   });
 
@@ -128,15 +135,11 @@ function createHarness(
   vi.stubGlobal('window', fakeWindow);
   vi.stubGlobal('navigator', fakeNavigator);
 
-  vi.stubGlobal('localStorage', {
-    getItem: () => null,
-    setItem: () => undefined,
-  });
-
   return {
     root: App(api, locale) as unknown as TestElement,
     location,
     accessAttempts,
+    storage,
     dispatchWindowEvent(name: string) {
       for (const listener of windowListeners.get(name) ?? []) listener({});
     },
@@ -398,7 +401,8 @@ describe('client shell', () => {
     const notice = root.querySelector('.map-notice');
     expect(notice?.hidden).toBe(false);
     expect(notice?.textContent).toContain('No location or photos have been requested.');
-    expect(accessAttempts).toEqual([]);
+    expect(accessAttempts).not.toContain('geolocation');
+    expect(accessAttempts).not.toContain('mediaDevices');
   });
 
   it('restores the selected tab on browser back/forward navigation', () => {
@@ -410,6 +414,43 @@ describe('client shell', () => {
     expect(root.querySelector('.tab-panel')?.textContent).toContain(
       'Sign in to see your reward balance and available rewards.',
     );
+  });
+
+  it('applies a stored language before rendering the active view', () => {
+    const storage = new Map<string, string>([['iskra.locale', 'de']]);
+    vi.stubGlobal('window', {
+      location: { pathname: '/impact' },
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null },
+      history: { pushState: () => undefined },
+      addEventListener: () => undefined,
+    });
+    vi.stubGlobal('navigator', { language: 'en-US' });
+    vi.stubGlobal('localStorage', { getItem: () => 'de', setItem: () => undefined });
+    const documentElement = { lang: '' };
+    vi.stubGlobal('document', {
+      documentElement,
+      createElement: (tagName: string) => new TestElement(tagName),
+    });
+
+    const root = App() as unknown as TestElement;
+
+    expect(documentElement.lang).toBe('de');
+    expect(root.querySelector('[role="tablist"]')?.getAttribute('aria-label')).toBe('Hauptnavigation');
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
+  });
+
+  it('switches language without losing the selected tab or route and persists the choice', () => {
+    const { root, location, storage } = createHarness('/impact');
+    const germanButton = root.querySelectorAll('.locale-button')
+      .find((button) => button.getAttribute('lang') === 'de');
+
+    germanButton?.dispatch('click');
+
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
+    expect(location.pathname).toBe('/impact');
+    expect(storage.get('iskra.locale')).toBe('de');
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Dein Einfluss');
+    expect(root.querySelector('.map-notice')).toBeNull();
   });
 
   it.each(['/impact', '/rewards'])('keeps deferred %s actions honest', (path) => {
@@ -429,7 +470,6 @@ describe('client shell', () => {
       mode: 'fixture',
       fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
     }), 'de');
-
     expect(root.querySelectorAll('[role="tab"]')
       .map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual([
       'Karte', 'Mein Einfluss', 'Belohnungen',
@@ -440,7 +480,7 @@ describe('client shell', () => {
   });
 
   it('switches language without losing the selected tab', () => {
-    const { root, location } = createHarness('/impact');
+    const { root, location, storage } = createHarness('/impact');
     const germanButton = root.querySelectorAll('.locale-button')
       .find((button) => button.getAttribute('lang') === 'de');
 
@@ -448,6 +488,7 @@ describe('client shell', () => {
 
     expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
     expect(location.pathname).toBe('/impact');
+    expect(storage.get('iskra.locale')).toBe('de');
     expect(root.querySelector('.tab-panel')?.textContent).toContain('Dein Einfluss');
     const activeLocale = root.querySelectorAll('.locale-button')
       .find((button) => button.getAttribute('aria-pressed') === 'true');

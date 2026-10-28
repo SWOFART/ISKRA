@@ -5,6 +5,7 @@ import { ApiClientError, createClientApi } from './api';
 import { clientDesign, type SupportedLocale } from './designTokens';
 import { errorMessageKey, type MessageKey, type MessageValues } from './i18n';
 import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from './mapModel';
+import { renderPhotoCapture, type CapturedPhoto, type CaptureStage } from './PhotoCapture';
 import { renderReportSheet } from './ReportSheet';
 
 type ClientApi = ReturnType<typeof createClientApi>;
@@ -22,6 +23,7 @@ export interface MapPageView {
   element: HTMLElement;
   state: MapPageState;
   mount(): void;
+  openCapture(stage: CaptureStage): void;
   dispose(): void;
 }
 
@@ -330,6 +332,90 @@ export function renderMapPage(
     },
   });
   page.appendChild(reportSheet.element);
+  const setCaptureModalInert = (open: boolean): void => {
+    mapArea.inert = open;
+    listPanel.inert = open;
+    setChromeInert?.(open);
+  };
+  const photoCapture = renderPhotoCapture({
+    t,
+    onContinue: (photos, stage) => showCaptureHandoff(photos, stage),
+    onExit: () => reportButton.focus(),
+    onVisibilityChange: setCaptureModalInert,
+  });
+  page.appendChild(photoCapture.element);
+
+  const captureHandoff = makeElement('section', 'photo-capture-handoff');
+  captureHandoff.hidden = true;
+  captureHandoff.setAttribute('role', 'dialog');
+  captureHandoff.setAttribute('aria-modal', 'true');
+  const handoffHeading = makeElement('h2', 'photo-capture-handoff-heading', t('capture.handoffHeading'));
+  handoffHeading.id = 'photo-capture-handoff-heading';
+  captureHandoff.setAttribute('aria-labelledby', handoffHeading.id);
+  const handoffCard = makeElement('div', 'photo-capture-handoff-card');
+  const handoffMessage = makeElement('p', 'photo-capture-handoff-message');
+  const handoffPhotosLabel = makeElement('p', 'photo-capture-count');
+  const handoffPhotosList = makeElement('ol', 'photo-capture-list photo-capture-handoff-list');
+  const handoffActions = makeElement('div', 'photo-capture-handoff-actions');
+  const editPhotosButton = makeButton(t('capture.editPhotos'), 'photo-capture-edit');
+  const discardPhotosButton = makeButton(t('capture.discardSession'), 'photo-capture-discard');
+  appendElements(handoffActions, editPhotosButton, discardPhotosButton);
+  appendElements(handoffCard, handoffHeading, handoffMessage, handoffPhotosLabel, handoffPhotosList, handoffActions);
+  captureHandoff.appendChild(handoffCard);
+  page.appendChild(captureHandoff);
+
+  let handoffPhotos: readonly CapturedPhoto[] = [];
+  let handoffStage: CaptureStage = 'report';
+
+  function showCaptureHandoff(photos: readonly CapturedPhoto[], stage: CaptureStage): void {
+    handoffPhotos = [...photos];
+    handoffStage = stage;
+    handoffHeading.textContent = t('capture.handoffHeading');
+    handoffMessage.textContent = t('capture.handoffMessage', { count: handoffPhotos.length });
+    handoffPhotosLabel.textContent = t('capture.photoCount', { count: handoffPhotos.length });
+    handoffPhotosList.replaceChildren();
+    handoffPhotos.forEach((photo, index) => {
+      const item = makeElement('li', 'photo-capture-item');
+      const preview = makeElement('img', 'photo-capture-preview');
+      preview.src = photo.previewUrl;
+      preview.alt = t('capture.photoAlt', { index: index + 1 });
+      preview.referrerPolicy = 'no-referrer';
+      item.appendChild(preview);
+      handoffPhotosList.appendChild(item);
+    });
+    captureHandoff.hidden = false;
+    setCaptureModalInert(true);
+    editPhotosButton.focus();
+  }
+
+  editPhotosButton.addEventListener('click', () => {
+    captureHandoff.hidden = true;
+    handoffPhotos = [];
+    setCaptureModalInert(false);
+    photoCapture.open(handoffStage);
+  });
+  discardPhotosButton.addEventListener('click', () => {
+    captureHandoff.hidden = true;
+    handoffPhotos = [];
+    setCaptureModalInert(false);
+    photoCapture.discard();
+  });
+  captureHandoff.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      editPhotosButton.click();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const buttons = [editPhotosButton, discardPhotosButton];
+    if (event.shiftKey && document.activeElement === buttons[0]) {
+      event.preventDefault();
+      buttons[1].focus();
+    } else if (!event.shiftKey && document.activeElement === buttons[1]) {
+      event.preventDefault();
+      buttons[0].focus();
+    }
+  });
 
   let mapInstance: MapLibreMap | null = null;
   let mapReady = false;
@@ -737,8 +823,17 @@ export function renderMapPage(
     mapInstance = null;
     mapReady = false;
     reportSheet.dispose();
+    handoffPhotos = [];
+    captureHandoff.hidden = true;
+    photoCapture.dispose();
   }
 
   void loadReports(initialState !== undefined);
-  return { element: page, state: pageState, mount: () => { void initializeMap(); }, dispose: disposeMap };
+  return {
+    element: page,
+    state: pageState,
+    mount: () => { void initializeMap(); },
+    openCapture: (stage) => photoCapture.open(stage),
+    dispose: disposeMap,
+  };
 }
