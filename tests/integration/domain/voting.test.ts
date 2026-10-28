@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
-import { VoteReceiptSchema } from '../../../src/shared/contracts';
+import { ViewerReportDetailSchema, VoteReceiptSchema } from '../../../src/shared/contracts';
 import { distanceM } from '../../../src/shared/location';
 import { PostgresTransactionDatabase } from '../../../src/worker/db/client';
 import { ApiError } from '../../../src/worker/middleware/errors';
@@ -544,5 +544,195 @@ describe('PostgreSQL report voting', () => {
         [resolutionReport.id],
       );
       expect(resolutionState.rows[0]).toEqual({ status: 'RESOLVED', yes: 3, finalCredits: 2, notifications: 1 });
+    }));
+
+  it('accepts fourth-through-eighth existence support without repeating threshold effects or cleanup transition', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const supportVoters = Array.from({ length: 5 }, (_, index) => `vote-support-${index + 4}`);
+      const priorVoters = ['vote-support-1', 'vote-support-2', 'vote-support-3'];
+      await Promise.all([reportAuthor, reportCleaner, 'vote-after-support', ...priorVoters, ...supportVoters]
+        .map((id) => createUser(pool, id)));
+      const report = await createReport(pool, {
+        status: 'AWAITING_RESOLUTION', existenceYesCount: 3, resolutionYesCount: 0, cleaner: reportCleaner,
+      });
+      await seedReportAward(pool, reportAuthor, report.id);
+      for (const actor of priorVoters) {
+        const vote = await pool.query<{ id: string }>(
+          "INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m) VALUES ($1::uuid, 'EXISTENCE', $2::text, 'YES', 10, 10) RETURNING id",
+          [report.id, actor],
+        );
+        await pool.query(
+          "INSERT INTO reward_ledger (user_id, kind, delta, source_ref, report_id, vote_id) VALUES ($1::text, 'VOTE', 5, $2::varchar, $3::uuid, $4::uuid)",
+          [actor, 'vote:' + vote.rows[0].id, report.id, vote.rows[0].id],
+        );
+        await pool.query('UPDATE users SET rp_balance = rp_balance + 5 WHERE id = $1::text', [actor]);
+      }
+      await pool.query(
+        "INSERT INTO notifications (user_id, report_id, kind, message) VALUES ($1::text, $2::uuid, 'EXISTENCE_VERIFIED', 'Residents confirmed your report.')",
+        [reportAuthor, report.id],
+      );
+
+      let nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+      const before = await pool.query<{ last_existence_confirmed_at: Date; version: number }>(
+        'SELECT last_existence_confirmed_at, version FROM reports WHERE id = $1::uuid', [report.id],
+      );
+      const fourthKey = crypto.randomUUID();
+      const fourthFix = location(nowValue);
+      const fourth = await sendVote(app, supportVoters[0], report.id, 'EXISTENCE', 'YES', fourthKey, fourthFix);
+      expect(fourth.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await fourth.json())).toMatchObject({
+        replayed: false, rpAwarded: 5, balance: 5, balanceVersion: 1,
+        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 4, resolutionYesCount: 0, version: 1 },
+      });
+
+      let eighthKey = '';
+      let eighthFix = location(nowValue);
+      for (let index = 1; index < supportVoters.length; index++) {
+        nowValue += 1_000;
+        const key = crypto.randomUUID();
+        const fix = location(nowValue);
+        if (index === supportVoters.length - 1) { eighthKey = key; eighthFix = fix; }
+        const response = await sendVote(app, supportVoters[index], report.id, 'EXISTENCE', 'YES', key, fix);
+        expect(response.status).toBe(200);
+        expect(VoteReceiptSchema.parse(await response.json())).toMatchObject({
+          replayed: false, rpAwarded: 5, balance: 5, balanceVersion: 1,
+          report: {
+            status: 'AWAITING_RESOLUTION', existenceYesCount: index + 4,
+            resolutionYesCount: 0, version: index + 1,
+          },
+        });
+      }
+
+      const detailResponse = await app.request(`/api/reports/${report.id}`, {
+        headers: { Authorization: 'Bearer vote-after-support' },
+      }, { FIREBASE_PROJECT_ID: 'voting-test-project' });
+      expect(detailResponse.status).toBe(200);
+      const detail = ViewerReportDetailSchema.parse(await detailResponse.json());
+      expect(detail).toMatchObject({
+        status: 'AWAITING_RESOLUTION', existenceYesCount: 8, resolutionYesCount: 0,
+        openVoteStages: ['EXISTENCE', 'RESOLUTION'],
+        viewer: {
+          canSubmitCleanup: false,
+          stages: { EXISTENCE: { canVote: true }, RESOLUTION: { canVote: true } },
+        },
+      });
+
+      nowValue += 61_000;
+      const fourthReplay = await sendVote(app, supportVoters[0], report.id, 'EXISTENCE', 'YES', fourthKey, fourthFix);
+      expect(fourthReplay.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await fourthReplay.json())).toMatchObject({
+        replayed: true, rpAwarded: 0, balance: 5, balanceVersion: 1,
+        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 8, version: 5 },
+      });
+      const eighthSemanticReplay = await sendVote(
+        app, supportVoters[4], report.id, 'EXISTENCE', 'YES', crypto.randomUUID(), eighthFix,
+      );
+      expect(eighthSemanticReplay.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await eighthSemanticReplay.json())).toMatchObject({
+        replayed: true, rpAwarded: 0, balance: 5, balanceVersion: 1,
+        report: { status: 'AWAITING_RESOLUTION', existenceYesCount: 8, version: 5 },
+      });
+
+      const state = await pool.query<{
+        status: string; existence_yes_count: number; resolution_yes_count: number; version: number;
+        last_existence_confirmed_at: Date; cleanup_status: string; existence_notifications: number;
+        resolution_notifications: number; voter_balance: number; voter_version: number;
+        vote_rows: number; vote_credits: number;
+      }>(
+        `SELECT r.status, r.existence_yes_count, r.resolution_yes_count, r.version, r.last_existence_confirmed_at,
+           cleanup.status AS cleanup_status,
+           (SELECT count(*)::int FROM notifications WHERE report_id = r.id AND kind = 'EXISTENCE_VERIFIED') AS existence_notifications,
+           (SELECT count(*)::int FROM notifications WHERE report_id = r.id AND kind = 'REPORT_RESOLVED') AS resolution_notifications,
+           (SELECT rp_balance FROM users WHERE id = $2::text) AS voter_balance,
+           (SELECT version FROM users WHERE id = $2::text) AS voter_version,
+           (SELECT count(*)::int FROM votes WHERE report_id = r.id AND stage = 'EXISTENCE') AS vote_rows,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = r.id AND kind = 'VOTE') AS vote_credits
+         FROM reports r JOIN cleanup_submissions cleanup ON cleanup.report_id = r.id WHERE r.id = $1::uuid`,
+        [report.id, supportVoters[0]],
+      );
+      expect(state.rows[0]).toEqual({
+        status: 'AWAITING_RESOLUTION', existence_yes_count: 8, resolution_yes_count: 0, version: 5,
+        last_existence_confirmed_at: expect.any(Date), cleanup_status: 'AWAITING_VERIFICATION',
+        existence_notifications: 1, resolution_notifications: 0,
+        voter_balance: 5, voter_version: 1, vote_rows: 8, vote_credits: 8,
+      });
+      expect(state.rows[0].last_existence_confirmed_at.getTime())
+        .toBeGreaterThan(before.rows[0].last_existence_confirmed_at.getTime());
+    }));
+
+  it('closes both vote stages after resolution while an accepted vote still replays safely', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const resolutionVoters = ['vote-close-one', 'vote-close-two', 'vote-close-three'];
+      const afterClose = 'vote-after-resolution';
+      await Promise.all([reportAuthor, reportCleaner, ...resolutionVoters, afterClose].map((id) => createUser(pool, id)));
+      const report = await createReport(pool, {
+        status: 'AWAITING_RESOLUTION', existenceYesCount: 3, resolutionYesCount: 0, cleaner: reportCleaner,
+      });
+      await seedReportAward(pool, reportAuthor, report.id);
+      let nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+      const finalKey = crypto.randomUUID();
+      let finalFix = location(nowValue);
+
+      const preResolutionDetail = await app.request(`/api/reports/${report.id}`, {
+        headers: { Authorization: `Bearer ${afterClose}` },
+      }, { FIREBASE_PROJECT_ID: 'voting-test-project' });
+      expect(preResolutionDetail.status).toBe(200);
+      expect(ViewerReportDetailSchema.parse(await preResolutionDetail.json()).viewer.stages).toMatchObject({
+        EXISTENCE: { canVote: true }, RESOLUTION: { canVote: true },
+      });
+
+      for (let index = 0; index < resolutionVoters.length; index++) {
+        if (index > 0) nowValue += 1_000;
+        const actor = resolutionVoters[index];
+        const key = index === resolutionVoters.length - 1 ? finalKey : crypto.randomUUID();
+        const fix = location(nowValue);
+        if (index === resolutionVoters.length - 1) finalFix = fix;
+        const response = await sendVote(app, actor, report.id, 'RESOLUTION', 'YES', key, fix);
+        expect(response.status).toBe(200);
+      }
+
+      const newExistence = await sendVote(
+        app, afterClose, report.id, 'EXISTENCE', 'YES', crypto.randomUUID(), location(nowValue),
+      );
+      const newResolution = await sendVote(
+        app, afterClose, report.id, 'RESOLUTION', 'YES', crypto.randomUUID(), location(nowValue),
+      );
+      for (const response of [newExistence, newResolution]) {
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ error: { code: 'STAGE_CLOSED' } });
+      }
+
+      nowValue += 61_000;
+      const replay = await sendVote(app, resolutionVoters[2], report.id, 'RESOLUTION', 'YES', finalKey, finalFix);
+      expect(replay.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await replay.json())).toMatchObject({
+        replayed: true, rpAwarded: 0, report: { status: 'RESOLVED', resolutionYesCount: 3 },
+      });
+
+      const detailResponse = await app.request(`/api/reports/${report.id}`, {
+        headers: { Authorization: `Bearer ${afterClose}` },
+      }, { FIREBASE_PROJECT_ID: 'voting-test-project' });
+      const detail = ViewerReportDetailSchema.parse(await detailResponse.json());
+      expect(detail).toMatchObject({
+        status: 'RESOLVED', openVoteStages: [],
+        viewer: {
+          stages: {
+            EXISTENCE: { canVote: false, reason: 'STAGE_CLOSED' },
+            RESOLUTION: { canVote: false, reason: 'STAGE_CLOSED' },
+          },
+        },
+      });
+      const state = await pool.query<{ existence_votes: number; resolution_votes: number; support_balance: number; support_credits: number }>(
+        `SELECT (SELECT count(*)::int FROM votes WHERE report_id = $1::uuid AND stage = 'EXISTENCE') AS existence_votes,
+           (SELECT count(*)::int FROM votes WHERE report_id = $1::uuid AND stage = 'RESOLUTION') AS resolution_votes,
+           (SELECT rp_balance FROM users WHERE id = $2::text) AS support_balance,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = $1::uuid AND user_id = $2::text AND kind = 'VOTE') AS support_credits`,
+        [report.id, afterClose],
+      );
+      expect(state.rows[0]).toEqual({ existence_votes: 0, resolution_votes: 3, support_balance: 0, support_credits: 0 });
     }));
 });
