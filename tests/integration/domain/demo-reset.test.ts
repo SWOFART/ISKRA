@@ -173,6 +173,130 @@ describe('guarded demo reset', () => {
       )).rows[0]?.count).toBe(1);
     }));
 
+  it.each(['missing schema marker', 'mismatched schema marker'] as const)(
+    'refuses reset with a %s before deleting objects', (markerCase) =>
+      withTestDatabase(async (pool) => {
+        await installDemoSchema(pool);
+        await seedDemo(pool);
+        if (markerCase === 'missing schema marker') {
+          await pool.query('DROP TABLE demo_seed_metadata');
+        } else {
+          await pool.query("UPDATE demo_seed_metadata SET schema_name = 'wrong_schema' WHERE singleton = true");
+        }
+        let objectDeleteCalled = false;
+        const objectStore: DemoObjectStore = {
+          async deleteObjectKeys() { objectDeleteCalled = true; },
+        };
+
+        await expect(resetDemoSeed(new PostgresTransactionDatabase(pool), objectStore)).rejects.toThrow(
+          markerCase === 'missing schema marker'
+            ? 'Demo seed metadata is missing'
+            : 'Demo seed database identity does not match',
+        );
+        expect(objectDeleteCalled).toBe(false);
+      }));
+
+  it('refuses unknown seed-account receipts and shape-valid but unlisted photo keys before deleting objects', () =>
+    withTestDatabase(async (pool) => {
+      await installDemoSchema(pool);
+      await seedDemo(pool);
+      const outsiderKey = 'operator-note';
+      await pool.query(
+        `INSERT INTO idempotency_keys (user_id, operation, key, request_hash)
+         VALUES ($1::text, 'OPERATOR_NOTE', $2::varchar, 'operator-note-v1')`,
+        [DEMO_SEED_USER_IDS[0], outsiderKey],
+      );
+      let objectDeleteCalled = false;
+      const objectStore = { async deleteObjectKeys() { objectDeleteCalled = true; } };
+      await expect(resetDemoSeed(new PostgresTransactionDatabase(pool), objectStore))
+        .rejects.toThrow('An unknown idempotency row is attached to the seed');
+      expect(objectDeleteCalled).toBe(false);
+      await pool.query(
+        'DELETE FROM idempotency_keys WHERE user_id = $1::text AND operation = $2::varchar AND key = $3::varchar',
+        [DEMO_SEED_USER_IDS[0], 'OPERATOR_NOTE', outsiderKey],
+      );
+
+      const knownPhotoId = await stableUuid('photo/report/green-resolved/before');
+      await pool.query(
+        'UPDATE report_photos SET object_key = $2::varchar WHERE id = $1::uuid',
+        [knownPhotoId, DEMO_SEED_OBJECT_PREFIX + 'green-resolved/before-' + 'f'.repeat(64) + '.jpg'],
+      );
+      await expect(resetDemoSeed(new PostgresTransactionDatabase(pool), objectStore))
+        .rejects.toThrow('A foreign or unlisted photo is attached to the seed');
+      expect(objectDeleteCalled).toBe(false);
+    }));
+
+  it('refuses an unrelated ledger row referencing a seeded vote before object deletion', () =>
+    withTestDatabase(async (pool) => {
+      await installDemoSchema(pool);
+      await seedDemo(pool);
+      const outsider = 'foreign-ledger-voter';
+      await pool.query(
+        "INSERT INTO users (id, nickname, is_demo) VALUES ($1::text, 'Foreign ledger user', false)", [outsider],
+      );
+      const voteId = await stableUuid('vote/green-existence-1');
+      await pool.query(
+        `INSERT INTO reward_ledger (user_id, kind, delta, source_ref, vote_id, is_demo)
+         VALUES ($1::text, 'VOTE', 5, 'foreign-vote-ledger', $2::uuid, false)`,
+        [outsider, voteId],
+      );
+      let objectDeleteCalled = false;
+      const objectStore: DemoObjectStore = {
+        async deleteObjectKeys() { objectDeleteCalled = true; },
+      };
+
+      await expect(resetDemoSeed(new PostgresTransactionDatabase(pool), objectStore))
+        .rejects.toThrow('A non-demo or unknown ledger entry is attached to the seed');
+      expect(objectDeleteCalled).toBe(false);
+      expect((await pool.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM reward_ledger WHERE source_ref = 'foreign-vote-ledger'",
+      )).rows[0]?.count).toBe(1);
+    }));
+
+  it('holds seeded vote FK locks while deleting objects so concurrent foreign references cannot race the reset', () =>
+    withTestDatabase(async (pool) => {
+      await installDemoSchema(pool);
+      await seedDemo(pool);
+      const outsider = 'concurrent-ledger-user';
+      await pool.query(
+        "INSERT INTO users (id, nickname, is_demo) VALUES ($1::text, 'Concurrent ledger user', false)", [outsider],
+      );
+      const voteId = await stableUuid('vote/green-existence-1');
+      let enterObjectDelete!: () => void;
+      let releaseObjectDelete!: () => void;
+      const objectDeleteEntered = new Promise<void>((resolve) => { enterObjectDelete = resolve; });
+      const waitForObjectDelete = new Promise<void>((resolve) => { releaseObjectDelete = resolve; });
+      const reset = resetDemoSeed(new PostgresTransactionDatabase(pool), {
+        async deleteObjectKeys() {
+          enterObjectDelete();
+          await waitForObjectDelete;
+        },
+      });
+      await objectDeleteEntered;
+
+      const insertion = pool.query(
+        `INSERT INTO reward_ledger (user_id, kind, delta, source_ref, vote_id, is_demo)
+         VALUES ($1::text, 'VOTE', 5, 'concurrent-vote-ledger', $2::uuid, false)`,
+        [outsider, voteId],
+      ).then(() => ({ status: 'inserted' as const }), (error: unknown) => ({ status: 'rejected' as const, error }));
+      const raced = await Promise.race([
+        insertion.then(() => 'settled' as const),
+        new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 100)),
+      ]);
+      expect(raced).toBe('blocked');
+
+      releaseObjectDelete();
+      await reset;
+      const insertResult = await insertion;
+      expect(insertResult.status).toBe('rejected');
+      if (insertResult.status === 'rejected') {
+        expect(insertResult.error).toMatchObject({ code: '23503' });
+      }
+      expect((await pool.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM reward_ledger WHERE source_ref = 'concurrent-vote-ledger'",
+      )).rows[0]?.count).toBe(0);
+    }));
+
   it('records reset intent before object deletion and safely resumes after an object-store failure', () =>
     withTestDatabase(async (pool) => {
       await installDemoSchema(pool);

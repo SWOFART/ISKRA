@@ -33,5 +33,10 @@ describe('guarded demo reset CLI inputs', () => {
       'demo-fixtures/seed-v1/green-resolved/../../production.jpg',
     ])).toThrow();
     expect(() => assertDemoObjectKeys(['uploads/another-user/photo.jpg'])).toThrow();
+    expect(() => assertDemoObjectKeys([
+      'demo-fixtures/seed-v1/green-resolved/before-' + 'b'.repeat(64) + '.jpg',
+    ], [
+      'demo-fixtures/seed-v1/green-resolved/before-' + 'a'.repeat(64) + '.jpg',
+    ])).toThrow();
   });
 });
