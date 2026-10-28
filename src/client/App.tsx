@@ -261,6 +261,10 @@ export function App(
     } else if (selectedTab === 'map') {
       currentMapPage = renderMapPage(() => {
         if (session && (!session.uid || session.uid !== accountUid)) { openSignIn('report'); return; }
+        if (session?.uid && session.uid === accountUid) {
+          currentMapPage?.openCapture('report');
+          return;
+        }
         const notice = panel.querySelector<HTMLElement>('.map-notice');
         if (notice) {
           notice.textContent = t('map.cameraNotConnected');
