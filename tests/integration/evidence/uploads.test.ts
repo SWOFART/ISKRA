@@ -12,7 +12,7 @@ const migration = await readFile(new URL('../../../migrations/0001_p0_core.sql',
 const secret = 'test-only-private-upload-signing-key-32-plus';
 const request = { purpose: 'REPORT', mimeType: 'image/jpeg', byteSize: 123, ordinal: 1 } as const;
 
-// Test-only adapter; runtime wiring belongs to #19 and B's transaction implementation (#78).
+// Test-only adapter; production runtime injection belongs to #19.
 function databaseFor(pool: Pool): TransactionDatabase {
   return {
     async withTransaction(work) {
