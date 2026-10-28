@@ -85,7 +85,7 @@ Activation sequence:
 4. Configure and verify the product's private R2 and Hyperdrive/Cloud SQL bindings before claiming G1 or a functioning report flow. They are not present in this Worker configuration today.
 5. Run **Deploy to Cloudflare** from `develop` with environment `staging` and target `application`, then check the release link in the workflow summary and confirm `/api/health` reports the same SHA. Later relevant merges to `develop` repeat this staging deployment automatically.
 
-Until these Google-sourced values and runtime bindings are configured, merges to `develop` run CI and the Cloudflare workflow records a skipped deployment. The app's current health deliberately says `applicationReady: false`; neither a successful workflow nor a Workers URL alone passes M1/G1.
+Staging deployment is now enabled. Relevant pushes to `develop` select the application target; until its required configuration is complete, validation fails rather than skipping deployment. The successful manual check-Worker deployment below is a separate target. Auth/staging integration PR #103 supplies the staged configuration policy. The app's health deliberately says `applicationReady: false`; neither a successful workflow nor a Workers URL alone passes M1/G1.
 
 ### Google → Cloudflare flow
 
