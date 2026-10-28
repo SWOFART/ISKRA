@@ -71,7 +71,7 @@ When enabled, the job installs locked dependencies, builds, deploys, then verifi
 
 ## Product staging deployment on `develop`
 
-The product Worker is `iskra-staging`. The staging environment now enables its own `workers.dev` route; production remains private to its future hostname configuration. The URL `https://iskra-develop-check.matvey-nesterenko.workers.dev` is a separate health-check Worker (`iskra-deployment-check`) and must not be used as the product `APP_URL`.
+The product Worker is `iskra-staging`. The staging environment now enables its own `workers.dev` route; production remains private to its future hostname configuration. The URL `https://iskra-develop-check.matvey-nesterenko.workers.dev` is a separate health-check Worker (`iskra-deployment-check`); keep it in `DEPLOYMENT_CHECK_URL`, not the product `APP_URL`.
 
 **ASSUMPTION for review:** based on that existing account subdomain and the configured Worker name, the product staging origin should be `https://iskra-staging.matvey-nesterenko.workers.dev`. This exact product URL is not live or verified yet. Confirm it after the first authorized product deploy; store the confirmed origin as `APP_URL` in `iskra-staging-env` in Google Secret Manager.
 
@@ -79,7 +79,7 @@ The existing workflow already deploys the application from `develop`: on relevan
 
 Activation sequence:
 
-1. In `iskra-staging-env`, configure `DEPLOY_ENABLED="true"`, `CLOUDFLARE_ACCOUNT_ID`, a least-privilege `CLOUDFLARE_API_TOKEN`, the confirmed `APP_URL`, and `APP_ENV="staging"`. Keep the token only in Google Secret Manager. The existing workflow validates these before any Cloudflare write.
+1. In `iskra-staging-env`, configure `DEPLOY_ENABLED="true"`, `CLOUDFLARE_ACCOUNT_ID`, a least-privilege `CLOUDFLARE_API_TOKEN`, the confirmed product `APP_URL`, and `APP_ENV="staging"`. Keep the token only in Google Secret Manager. The workflow selects `APP_URL` for the application and `DEPLOYMENT_CHECK_URL` for the isolated test Worker, so manual test deployments do not overwrite the product origin.
 2. Add the exact staging origin to Firebase Authentication's authorized domains and to the MapTiler key's allowed origins. Confirm the Firebase redirect and map load on that origin.
 3. Add the application values listed in `.env.example` to the same Google configuration. The application deploy validator currently requires Gemini key/model, media-signing key, Firebase project ID and the Firebase/MapTiler browser keys.
 4. Configure and verify the product's private R2 and Hyperdrive/Cloud SQL bindings before claiming G1 or a functioning report flow. They are not present in this Worker configuration today.
@@ -96,7 +96,7 @@ Until these Google-sourced values and runtime bindings are configured, merges to
 
 ## Test Wrangler deployment on develop
 
-The isolated Worker is `iskra-develop-check`, with no storage/database/AI bindings. It accepts GET `/api/health`, includes `ok`, `release`, `service: iskra-deployment-check`, and `applicationReady: false`; other paths return JSON 404 and mutation methods 405.
+The isolated Worker is `iskra-develop-check`, with no storage/database/AI bindings. It accepts GET `/api/health`, includes `ok`, `release`, `service: iskra-deployment-check`, and `applicationReady: false`; other paths return JSON 404 and mutation methods 405. The workflow uses `DEPLOYMENT_CHECK_URL` for this target and verifies the `service` identity, not just a matching release SHA.
 
 ```bash
 npm ci --prefix infra/deployment-check
@@ -111,10 +111,10 @@ The initial local deployment, three Worker tests, live health/release checks, JS
 
 Do not add a GitHub secret or settings variable to complete this checklist.
 
-- [ ] Add a new version of `iskra-staging-env` in **Google Cloud project `iskra-512914`**. For the infrastructure test, populate `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `APP_URL`, then set string `DEPLOY_ENABLED` to `true`. Keep it `false` while values are missing.
-- [ ] The test `APP_URL` is the verified Workers origin above, not the tunnel URL. Use an account-scoped Workers deployment token with minimum verified permissions; never a Global API Key. Create/rotate that token at Cloudflare and save its value directly in Google Secret Manager, not chat or GitHub.
+- [ ] Add a new version of `iskra-staging-env` in **Google Cloud project `iskra-512914`**. For the infrastructure test, populate `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `DEPLOYMENT_CHECK_URL`, then set string `DEPLOY_ENABLED` to `true`. Keep it `false` while values are missing.
+- [ ] `DEPLOYMENT_CHECK_URL` is the verified check Worker origin above, not the tunnel URL. Use an account-scoped Workers deployment token with minimum verified permissions; never a Global API Key. Create/rotate that token at Cloudflare and save its value directly in Google Secret Manager, not chat or GitHub.
 - [ ] Run **Deploy to Cloudflare** from `develop`, environment `staging`, target `deployment-check`; verify a matching Git SHA in live health.
-- [ ] For the product later: commit its code/lockfile/configuration and add all relevant `.env.example` values to Google's environment JSON. Configure separate named Workers, Hyperdrive/R2 bindings, Firebase domains, MapTiler origins and release health. Its URL replaces the test URL in Google's staging config.
+- [ ] For the product: set `APP_URL` to the confirmed product Worker origin, while retaining `DEPLOYMENT_CHECK_URL` for the optional isolated test. Add the remaining relevant `.env.example` values to Google's environment JSON. Configure separate named Workers, Hyperdrive/R2 bindings, Firebase domains, MapTiler origins and release health.
 - [ ] Google is also the source for any origin DB/R2 credentials; provision their operational copies in Hyperdrive or storage integrations as appropriate. Do not expose origin credentials to the browser.
 - [ ] Add real-PostgreSQL integration checks and a reviewed migration/backup gate before data-changing releases; current CI has no database to migrate.
 - [ ] Populate the production Google configuration and final custom hostname only after product readiness. Production must have `APP_ENV=production`, `DEMO_DATA=false`, target `application` and the `main` branch.

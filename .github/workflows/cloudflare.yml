@@ -147,7 +147,7 @@ jobs:
         env:
           DEPLOY_ENABLED: ${{ steps.config.outputs.enabled }}
           SELECTED_TARGET: ${{ steps.config.outputs.target }}
-          APP_URL: ${{ steps.config.outputs.app_url }}
+          TARGET_URL: ${{ steps.config.outputs.target_url }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
         run: python3 .github/scripts/cloudflare_env.py summary "$DEPLOY_ENV" "$SELECTED_TARGET" >> "$GITHUB_STEP_SUMMARY"
 
