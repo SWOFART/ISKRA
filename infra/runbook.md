@@ -465,3 +465,39 @@ New report-analysis attempts require owned, ordered, unattached UPLOADED rows wi
 Real PostgreSQL regression coverage includes delayed publication with one/five photos, delayed cleanup submission without early RP, expired-analysis rejection, fresh analysis of retained photos after the natural thirty-minute window, original-key replay, late old completion rejection and existing housekeeping/attachment races. Provider and R2 objects remain explicit test doubles; this does not activate storage, Gemini, CLEANUP uploads/analysis or complete Green.
 
 Verification of the integrated lifetime fix before the final client/docs refresh: typecheck, 350 unit tests, 85 real-PostgreSQL tests plus one intentional skipped invariant probe, 26 local browser checks, build, 28 Python configuration tests and diff-check passed. This evidence uses R2/provider doubles and does not claim live media or full Green.
+
+## Vertex AI staging integration — issues #8/#30/#33 / 2026-10-28
+
+The user explicitly confirmed **Gemini through Vertex AI**, using project `iskra-512914` and its Google Cloud billing account. AI Studio and the Gemini Developer API are not the selected provider. The discarded Developer API key was revoked, its temporary configuration version10 disabled, the API disabled, and its two staging Worker settings removed. Secret version11 restored the prior14 fields exactly. No AI Studio credit purchase or auto-reload was made. An unused standard Vertex API key was also revoked.
+
+Vertex AI is enabled. A genuine Google-authenticated `gemini-3.5-flash-lite` request returned200 under project billing. This model is the staging engineering selection, not an approved accuracy guarantee; real litter/hazard classification acceptance remains pending. The fixed global Vertex endpoint is `https://aiplatform.googleapis.com/v1/projects/<project>/locations/global/publishers/google/models/<model>:generateContent`. Image processing therefore uses the global service; no regional-only data-residency claim is made.
+
+### Runtime identity and deployment
+
+Google's existing policies block service-account keys and Vertex service-account-bound API keys. Both policies remain unchanged. Instead, the dedicated `iskra-vertex-staging` service account has a custom inference-only role containing `aiplatform.endpoints.predict` and `serviceusage.services.use`. It cannot administer models, infrastructure, accounts, databases or secrets.
+
+A separate Workload Identity pool `iskra-worker-staging`, provider `vertex`, trusts an uploaded public JWKS. Its condition admits only subject `iskra-staging-worker` with environment `staging`. Only that exact principal receives `roles/iam.workloadIdentityUser` on the inference service account. The existing GitHub CI pool and permissions are unchanged. No Google service-account key was created.
+
+The Worker signs its own five-minute identity assertion with an RSA signing key; this is a possession credential, not Cloudflare platform attestation. The signing material and public metadata are stored in the Frankfurt-replicated Google secret `iskra-staging-vertex-credentials`. `VERTEX_AUTH_JSON` carries its single-line JSON runtime copy in the existing environment record; `GEMINI_MODEL_ID` selects the model. `.env.example` contains blank names only. Neither value belongs in GitHub settings or browser code. `GEMINI_API_KEY` is no longer consumed.
+
+The adapter exchanges that assertion at Google's fixed STS endpoint, impersonates only its configured inference service account, and requests a fifteen-minute access token. Each authentication request is bounded to five seconds; authentication plus model inference share the existing twenty-second deadline. Redirects fail closed; token responses use the existing64KiB bound and never reach the client/logs. No token is persisted or cached between attempts. All of this occurs outside SQL transactions. API request/result contracts and financial semantics are unchanged.
+
+Deploy this provider/configuration migration before adding `VERTEX_AUTH_JSON` to `iskra-staging-env`; the old validator correctly rejects that unknown name. Preserve the complete current JSON and add only the two Vertex fields. Validate it, then run the existing staging application workflow. Production remains disabled and receives no staging identity. The deploy validator rejects an identity from the wrong environment or application origin.
+
+Rotation must update the trusted public JWKS and Google-stored signing configuration together: add the new public key first, deploy the new private key/key ID, retain the old public key through the five-minute assertion window, then remove it. Revoke access by disabling this dedicated provider or removing its exact service-account binding; do not modify the GitHub pool. Rollback removes the two Vertex runtime settings and restores the prior code/configuration together; omitting a secret from bulk upload does not delete an old Cloudflare runtime secret, so explicitly remove obsolete names.
+
+### Genuine provider evidence
+
+The actual adapter completed Google STS200 → service-account impersonation200 → Vertex200 without provider mocks, using controlled blank JPEG fixtures with no resident data. Instrumentation counted every image in the real request. Each result passed the frozen runtime schema as RETAKE without a route; this is safe insufficient-evidence acceptance, not real Green or hazard-classification acceptance.
+
+| Probe | Images | Locale | Latency | Input/output tokens | Result |
+|---|---:|---|---:|---:|---|
+| Report | 1 | English |1694ms|1738 /74|RETAKE, no route|
+| Report | 5 | German |1976ms|6163 /94|RETAKE, no route|
+| Cleanup adapter |5 before +5 after|German|1669ms|11546 /104|RETAKE, no route|
+
+At the published global Vertex standard rates ofUS$0.30/input-million andUS$2.50/output-million, those three image calls estimate **US$0.0066**, excluding taxes and other probes; this is not an invoice or spending cap. No paid tier/auto-reload or quota increase was configured. Sources: [Vertex pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing), [API authentication](https://cloud.google.com/docs/authentication/api-keys), [Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation).
+
+A separate private local workerd invocation also completed the actual federation and Vertex call, returning200 with schema-valid RETAKE; it used in-memory Google-sourced bindings and created no public bypass or deployed diagnostic route. Local checks passed: typecheck,368unit tests,85real-PostgreSQL tests plus1intentional skipped invariant probe,28browser checks,29Python configuration tests and build. Provider calls are genuine; the wider SQL/browser suites still use explicit provider/storage doubles.
+
+Remaining: live deployed upload→Vertex→publication, real ACCEPT/blur/hazard/model-quality cases, owner preview/quotas/private R2/durable cleanup binding and full Green. The production cleanup producer still returns503 pending its existing target handoff; the ten-image adapter probe does not complete that endpoint. Keep #8/#30/#33 and full #19/#32 outcomes open.

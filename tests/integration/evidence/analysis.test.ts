@@ -1,3 +1,4 @@
+import { vertexAuthJson, withVertexAuth } from '../../fixtures/ai/vertex';
 import { readFile } from 'node:fs/promises';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -41,10 +42,10 @@ function modelResponse(result: unknown = assessment) {
 }
 
 function appFor(database: TransactionDatabase, fetcher: typeof fetch = vi.fn(async () => modelResponse())) {
-  vi.stubGlobal('fetch', fetcher);
+  vi.stubGlobal('fetch', withVertexAuth(fetcher));
   const app = createApp({ database, verify: async (token) => ({ uid: token }) });
   const get = vi.fn(async () => ({ size: jpeg.length, arrayBuffer: async () => jpeg.slice().buffer }));
-  const env = { FIREBASE_PROJECT_ID: 'iskra-test', GEMINI_API_KEY: 'test-only-key', GEMINI_MODEL_ID: model,
+  const env = { FIREBASE_PROJECT_ID: 'iskra-test', VERTEX_AUTH_JSON: vertexAuthJson, GEMINI_MODEL_ID: model,
     PHOTOS: { get } as unknown as R2Bucket };
   const start = (input: unknown, key = crypto.randomUUID(), uid = 'resident') => app.request('https://iskra.test/api/ai/analyze-report', {
     method: 'POST', headers: { Authorization: 'Bearer ' + uid, 'Content-Type': 'application/json', 'Idempotency-Key': key },

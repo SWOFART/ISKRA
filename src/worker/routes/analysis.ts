@@ -41,7 +41,7 @@ export function createAnalysisRoutes({ database, verify, now = Date.now, fetcher
     const parsed = await parseJsonBody(c, ReportAnalysisRequestSchema);
     const input = { ...parsed, photoIds: parsed.photoIds.map((id) => id.toLowerCase()) };
     if (!database || !c.env.PHOTOS) throw new ApiError(503, 'UNAVAILABLE', 'Analysis storage is not configured.');
-    const config = { apiKey: c.env.GEMINI_API_KEY ?? '', modelId: c.env.GEMINI_MODEL_ID ?? '' };
+    const config = { authJson: c.env.VERTEX_AUTH_JSON ?? '', modelId: c.env.GEMINI_MODEL_ID ?? '' };
     validateGeminiConfig(config);
     const uid = c.get('identity')!.uid;
     const work = await beginReportAnalysis(database, uid, key.data.toLowerCase(), input, config.modelId, now);

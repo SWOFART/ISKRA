@@ -12,13 +12,13 @@ from urllib.parse import urlsplit
 
 
 RUNTIME_KEYS = {
-    "APP_ENV", "FIREBASE_PROJECT_ID", "GEMINI_API_KEY", "GEMINI_MODEL_ID",
+    "APP_ENV", "FIREBASE_PROJECT_ID", "VERTEX_AUTH_JSON", "GEMINI_MODEL_ID",
     "MEDIA_SIGNING_SECRET", "VOTE_RADIUS_M", "MAX_GPS_ACCURACY_M",
     "LOCATION_MAX_AGE_SECONDS", "REPORTER_REWARD_RP", "GREEN_CLEANER_REWARD_RP",
     "PHOTO_MAX_BYTES", "AI_RATE_PER_MINUTE", "DEMO_DATA",
 }
 PRIVATE_KEYS = {
-    "CLOUDFLARE_API_TOKEN", "GEMINI_API_KEY", "MEDIA_SIGNING_SECRET",
+    "CLOUDFLARE_API_TOKEN", "VERTEX_AUTH_JSON", "MEDIA_SIGNING_SECRET",
     "VITE_FIREBASE_API_KEY", "VITE_MAPTILER_KEY", "MIGRATION_DATABASE_URL",
 }
 SMOKE_MAX_ATTEMPTS = 7
@@ -57,7 +57,7 @@ def validate_config(raw, template, environment, target):
         required = ["FIREBASE_PROJECT_ID", "VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN",
                     "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID", "VITE_MAPTILER_KEY"]
         if environment == "production":
-            required += ["GEMINI_API_KEY", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID"]
+            required += ["VERTEX_AUTH_JSON", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID"]
         for name in required:
             if not values.get(name):
                 raise ValueError(f"Required cloud configuration is missing: {name}")
@@ -67,6 +67,18 @@ def validate_config(raw, template, environment, target):
             raise ValueError("Firebase auth domain must match the configured project")
         if values.get("APP_ENV") != environment:
             raise ValueError("APP_ENV must match the deployment environment")
+        if values.get("VERTEX_AUTH_JSON"):
+            try:
+                identity = json.loads(values["VERTEX_AUTH_JSON"])
+                valid = (isinstance(identity, dict)
+                         and identity.get("environment") == environment
+                         and identity.get("issuer") == values["APP_URL"].rstrip("/")
+                         and all(isinstance(identity.get(key), str) and identity[key]
+                                 for key in ("projectId", "audience", "subject", "serviceAccountEmail", "privateKey", "keyId")))
+            except (ValueError, TypeError):
+                valid = False
+            if not valid:
+                raise ValueError("Vertex identity must match the deployment environment and application origin")
         if environment == "production" and values.get("DEMO_DATA") != "false":
             raise ValueError("Production requires DEMO_DATA=false")
     return values
