@@ -671,7 +671,7 @@ export async function runDemoResetCli(args = process.argv.slice(2)): Promise<voi
     port: target.port,
     database: 'iskra_test',
     user: 'iskra_test',
-    password: target.password || 'iskra-test-only',
+    password: target.password,
     ssl: false,
     options: '-c search_path=iskra_demo_seed,pg_catalog',
     application_name: 'iskra-demo-reset',
