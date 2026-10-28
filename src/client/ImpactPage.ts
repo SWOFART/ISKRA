@@ -143,6 +143,7 @@ export function renderImpactPage(
   const notificationsStatus = makeElement('p', 'impact-notifications-status', t('impact.notificationsLoading'));
   notificationsStatus.setAttribute('role', 'status');
   notificationsStatus.setAttribute('aria-live', 'polite');
+  notificationsStatus.tabIndex = -1;
   const notificationsList = makeElement('ul', 'impact-notifications-list');
   const emptyNotifications = makeElement('p', 'impact-empty-notifications', t('impact.notificationsEmpty'));
   emptyNotifications.hidden = true;
@@ -186,6 +187,7 @@ export function renderImpactPage(
   }
 
   function renderNotifications(): void {
+    const retryHadFocus = document.activeElement === refreshNotificationsButton;
     const activeElement = document.activeElement;
     const focusedButton = activeElement?.tagName === 'BUTTON'
       && notificationsList.contains(activeElement)
@@ -270,6 +272,7 @@ export function renderImpactPage(
         ?? notificationsList.querySelector<HTMLButtonElement>('.impact-notification-open-report');
       target?.focus();
     }
+    if (retryHadFocus && refreshNotificationsButton.hidden) notificationsStatus.focus();
   }
 
   function renderMetrics(data: Impact): void {

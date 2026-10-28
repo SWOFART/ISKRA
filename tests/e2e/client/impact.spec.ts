@@ -125,6 +125,7 @@ test('shows quiet localized resolution notifications once, marks them read and r
     readAt: null as string | null,
   }];
   let notificationReads = 0;
+  let failNotificationRequests = false;
   let impactBalance = 20;
   let impactReads = 0;
   const notificationLocales: string[] = [];
@@ -151,6 +152,15 @@ test('shows quiet localized resolution notifications once, marks them read and r
       return;
     }
     notificationReads += 1;
+    if (failNotificationRequests) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: {
+        code: 'UNAVAILABLE',
+        message: 'Notifications are temporarily unavailable.',
+        requestId: '11111111-1111-4111-8111-000000000033',
+        retryable: true,
+      } }) });
+      return;
+    }
     const locale = new URL(route.request().url()).searchParams.get('locale') ?? 'en';
     notificationLocales.push(locale);
     const items = notifications.map((item) => ({
@@ -193,6 +203,18 @@ test('shows quiet localized resolution notifications once, marks them read and r
   await markRead.click();
   await expect(existenceCard).toContainText('Read');
   await expect(existenceCard.getByRole('button', { name: 'Open report' })).toBeFocused();
+
+  failNotificationRequests = true;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const notificationStatus = page.locator('.impact-notifications-status');
+  await expect(notificationStatus).toHaveText('Notifications are temporarily unavailable.');
+  const refreshNotifications = page.getByRole('button', { name: 'Refresh notifications' });
+  await refreshNotifications.focus();
+  const readsBeforeRetry = notificationReads;
+  failNotificationRequests = false;
+  await refreshNotifications.click();
+  await expect.poll(() => notificationReads).toBe(readsBeforeRetry + 1);
+  await expect(notificationStatus).toBeFocused();
 
   notifications.unshift({
     id: resolutionId,
