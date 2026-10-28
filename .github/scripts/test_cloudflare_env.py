@@ -8,7 +8,10 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from cloudflare_env import deployment_summary, main, validate_config, validate_health, write_private_json
+from cloudflare_env import (
+    SMOKE_MAX_ATTEMPTS, deployment_summary, main, validate_config,
+    validate_health, write_private_json,
+)
 
 
 class CloudConfigurationTests(unittest.TestCase):
@@ -80,19 +83,65 @@ class CloudConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "projects must match"):
             validate_config(json.dumps(values), self.template, "staging", "application")
 
-    def test_deployment_url_is_only_published_after_release_health_matches(self):
+    def test_smoke_retries_stale_200_until_exact_release_matches(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "iskra-environment.json"
             config.write_text(self.valid())
             output = Path(directory) / "outputs"
+            output.touch()
             env = {"RUNNER_TEMP": directory, "GITHUB_OUTPUT": str(output), "GITHUB_SHA": "abc123"}
             with patch.dict(os.environ, env), patch.object(sys, "argv", ["cloudflare_env.py", "smoke", "staging", "application"]):
-                with patch("cloudflare_env.subprocess.check_output", return_value='{"ok":true,"release":"old"}'):
-                    with self.assertRaises(ValueError): main()
-                self.assertFalse(output.exists())
-                with patch("cloudflare_env.subprocess.check_output", return_value='{"ok":true,"release":"abc123"}'):
+                with patch("cloudflare_env.time.sleep") as sleep, patch(
+                    "cloudflare_env.subprocess.check_output",
+                    side_effect=[
+                        '{"ok":true,"release":"old"}',
+                        '{"ok":true,"release":"abc123"}',
+                    ],
+                ) as fetch:
                     main()
+                self.assertEqual(fetch.call_count, 2)
+                sleep.assert_called_once_with(3)
+                self.assertNotIn("--retry", fetch.call_args_list[0].args[0])
                 self.assertEqual(output.read_text(), "verified_url=https://app.example.test\n")
+
+    def test_permanently_stale_health_never_publishes_verified_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "iskra-environment.json"
+            config.write_text(self.valid())
+            output = Path(directory) / "outputs"
+            output.touch()
+            env = {"RUNNER_TEMP": directory, "GITHUB_OUTPUT": str(output), "GITHUB_SHA": "abc123"}
+            with patch.dict(os.environ, env), patch.object(sys, "argv", ["cloudflare_env.py", "smoke", "staging", "application"]):
+                with patch("cloudflare_env.time.sleep") as sleep, patch(
+                    "cloudflare_env.subprocess.check_output",
+                    return_value='{"ok":true,"release":"old"}',
+                ) as fetch:
+                    with self.assertRaisesRegex(ValueError, "bounded retry window"):
+                        main()
+            self.assertEqual(fetch.call_count, SMOKE_MAX_ATTEMPTS)
+            self.assertEqual(sleep.call_count, SMOKE_MAX_ATTEMPTS - 1)
+            self.assertEqual(output.read_text(), "")
+
+    def test_network_and_invalid_responses_are_retried_without_sleeping_in_unit_test(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "iskra-environment.json"
+            config.write_text(self.valid())
+            output = Path(directory) / "outputs"
+            output.touch()
+            env = {"RUNNER_TEMP": directory, "GITHUB_OUTPUT": str(output), "GITHUB_SHA": "abc123"}
+            responses = [
+                subprocess.CalledProcessError(7, ["curl"]),
+                "not-json",
+                '{"ok":true,"release":"abc123"}',
+            ]
+            with patch.dict(os.environ, env), patch.object(sys, "argv", ["cloudflare_env.py", "smoke", "staging", "application"]):
+                with patch("cloudflare_env.time.sleep") as sleep, patch(
+                    "cloudflare_env.subprocess.check_output", side_effect=responses,
+                ) as fetch:
+                    main()
+            self.assertEqual(fetch.call_count, 3)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertEqual(output.read_text(), "verified_url=https://app.example.test\n")
 
     def test_preparation_excludes_deployment_and_migration_keys_from_worker(self):
         values = json.loads(self.valid()) | {
