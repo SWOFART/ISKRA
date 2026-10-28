@@ -1,5 +1,64 @@
 import { expect, test } from '../fixtures';
 
+type AuthCameraState = { requests: number };
+const loginEmail = 'intent@example.test';
+const loginPassword = 'intent-test-password';
+
+async function enableCameraHarness(page: import('@playwright/test').Page): Promise<void> {
+  await page.addInitScript(() => {
+    const state: AuthCameraState = { requests: 0 };
+    Object.defineProperty(window, '__authCameraState', { configurable: true, value: state });
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        async getUserMedia() {
+          state.requests += 1;
+          const stream = new MediaStream();
+          Object.defineProperty(stream, 'getTracks', { value: () => [{ stop: () => undefined }] });
+          return stream;
+        },
+      },
+    });
+    HTMLVideoElement.prototype.play = () => Promise.resolve();
+  });
+}
+
+async function stubSuccessfulEmailLogin(page: import('@playwright/test').Page): Promise<string> {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const token = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({
+    sub: 'intent-fixture-user', user_id: 'intent-fixture-user', aud: 'iskra-browser-test',
+    iss: 'https://securetoken.google.com/iskra-browser-test',
+    iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600,
+    firebase: { sign_in_provider: 'password' },
+  })}.local-fixture-signature`;
+  await page.route('https://identitytoolkit.googleapis.com/**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(route.request().url().includes('accounts:lookup')
+      ? { users: [{ localId: 'intent-fixture-user', email: loginEmail, providerUserInfo: [] }] }
+      : { localId: 'intent-fixture-user', email: loginEmail, idToken: token,
+        refreshToken: 'intent-fixture-refresh', expiresIn: '3600' }),
+  }));
+  await page.route('**/api/me/bootstrap', (route) => {
+    expect(route.request().headers().authorization).toBe(`Bearer ${token}`);
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      user: { id: 'intent-fixture-user', nickname: 'Intent Tester', avatar: 'leaf' },
+      balance: 0,
+      balanceVersion: 0,
+    }) });
+  });
+  return token;
+}
+
+async function completeEmailSignIn(page: import('@playwright/test').Page): Promise<void> {
+  await page.getByLabel('Email', { exact: true }).fill(loginEmail);
+  await page.getByLabel('Password', { exact: true }).fill(loginPassword);
+  await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
+}
+
+async function cameraRequestCount(page: import('@playwright/test').Page): Promise<number> {
+  return page.evaluate(() => (window as unknown as { __authCameraState: AuthCameraState }).__authCameraState.requests);
+}
+
 test('email sign-in failure and cancellation keep guest browsing usable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route('https://identitytoolkit.googleapis.com/**', (route) => route.fulfill({
@@ -32,6 +91,41 @@ test('the German auth form fits mobile and can be reached with the keyboard', as
   await page.keyboard.press('Tab');
   await expect(page.getByLabel('Passwort', { exact: true })).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('successful Firebase bootstrap resumes the guest camera intent directly', async ({ page }) => {
+  await enableCameraHarness(page);
+  await stubSuccessfulEmailLogin(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start a litter report' }).click();
+  await completeEmailSignIn(page);
+
+  const capture = page.getByRole('dialog', { name: 'Capture report photos' });
+  await expect(capture).toBeVisible();
+  await expect(capture.locator('video')).toBeVisible();
+  await expect(page.locator('.map-notice')).not.toContainText('Camera reporting is not connected yet.');
+  expect(await cameraRequestCount(page)).toBe(1);
+});
+
+test('cancelled camera intent restores guest map and does not leak into a guarded Impact sign-in', async ({ page }) => {
+  await enableCameraHarness(page);
+  await stubSuccessfulEmailLogin(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start a litter report' }).click();
+  await page.getByRole('button', { name: 'Back to browsing' }).click();
+  await expect(page.getByRole('button', { name: 'Start a litter report' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Capture report photos' })).toHaveCount(0);
+  expect(await cameraRequestCount(page)).toBe(0);
+
+  await page.getByRole('tab', { name: 'My Impact', exact: true }).click();
+  await page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await completeEmailSignIn(page);
+  await expect(page.locator('.deferred-card')).toContainText(
+    'Your account is connected. The Impact view is still being connected to your activity.',
+  );
+  await expect(page.getByRole('tab', { name: 'My Impact', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('dialog', { name: 'Capture report photos' })).toHaveCount(0);
+  expect(await cameraRequestCount(page)).toBe(0);
 });
 
 test('provider success still reports unavailable account setup and allows a retry', async ({ page }) => {

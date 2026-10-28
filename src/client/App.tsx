@@ -266,8 +266,7 @@ export function App(
         authIntent = null;
         activateTab(intent === 'report' ? 'map' : selectedTab, false);
         if (intent === 'report') {
-          const notice = main.querySelector<HTMLElement>('.map-notice');
-          if (notice) { notice.textContent = t('map.cameraNotConnected'); notice.hidden = false; }
+          currentMapPage?.openCapture('report');
         }
       }, () => {
         accountUid = null;

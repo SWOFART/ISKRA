@@ -101,11 +101,13 @@ async function signIn(page: import('@playwright/test').Page): Promise<void> {
       }),
     });
   });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Start a litter report' }).click();
+  await page.goto('/impact');
+  await page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByLabel('Email', { exact: true }).fill(loginEmail);
   await page.getByLabel('Password', { exact: true }).fill(loginPassword);
   await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.locator('.deferred-card')).toContainText('Your account is connected.');
+  await page.getByRole('tab', { name: 'Map', exact: true }).click();
   await expect(page.locator('.report-button')).toBeVisible();
 }
 
