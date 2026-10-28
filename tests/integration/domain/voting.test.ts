@@ -703,6 +703,11 @@ describe('PostgreSQL report voting', () => {
           report: { status: 'VERIFIED', existenceYesCount: index + 4, version: index + 1 },
         });
       }
+      const prematureResolution = await sendVote(
+        app, 'vote-verified-observer', report.id, 'RESOLUTION', 'YES', crypto.randomUUID(), location(nowValue),
+      );
+      expect(prematureResolution.status).toBe(409);
+      expect(await prematureResolution.json()).toMatchObject({ error: { code: 'STAGE_CLOSED' } });
 
       const detailResponse = await app.request(`/api/reports/${report.id}`, {
         headers: { Authorization: 'Bearer vote-verified-observer' },
