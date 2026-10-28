@@ -66,6 +66,21 @@ describe('strict JSON boundaries', () => {
   it.each(['PURPLE', '', null, 3])('rejects bad route %j', (route) => {
     expect(c.RouteSchema.safeParse(route).success).toBe(false);
   });
+  it('allows only a nonblank final description and analysis ID for publication', () => {
+    const request = { analysisId: id, description: 'A factual report description.' };
+    expect(c.PublishRequestSchema.safeParse(request).success).toBe(true);
+    expect(c.PublishRequestSchema.safeParse({ ...request, description: '   ' }).success).toBe(false);
+    expect(c.PublishRequestSchema.safeParse({ ...request, route: 'GREEN' }).success).toBe(false);
+  });
+  it('keeps report analysis context strict and separate from its ordered photo IDs', () => {
+    const context = {
+      comment: '', measuredLocation: location, pin: { lat: 49.14, lng: 9.22 },
+      cityId: 'heilbronn', outputLocale: 'en',
+    };
+    expect(c.ReportAnalysisContextSchema.safeParse(context).success).toBe(true);
+    expect(c.ReportAnalysisContextSchema.safeParse({ ...context, route: 'GREEN' }).success).toBe(false);
+    expect(c.ReportAnalysisContextSchema.safeParse({ ...context, photoIds: [id] }).success).toBe(false);
+  });
   it.each(['latitude', 'balance', 'route', 'actor', 'userId', '__proto__'])('rejects authority/unknown field %s', (key) => {
     const body = JSON.parse(JSON.stringify({ ...fixtures.reportAnalysisRequest, [key]: 'injected' }));
     expect(c.ReportAnalysisRequestSchema.safeParse(body).success).toBe(false);

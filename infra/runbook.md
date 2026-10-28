@@ -7,13 +7,13 @@
 | Canonical repository | [SWOFART/ISKRA](https://github.com/SWOFART/ISKRA) |
 | Branches | `develop` for staging/testing; `main` for production |
 | Product specification | Root [plan.md](../plan.md) plus later confirmed policies in the [active OpenSpec change](../openspec/changes/build-iskra-hackathon-mvp/) |
-| Production hosting | Cloudflare Workers: React/Vite assets + Hono API |
+| Production hosting | Cloudflare Workers: Vite browser assets + Hono API; current shell is A's DOM implementation |
 | Google Cloud project | `iskra-512914` (project number `976498049675`) |
 | Environment/key source | Google Cloud Secret Manager; no GitHub settings variables or secrets |
 | Google authentication for CI | Workload Identity Federation, no service-account JSON key |
 | Development tunnel | `c0c32852-fe5d-4a65-af4c-058cdf786627`, user-provided; hostname/connector not verified |
 | Live infrastructure test | [iskra-develop-check health](https://iskra-develop-check.matvey-nesterenko.workers.dev/api/health), deployed initially using local Wrangler OAuth |
-| Product application | Root platform/auth foundation only; client/domain/media/AI/SQL integration pending, health reports `applicationReady: false` |
+| Product application | Client shell/Worker routing and P0 SQL schema are integrated; real auth/domain/media/AI/SQL runtime remains pending, health reports `applicationReady: false` |
 | Docker | Not required for Workers; no image build/registry/update pipeline |
 
 The final production hosting decision is Cloudflare Workers, independent of a developer computer. The existing tunnel is for development previews, not the production origin. Cloudflare hosts the application; GitHub stores code and runs CI, not the application API.
@@ -69,6 +69,24 @@ Each CI service account can read only its own configuration secret. It can neith
 
 When enabled, the job installs locked dependencies, builds, deploys, then verifies the exact Git release through `/api/health`. Staging uses `develop`; production requires a manual run from `main` with target `application`. The infrastructure test can never be the production target. Deployment jobs have only `contents: read` and `id-token: write`; actions are pinned and no secret values are passed between jobs or uploaded as artifacts.
 
+## Product staging deployment on `develop`
+
+The product Worker is `iskra-staging`. The staging environment now enables its own `workers.dev` route; production remains private to its future hostname configuration. The URL `https://iskra-develop-check.matvey-nesterenko.workers.dev` is a separate health-check Worker (`iskra-deployment-check`); keep it in `DEPLOYMENT_CHECK_URL`, not the product `APP_URL`.
+
+**ASSUMPTION for review:** based on that existing account subdomain and the configured Worker name, the product staging origin should be `https://iskra-staging.matvey-nesterenko.workers.dev`. This exact product URL is not live or verified yet. Confirm it after the first authorized product deploy; store the confirmed origin as `APP_URL` in `iskra-staging-env` in Google Secret Manager.
+
+The existing workflow already deploys the application from `develop`: on relevant pushes, `auto` selects the root application because `package.json` exists. A manual run must select branch `develop`, environment `staging`, target `application` (the form's default target is the infrastructure check). After a successful release-health check, the workflow run summary shows a direct link to the deployed origin, target and exact release SHA. No link is shown as live when deployment is disabled or its health check fails. The summary link appears on the Actions run attached to the merged commit; it does not turn this Worker into a fully accepted Green release.
+
+Activation sequence:
+
+1. In `iskra-staging-env`, configure `DEPLOY_ENABLED="true"`, `CLOUDFLARE_ACCOUNT_ID`, a least-privilege `CLOUDFLARE_API_TOKEN`, the confirmed product `APP_URL`, and `APP_ENV="staging"`. Keep the token only in Google Secret Manager. The workflow selects `APP_URL` for the application and `DEPLOYMENT_CHECK_URL` for the isolated test Worker, so manual test deployments do not overwrite the product origin.
+2. Add the exact staging origin to Firebase Authentication's authorized domains and to the MapTiler key's allowed origins. Confirm the Firebase redirect and map load on that origin.
+3. Add the application values listed in `.env.example` to the same Google configuration. The application deploy validator currently requires Gemini key/model, media-signing key, Firebase project ID and the Firebase/MapTiler browser keys.
+4. Configure and verify the product's private R2 and Hyperdrive/Cloud SQL bindings before claiming G1 or a functioning report flow. They are not present in this Worker configuration today.
+5. Run **Deploy to Cloudflare** from `develop` with environment `staging` and target `application`, then check the release link in the workflow summary and confirm `/api/health` reports the same SHA. Later relevant merges to `develop` repeat this staging deployment automatically.
+
+Until these Google-sourced values and runtime bindings are configured, merges to `develop` run CI and the Cloudflare workflow records a skipped deployment. The app's current health deliberately says `applicationReady: false`; neither a successful workflow nor a Workers URL alone passes M1/G1.
+
 ### Google → Cloudflare flow
 
 - **Deployment credential:** read `CLOUDFLARE_API_TOKEN` and account ID from the Google configuration, provide them only to the Wrangler deployment process. The token never becomes a Worker runtime secret or browser value.
@@ -78,7 +96,7 @@ When enabled, the job installs locked dependencies, builds, deploys, then verifi
 
 ## Test Wrangler deployment on develop
 
-The isolated Worker is `iskra-develop-check`, with no storage/database/AI bindings. It accepts GET `/api/health`, includes `ok`, `release`, `service: iskra-deployment-check`, and `applicationReady: false`; other paths return JSON 404 and mutation methods 405.
+The isolated Worker is `iskra-develop-check`, with no storage/database/AI bindings. It accepts GET `/api/health`, includes `ok`, `release`, `service: iskra-deployment-check`, and `applicationReady: false`; other paths return JSON 404 and mutation methods 405. The workflow uses `DEPLOYMENT_CHECK_URL` for this target and verifies the `service` identity, not just a matching release SHA.
 
 ```bash
 npm ci --prefix infra/deployment-check
@@ -93,10 +111,10 @@ The initial local deployment, three Worker tests, live health/release checks, JS
 
 Do not add a GitHub secret or settings variable to complete this checklist.
 
-- [ ] Add a new version of `iskra-staging-env` in **Google Cloud project `iskra-512914`**. For the infrastructure test, populate `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `APP_URL`, then set string `DEPLOY_ENABLED` to `true`. Keep it `false` while values are missing.
-- [ ] The test `APP_URL` is the verified Workers origin above, not the tunnel URL. Use an account-scoped Workers deployment token with minimum verified permissions; never a Global API Key. Create/rotate that token at Cloudflare and save its value directly in Google Secret Manager, not chat or GitHub.
+- [ ] Add a new version of `iskra-staging-env` in **Google Cloud project `iskra-512914`**. For the infrastructure test, populate `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `DEPLOYMENT_CHECK_URL`, then set string `DEPLOY_ENABLED` to `true`. Keep it `false` while values are missing.
+- [ ] `DEPLOYMENT_CHECK_URL` is the verified check Worker origin above, not the tunnel URL. Use an account-scoped Workers deployment token with minimum verified permissions; never a Global API Key. Create/rotate that token at Cloudflare and save its value directly in Google Secret Manager, not chat or GitHub.
 - [ ] Run **Deploy to Cloudflare** from `develop`, environment `staging`, target `deployment-check`; verify a matching Git SHA in live health.
-- [ ] For the product later: commit its code/lockfile/configuration and add all relevant `.env.example` values to Google's environment JSON. Configure separate named Workers, Hyperdrive/R2 bindings, Firebase domains, MapTiler origins and release health. Its URL replaces the test URL in Google's staging config.
+- [ ] For the product: set `APP_URL` to the confirmed product Worker origin, while retaining `DEPLOYMENT_CHECK_URL` for the optional isolated test. Add the remaining relevant `.env.example` values to Google's environment JSON. Configure separate named Workers, Hyperdrive/R2 bindings, Firebase domains, MapTiler origins and release health.
 - [ ] Google is also the source for any origin DB/R2 credentials; provision their operational copies in Hyperdrive or storage integrations as appropriate. Do not expose origin credentials to the browser.
 - [ ] Add real-PostgreSQL integration checks and a reviewed migration/backup gate before data-changing releases; current CI has no database to migrate.
 - [ ] Populate the production Google configuration and final custom hostname only after product readiness. Production must have `APP_ENV=production`, `DEMO_DATA=false`, target `application` and the `main` branch.
@@ -117,9 +135,9 @@ Branch: `codex/person-c-delivery`, based on `develop` at `f2287d1`. B remains th
 | Task | Evidence / remaining requirement |
 |---|---|
 | 1.4, partial | Read-only Firebase and Google configuration probes below; current Firebase/Workers documentation reviewed. Spending owner/cap/teardown, model/quota, map origins, isolated product resources and deployment credentials remain unverified/unconfigured. |
-| 2.3, partial | Root pinned package/lockfile, strict TypeScript, Vitest, Hono Worker, health/release and API JSON 404. Worker-only bundle; Vite/SPA/direct client navigation and B/C router integration require A's entry and B's frozen contracts/facade. Client paths return safe JSON 503 rather than fabricated UI. |
+| 2.3, local integration prepared | Root pinned package/lockfile, Vite client build, strict TS/TSX, Hono Worker with B's router facade, health/release, ASSETS/SPA fallback and API JSON 404. Browser checks cover direct client links; review/merge and live staging remain separate. |
 | 2.7, local evidence | RS256 signature verification using `jose`/Web Crypto, issuer/audience/subject/time checks, UID-only context and bounded key refresh tests. Real Firebase token on deployed Workers and real sign-in remain unverified. |
-| 2.9, partial | Safe JSON error envelope, server-generated request IDs, actual-byte body cap, mutation-origin guard, no-store/no-referrer and API security headers. B's shared validators/error mapping and live public/private route tests are pending. |
+| 2.9, middleware implemented | Safe JSON error envelope using B's shared validators/error mapping, server-generated request IDs, actual-byte body cap, mutation-origin guard, no-store/no-referrer and API security headers. Live domain/media privacy acceptance remains separate. |
 | 2.4 and 2.10 | The later independent harness section below supplies Playwright/real-PG infrastructure for 2.4. Product deployment (2.10), domain tests and client integration remain pending. |
 
 ### Interfaces supplied to A/B
@@ -231,6 +249,31 @@ Rechecked on 2026-10-27 without provisioning resources, enabling billing/APIs, c
 | Gemini / MapTiler | No populated model/key/map values in the environment records; model availability, quota and map-origin restrictions are unverified. |
 
 Current [Gemini rate-limit documentation](https://ai.google.dev/gemini-api/docs/rate-limits) requires checking the actual project's active limits rather than inferring capacity from a key or a generic advertised tier. No model/version/quota is approved by these probes. Issue #8 remains open because the account/budget/domain/model requirements are incomplete. These blockers affect live provisioning and G1, not disposable local tests.
+
+## Client/Worker integration — task 2.3 / issue #12
+
+Person C's integration branch includes A's exact client commit `399bbab4ea1a67ef1a2ed4a6b739d9b41c748225` from PR #75, preserving its author and client files. Review the combined client/integration candidate: it includes both sides of the task 2.1/2.3 handoff without requiring either incomplete foundation to merge first. If #75 merges separately, this PR's diff naturally narrows; any changed review base needs a fresh Gate A. C explicitly accepts and owns A's `jsx: preserve` configuration line, expands TS coverage to all client TSX files and adds Vite's CSS/import types. This resolves configuration coordination; it does not replace independent review or change #75's recorded FAIL verdict.
+
+The current shell uses DOM APIs rather than React. This integration reuses A's supplied entry unchanged, adds no UI framework and makes no new framework decision for future client work. It serves Map/My Impact/Rewards placeholders, not connected map, sign-in or report detail. Direct `/reports/:id` currently loads the shell with its existing Map fallback and retains the URL; report details remain A/B's later tasks.
+
+Commands:
+
+```bash
+npm ci
+npm run typecheck
+npm run test:unit
+npm run build
+npm run test:e2e
+npm run dev -- --local
+```
+
+`npm run build:client` uses pinned Vite to produce `dist/client`. `npm run build` then dry-runs Wrangler to `dist/worker`, outside the public asset directory. `npm run dev` rebuilds the client before starting the existing local Wrangler runtime; restart after client edits. There is no second dev server or HMR in this slice. Standalone Vite plus Wrangler Static Assets reuses the existing deploy command without adding the Cloudflare Vite plugin. Vite disables automatic `.env` loading (`envDir: false`); supply only approved Google-sourced `VITE_*` process values for the browser build. Server secrets are never explicitly substituted into browser code.
+
+Wrangler explicitly configures the `ASSETS` binding and Worker-first routing for local/staging/production. Native asset misses return 404 (`not_found_handling: none`). The Worker retries a missing extensionless client route against the root shell; `/assets` and `/assets/*`, plus last path segments containing a dot, retain their native file response. This keeps missing JS/CSS and icons as real 404s while `/impact`, `/rewards` and `/reports/:id` still load the SPA. Dotted client paths require a deliberate routing-policy update. Every request passes through the Worker so `/api` and `/api/*` can never fall into HTML, even for document navigation. API CSP remains `default-src 'none'`. Public assets use same-origin script/style CSP without inline/eval permissions; future map tile/provider connections must update that policy deliberately. Asset responses retain their status/content type and the Worker security headers. Client POST requests are JSON 404, not a successful SPA mutation. Missing ASSETS fails closed with JSON 503. Health continues to report `applicationReady: false`.
+
+Issue #79 regression: before this change, GET/HEAD `/assets/missing.js` returned 200 HTML in real local workerd. The new real-asset Playwright check covers missing JS/CSS, an extensionless asset, and an icon with `Accept: text/html`, empty HEAD bodies, and successful generated JS/CSS with correct content types/security headers. All eight Chromium checks and 199 unit tests pass locally; this is not a cloud deployment or real Green acceptance.
+
+Local acceptance: 199 unit tests and seven Chromium checks pass, including rendered CSS/JS, direct `/`, `/impact`, `/rewards`, `/reports/123`, sign-in placeholders, mobile/keyboard/history navigation without camera/GPS requests, health and API errors. These supersede the earlier Worker-only status descriptions for this branch. Named-environment dry-runs verify asset bindings/configuration without a cloud write. No product deployment, physical-device acceptance, real sign-in, SQL, R2 or Gemini acceptance is implied. Staging activation remains #19/D10/D11 and production remains manual from main through the existing Google-sourced pipeline. Revert the integration commit and deploy a reviewed compatible release to roll back; no migration or data change is included.
 
 ## Reviewed P0 PostgreSQL schema — issue 2.5
 
