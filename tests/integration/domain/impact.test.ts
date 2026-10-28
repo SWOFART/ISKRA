@@ -28,7 +28,7 @@ async function installSchema(pool: Pool) {
 
 async function createUser(pool: Pool, id: string, balance = 0, version = 0) {
   await pool.query(
-    'INSERT INTO users (id, nickname, rp_balance, version) VALUES ($1, $1, $2, $3)',
+    'INSERT INTO users (id, nickname, rp_balance, version) VALUES ($1::text, $1::varchar, $2::int, $3::int)',
     [id, balance, version],
   );
 }
@@ -131,7 +131,7 @@ function createApp(pool: Pool) {
 function getImpact(app: ReturnType<typeof createApp>, url = '/api/me/impact', token = 'impact-resident') {
   return app.request(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
+  }, { FIREBASE_PROJECT_ID: 'impact-test-project' });
 }
 
 describe('PostgreSQL resident Impact projection', () => {
