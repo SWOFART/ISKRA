@@ -31,7 +31,7 @@ export function createApp(domainDependencies: DomainRouteDependencies = {}) {
       const projectId = c.env.FIREBASE_PROJECT_ID ?? '';
       const authFrame = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)
         ? `https://${projectId}.firebaseapp.com` : "'none'";
-      c.header('Content-Security-Policy', `default-src 'self'; script-src 'self' https://apis.google.com; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; frame-src ${authFrame}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`);
+      c.header('Content-Security-Policy', `default-src 'self'; script-src 'self' https://apis.google.com; style-src 'self'; style-src-elem 'self'; img-src 'self' data: blob: https://api.maptiler.com; font-src 'self' data: https://api.maptiler.com; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://api.maptiler.com; worker-src 'self'; frame-src ${authFrame}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`);
       let response = await c.env.ASSETS.fetch(c.req.raw);
       const path = c.req.path;
       const fileRequest = path === '/assets' || path.startsWith('/assets/')
