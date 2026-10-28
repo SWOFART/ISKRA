@@ -1,13 +1,25 @@
 import { encode } from 'jpeg-js';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { validateJpeg } from '../../../src/worker/services/media';
+import { prepareJpeg, validateJpeg } from '../../../src/worker/services/media';
 
 function photo(width = 2, height = 2) {
   return new Uint8Array(encode({ width, height, data: new Uint8Array(width * height * 4).fill(255) }, 80).data);
 }
 
 describe('standalone bounded JPEG validation', () => {
+  it('re-encodes pixels without carrying source EXIF or comments', () => {
+    const original = photo(2, 3);
+    const metadata = Buffer.from('Exif\0\0private GPS and camera thumbnail');
+    const comment = Buffer.from('private source comment');
+    const source = new Uint8Array([255, 216,
+      255, 225, 0, metadata.length + 2, ...metadata,
+      255, 254, 0, comment.length + 2, ...comment, ...original.slice(2)]);
+    const encoded = prepareJpeg(source, 'image/jpeg');
+    expect(validateJpeg(encoded, 'image/jpeg')).toEqual({ width: 2, height: 3 });
+    expect(Buffer.from(encoded).includes(metadata)).toBe(false);
+    expect(Buffer.from(encoded).includes(comment)).toBe(false);
+  });
   it('fully decodes an actual JPEG and returns dimensions', () => {
     expect(validateJpeg(photo(2, 3), 'image/jpeg')).toEqual({ width: 2, height: 3 });
   });

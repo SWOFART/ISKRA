@@ -1,9 +1,60 @@
 import { API_ERROR_POLICY, ReportAnalysisContextSchema, ReportAssessmentSchema,
-  type ReportAnalysisRequestSchema } from '../../shared/contracts';
+  type ReportAnalysisRequestSchema, type UploadRequestSchema } from '../../shared/contracts';
 import type { Infer } from '../../shared/schema';
 import { reportPinAdmission } from '../../shared/location';
 import { executeIdempotently, IdempotencyConflictError, type CheckedOutClient, type TransactionDatabase } from './client';
 import { ApiError } from '../middleware/errors';
+
+/** Read admission only: a ticket does not claim a cleanup or create usable evidence. */
+export async function admitUpload(
+  database: TransactionDatabase,
+  uid: string,
+  request: Infer<typeof UploadRequestSchema>,
+  photoId?: string,
+): Promise<void> {
+  await database.withTransaction(async (client) => {
+    const user = await client.query('SELECT id FROM users WHERE id = $1', [uid]);
+    if (!user.rows.length) {
+      throw new ApiError(403, 'NOT_ELIGIBLE', 'Complete account setup before uploading photos.');
+    }
+    if (request.purpose === 'CLEANUP') {
+      const report = await client.query<{ route: string; status: string }>(
+        'SELECT route, status FROM reports WHERE id = $1', [request.reportId],
+      );
+      const target = report.rows[0];
+      if (!target) throw new ApiError(404, 'NOT_FOUND', 'Report not found.');
+      if (target.route !== 'GREEN' || target.status !== 'VERIFIED') {
+        throw new ApiError(403, 'NOT_ELIGIBLE', 'This report cannot accept cleanup evidence.');
+      }
+    }
+    if (photoId) {
+      const photo = await client.query('SELECT id FROM report_photos WHERE id = $1', [photoId]);
+      if (photo.rows.length) {
+        throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', 'This photo ID has already been used.');
+      }
+    }
+  });
+}
+
+/** Storage first: a rolled-back SQL insert leaves an object that cannot be used as evidence. */
+export async function finalizeReportPhoto(database: TransactionDatabase, photo: {
+  uid: string; photoId: string; objectKey: string; byteSize: number; sha256: string;
+  ordinal: number; expiresAt: string;
+}) {
+  await database.withTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO report_photos (id, owner_user_id, purpose, state, object_key, ordinal,
+         mime_type, byte_size, sha256, upload_expires_at)
+       SELECT $1::uuid, $2, 'REPORT', 'UPLOADED', $3, $4, 'image/jpeg', $5, $6, $7::timestamptz
+       WHERE clock_timestamp() < $7::timestamptz
+       ON CONFLICT (id) DO NOTHING RETURNING id`,
+      [photo.photoId, photo.uid, photo.objectKey, photo.ordinal - 1, photo.byteSize, photo.sha256, photo.expiresAt],
+    );
+    if (!result.rows.length) {
+      throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', 'This photo ID has already been used.');
+    }
+  });
+}
 
 export interface StoredPhoto extends Record<string, unknown> {
   id: string;
@@ -57,7 +108,7 @@ type ReportInput = Infer<typeof ReportAnalysisRequestSchema>;
 export interface AnalysisPhoto extends Record<string, unknown> {
   id: string; owner_user_id: string; purpose: string; state: string;
   report_id: string | null; cleanup_id: string | null; ordinal: number;
-  object_key: string; byte_size: number; sha256: string; upload_active: boolean;
+  object_key: string; byte_size: number; sha256: string; retained: boolean;
 }
 interface AnalysisAttempt extends Record<string, unknown> {
   id: string; status: string; result: unknown; expires_at: Date | string | null;
@@ -72,7 +123,7 @@ async function digest(value: unknown) {
 async function reportInputPhotos(client: CheckedOutClient, uid: string, ids: string[], lock = false) {
   const result = await client.query<AnalysisPhoto>(
     `SELECT id, owner_user_id, purpose, state, report_id, cleanup_id, ordinal, object_key, byte_size, sha256,
-       upload_expires_at > clock_timestamp() AS upload_active
+       upload_expires_at > clock_timestamp() - interval '24 hours' AS retained
      FROM report_photos WHERE id = ANY($1::uuid[]) ORDER BY id ${lock ? 'FOR SHARE' : ''}`, [ids],
   );
   const photos = ids.map((id) => result.rows.find((row) => row.id === id));
@@ -118,7 +169,8 @@ export async function beginReportAnalysis(
       if (!shared) {
         // Lock lease before photos, matching publication's lock order.
         const lockedPhotos = await reportInputPhotos(client, uid, input.photoIds, true);
-        if (lockedPhotos.some((photo) => !photo.upload_active)) {
+        // New work uses the existing orphan-retention window, not the expired PUT capability.
+        if (lockedPhotos.some((photo) => !photo.retained)) {
           throw new ApiError(410, 'EXPIRED', 'One or more report photos have expired.');
         }
         const count = await client.query<{ count: number }>(

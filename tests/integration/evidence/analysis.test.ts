@@ -71,6 +71,7 @@ describe('SQL report-analysis attempts and leases', () => {
       );
       expect(lifetime.rows[0].matching).toBe(true);
       expect(Number(lifetime.rows[0].seconds)).toBeGreaterThan(1_790);
+      await pool.query("UPDATE report_photos SET upload_expires_at = clock_timestamp() - interval '6 minutes'");
       const publisher = new PostgresReportPublicationService(database,
         createReportMediaResolver('https://iskra.test', 'test-only-signing-key-at-least-32-bytes'));
       const result = await publisher.publish('resident', crypto.randomUUID(), {
@@ -182,7 +183,7 @@ describe('SQL report-analysis attempts and leases', () => {
       expect((await pool.query('SELECT count(*)::int AS n FROM ai_analyses')).rows[0].n).toBe(5);
     }));
 
-  it('rejects foreign, incorrectly ordered, expired, moved-pin and stale evidence before starting work', () =>
+  it('rejects foreign, incorrectly ordered, beyond-retention and moved-pin evidence before starting work', () =>
     withTestDatabase(async (pool) => {
       const { database, input } = await prepare(pool, 2);
       await expect(beginReportAnalysis(database, 'other', crypto.randomUUID(), input, model)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -190,9 +191,32 @@ describe('SQL report-analysis attempts and leases', () => {
         .rejects.toMatchObject({ code: 'FORBIDDEN' });
       await expect(beginReportAnalysis(database, 'resident', crypto.randomUUID(), { ...input, pin: { lat: 49.15, lng: 9.22 } }, model))
         .rejects.toMatchObject({ code: 'PIN_TOO_FAR' });
-      await pool.query("UPDATE report_photos SET upload_expires_at = clock_timestamp() - interval '1 second'");
+      await pool.query("UPDATE report_photos SET upload_expires_at = clock_timestamp() - interval '25 hours'");
       await expect(beginReportAnalysis(database, 'resident', crypto.randomUUID(), input, model)).rejects.toMatchObject({ code: 'EXPIRED' });
       expect((await pool.query('SELECT count(*)::int AS n FROM ai_analyses')).rows[0].n).toBe(0);
+    }));
+
+  it('retries retained photos after natural analysis expiry with a fresh fix while old keys stay expired', () =>
+    withTestDatabase(async (pool) => {
+      const { database, input } = await prepare(pool);
+      const key = crypto.randomUUID();
+      const old = await beginReportAnalysis(database, 'resident', key, input, model);
+      expect(await finishReportAnalysis(database, 'resident', old.analysisId, assessment)).toBe(true);
+      await pool.query("UPDATE ai_analyses SET created_at = now() - interval '31 minutes', expires_at = now() - interval '1 second'");
+      await pool.query("UPDATE analysis_leases SET lease_until = now() - interval '1 second'");
+      await pool.query("UPDATE report_photos SET upload_expires_at = now() - interval '31 minutes'");
+      const replay = await beginReportAnalysis(database, 'resident', key, input, model);
+      expect(replay).toMatchObject({ analysisId: old.analysisId, started: false });
+      await expect(readReportAnalysis(database, 'resident', old.analysisId, crypto.randomUUID()))
+        .rejects.toMatchObject({ code: 'EXPIRED' });
+      const next = await beginReportAnalysis(database, 'resident', crypto.randomUUID(), {
+        ...input, measuredLocation: { ...input.measuredLocation, observedAt: new Date().toISOString() },
+      }, model);
+      expect(next.started).toBe(true);
+      expect(next.analysisId).not.toBe(old.analysisId);
+      expect(await finishReportAnalysis(database, 'resident', old.analysisId, assessment)).toBe(false);
+      expect((await pool.query('SELECT state FROM report_photos')).rows[0].state).toBe('UPLOADED');
+      expect((await pool.query('SELECT count(*)::int AS n FROM reward_ledger')).rows[0].n).toBe(0);
     }));
 
   it('does not let a crashed RUNNING attempt pin expired unattached photos forever', () =>

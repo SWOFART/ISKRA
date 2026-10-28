@@ -50,7 +50,6 @@ interface PhotoRow extends Record<string, unknown> {
   report_id: string | null;
   cleanup_id: string | null;
   ordinal: number;
-  upload_active: boolean;
 }
 
 interface BalanceRow extends Record<string, unknown> {
@@ -187,8 +186,7 @@ export class PostgresReportPublicationService {
           }
 
           const photoRows = await client.query<PhotoRow>(
-            `SELECT id, owner_user_id, purpose, state, report_id, cleanup_id, ordinal,
-               upload_expires_at > clock_timestamp() AS upload_active
+            `SELECT id, owner_user_id, purpose, state, report_id, cleanup_id, ordinal
              FROM report_photos
              WHERE id = ANY($1::uuid[])
              ORDER BY id
@@ -205,9 +203,7 @@ export class PostgresReportPublicationService {
             || photo.report_id !== null
             || photo.cleanup_id !== null
             || photo.ordinal !== index)) analysisConsumed();
-          if (orderedPhotos.some((photo) => !photo!.upload_active)) {
-            throw new ApiError(410, 'EXPIRED', 'One or more report photos have expired.', true);
-          }
+          // A live bound analysis authorizes consumption; PUT expiry only authorizes upload.
 
           const reportInsert = await client.query<{ id: string }>(
             `INSERT INTO reports (
@@ -236,7 +232,6 @@ export class PostgresReportPublicationService {
              SET state = 'ATTACHED', report_id = $2::uuid, updated_at = clock_timestamp()
              WHERE id = ANY($1::uuid[]) AND owner_user_id = $3::text AND purpose = 'REPORT'
                AND state = 'UPLOADED' AND report_id IS NULL AND cleanup_id IS NULL
-               AND upload_expires_at > clock_timestamp()
              RETURNING id`,
             [photoIds.data, reportId, actorId],
           );

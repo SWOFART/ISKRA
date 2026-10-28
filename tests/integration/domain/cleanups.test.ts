@@ -197,13 +197,15 @@ function sendSupportVote(app: Hono<WorkerEnv>, actor: string, reportId: string, 
 }
 
 describe('PostgreSQL cleanup submission', () => {
-  it('accepts the reporter as cleaner once, attaches after photos, and awards no early RP', () =>
+  it('accepts retained after photos beyond PUT expiry once and awards no early RP', () =>
     withTestDatabase(async (pool) => {
       await installSchema(pool);
       const reporter = 'cleanup-self-reporter';
       await createUser(pool, reporter);
       const report = await createReport(pool, reporter, { beforePhotoCount: 2 });
       const candidate = await createCandidate(pool, report, { owner: reporter, photoCount: 2 });
+      await pool.query("UPDATE report_photos SET upload_expires_at = now() - interval '1 minute' WHERE id = ANY($1::uuid[])",
+        [candidate.photoIds]);
       const app = createApp(pool, () => Date.now());
       const preSubmit = await pool.query<{ count: number }>(
         'SELECT count(*)::int AS count FROM cleanup_submissions WHERE report_id = $1::uuid', [report.id],

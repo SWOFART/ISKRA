@@ -3,9 +3,9 @@ import type { WorkerEnv } from './context';
 import { ApiError } from './errors';
 import { POLICY } from '../../shared/contracts';
 
-export const boundedBody = createMiddleware<WorkerEnv>(async (c, next) => {
-  const reader = c.req.raw.body?.getReader();
-  if (!reader) return next();
+export async function readBoundedBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = request.body?.getReader();
+  if (!reader) return new Uint8Array();
   const chunks: Uint8Array[] = [];
   let length = 0;
   try {
@@ -14,7 +14,7 @@ export const boundedBody = createMiddleware<WorkerEnv>(async (c, next) => {
       if (done) break;
       length += value.byteLength;
       if (length > POLICY.maxPhotoBytes) {
-        if (c.req.header('Content-Type')?.split(';')[0].trim().toLowerCase() === 'image/jpeg') {
+        if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'image/jpeg') {
           throw new ApiError(413, 'PHOTO_TOO_LARGE', 'Photo is too large.');
         }
         throw new ApiError(400, 'INVALID_INPUT', 'Request body is too large.');
@@ -22,7 +22,7 @@ export const boundedBody = createMiddleware<WorkerEnv>(async (c, next) => {
       chunks.push(value);
     }
   } finally {
-    await reader.cancel();
+    void reader.cancel().catch(() => {});
   }
   const bytes = new Uint8Array(length);
   let offset = 0;
@@ -30,7 +30,14 @@ export const boundedBody = createMiddleware<WorkerEnv>(async (c, next) => {
     bytes.set(chunk, offset);
     offset += chunk.length;
   }
-  // Count actual bytes even if a caller supplies a smaller Content-Length.
+  return bytes;
+}
+
+export const boundedBody = createMiddleware<WorkerEnv>(async (c, next) => {
+  // Uploads read through the same byte limit after authentication and ticket admission.
+  if (c.req.method === 'PUT' && /^\/api\/uploads\/[^/]+\/content$/.test(c.req.path)) return next();
+  if (!c.req.raw.body) return next();
+  const bytes = await readBoundedBody(c.req.raw);
   c.req.raw = new Request(c.req.raw, { body: bytes });
   await next();
 });

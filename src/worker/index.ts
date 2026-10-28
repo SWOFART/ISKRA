@@ -5,6 +5,7 @@ import { ApiError, handleError } from './middleware/errors';
 import { apiSecurity } from './middleware/security';
 import { createHealthRoutes } from './routes/health';
 import { createPhotoRoutes } from './routes/photos';
+import { createUploadRoutes } from './routes/uploads';
 import { createAnalysisRoutes } from './routes/analysis';
 import { createReportMediaResolver } from './services/media';
 import { removeExpiredPhotos } from './db/evidence-store';
@@ -19,6 +20,7 @@ export function createApp(domainDependencies: DomainRouteDependencies = {}) {
   app.route('/api', createHealthRoutes());
   app.route('/api', createDomainRoutes(domainDependencies));
   app.route('/api', createPhotoRoutes(domainDependencies));
+  app.route('/api', createUploadRoutes(domainDependencies));
   app.route('/api', createAnalysisRoutes(domainDependencies));
   app.notFound(async (c) => {
     if (c.req.path === '/api' || c.req.path.startsWith('/api/')) {
