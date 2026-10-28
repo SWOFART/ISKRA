@@ -630,11 +630,13 @@ function readTarget(rawUrl: string | undefined) {
   };
 }
 
-function createWranglerObjectStore(bucket: string): DemoObjectStore {
+export function createWranglerObjectStore(
+  bucket: string,
+  localPersistPath = fileURLToPath(new URL('../.wrangler/state', import.meta.url)),
+): DemoObjectStore {
   assertDemoResetBucket(bucket);
   const wranglerCli = fileURLToPath(new URL('../node_modules/wrangler/bin/wrangler.js', import.meta.url));
   const repoRoot = fileURLToPath(new URL('../', import.meta.url));
-  const localPersistPath = fileURLToPath(new URL('../.wrangler/state', import.meta.url));
   return {
     async deleteObjectKeys(keys) {
       assertDemoObjectKeys(keys);
