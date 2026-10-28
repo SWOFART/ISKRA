@@ -31,6 +31,7 @@ export interface MapPageView {
   element: HTMLElement;
   state: MapPageState;
   mount(): void;
+  openReport(report: ReportSummary): void;
   openCapture(stage: 'report'): void;
   openCapture(stage: 'cleanup', reportPin: Point): void;
   getLocationBinding(): AnalysisLocationBinding | null;
@@ -313,6 +314,7 @@ export function renderMapPage(
   appendElements(page, mapArea, listPanel);
 
   let reports: ReportSummary[] = [];
+  let externallyOpenedReport: ReportSummary | null = null;
   let detailLoadGeneration = 0;
   const reportSheet = renderReportSheet({
     t,
@@ -322,6 +324,10 @@ export function renderMapPage(
       detailLoadGeneration += 1;
       selectedReportId = null;
       pageState.selectedReportId = null;
+      if (externallyOpenedReport?.id === reportId) {
+        reports = reports.filter(({ id }) => id !== reportId);
+        externallyOpenedReport = null;
+      }
       renderReports();
       reportList.querySelector<HTMLButtonElement>(`.report-list-item[data-report-id="${reportId}"]`)?.focus();
     },
@@ -502,6 +508,7 @@ export function renderMapPage(
 
   let mapInstance: MapLibreMap | null = null;
   let mapReady = false;
+  let pendingMapFit: readonly ReportSummary[] | undefined;
   let tileFailureSeen = false;
   let resizeObserver: ResizeObserver | undefined;
   let mapGeneration = 0;
@@ -543,7 +550,12 @@ export function renderMapPage(
   }
 
   function fitMapToReports(targetReports: readonly ReportSummary[]): void {
-    if (!mapInstance || !mapReady || targetReports.length === 0) return;
+    if (targetReports.length === 0) return;
+    if (!mapInstance || !mapReady) {
+      pendingMapFit = targetReports;
+      return;
+    }
+    pendingMapFit = undefined;
     const bounds = viewportForReports(targetReports, cityViewport(clientDesign.map.center));
     mapInstance.fitBounds([[bounds.west, bounds.south], [bounds.east, bounds.north]], {
       padding: 72,
@@ -583,8 +595,8 @@ export function renderMapPage(
   }
 
   function renderReports(): void {
-    const visibleReports = reports.filter((report) => selectedRoutes.has(report.route)
-      && (includeResolved || report.status !== 'RESOLVED'));
+    const visibleReports = reports.filter((report) => report.id === selectedReportId
+      || (selectedRoutes.has(report.route) && (includeResolved || report.status !== 'RESOLVED')));
     const mapWidth = mapViewport.clientWidth || 1000;
     const mapHeight = mapViewport.clientHeight || 700;
     const clusters = mapInstance && mapReady
@@ -754,6 +766,10 @@ export function renderMapPage(
       }
 
       if (generation !== loadGeneration) return;
+      if (externallyOpenedReport?.id === selectedReportId) {
+        if (nextReports.has(externallyOpenedReport.id)) externallyOpenedReport = null;
+        else nextReports.set(externallyOpenedReport.id, externallyOpenedReport);
+      }
       reports = [...nextReports.values()];
       if (!reports.some(({ id }) => id === selectedReportId)) {
         selectedReportId = null;
@@ -869,6 +885,7 @@ export function renderMapPage(
           tileStatus.setAttribute('aria-busy', 'false');
           retryTilesButton.disabled = false;
         }
+        if (pendingMapFit) fitMapToReports(pendingMapFit);
         renderReports();
       });
       instance.on('moveend', () => {
@@ -920,6 +937,13 @@ export function renderMapPage(
     element: page,
     state: pageState,
     mount: () => { void initializeMap(); },
+    openReport: (report) => {
+      if (!reports.some(({ id }) => id === report.id)) {
+        externallyOpenedReport = report;
+        reports = [...reports, report];
+      }
+      selectReport(report, true);
+    },
     openCapture: ((stage: CaptureStage, target?: Point) => {
       if (stage === 'cleanup' && !target) throw new TypeError('Cleanup capture requires the report pin.');
       captureTarget = target ? { lat: target.lat, lng: target.lng } : undefined;

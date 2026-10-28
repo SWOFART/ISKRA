@@ -2,6 +2,7 @@ import { clientDesign, type SupportedLocale } from './designTokens';
 import { createClientApi } from './api';
 import type { FirebaseSession } from './auth';
 import { renderAuthPanel } from './auth-panel';
+import { renderImpactPage, type ImpactPageView } from './ImpactPage';
 import {
   errorMessageKey,
   localeFromBrowserLanguages,
@@ -132,6 +133,8 @@ export function App(
   };
   let tabs = new Map<TabId, HTMLButtonElement>();
   let currentMapPage: MapPageView | undefined;
+  let currentImpactPage: ImpactPageView | undefined;
+  let impactScrollTop = 0;
   let mapPageState: MapPageState | undefined;
 
   function createTab(tabId: TabId): HTMLButtonElement {
@@ -237,6 +240,11 @@ export function App(
     authIntent = null;
   }
   function activateTab(tabId: TabId, updateHistory: boolean): void {
+    if (currentImpactPage) {
+      impactScrollTop = currentImpactPage.scrollTop;
+      currentImpactPage.dispose();
+      currentImpactPage = undefined;
+    }
     currentMapPage?.dispose();
     currentMapPage = undefined;
     authPanel?.dispose();
@@ -294,15 +302,24 @@ export function App(
       mapPageState = currentMapPage.state;
       appendElements(panel, currentMapPage.element);
     } else if (selectedTab === 'impact') {
-      appendElements(panel,
-        renderDeferredPanel(
-          t('deferred.impact.heading'),
-          t(session?.uid && session.uid === accountUid ? 'auth.impactPending' : 'deferred.impact.message'),
-          session?.uid && session.uid === accountUid ? undefined : t('deferred.signIn'),
-          t('deferred.signInPending'),
-          session ? () => openSignIn('impact') : undefined,
-        ),
-      );
+      if (session?.uid && session.uid === accountUid) {
+        currentImpactPage = renderImpactPage(api, t, locale, (report) => {
+          impactScrollTop = currentImpactPage?.scrollTop ?? impactScrollTop;
+          activateTab('map', true);
+          currentMapPage?.openReport(report);
+        }, impactScrollTop);
+        panel.appendChild(currentImpactPage.element);
+      } else {
+        appendElements(panel,
+          renderDeferredPanel(
+            t('deferred.impact.heading'),
+            t('deferred.impact.message'),
+            t('deferred.signIn'),
+            t('deferred.signInPending'),
+            session ? () => openSignIn('impact') : undefined,
+          ),
+        );
+      }
     } else {
       appendElements(panel,
         renderDeferredPanel(
