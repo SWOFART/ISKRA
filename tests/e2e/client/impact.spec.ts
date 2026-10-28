@@ -249,6 +249,7 @@ test('shows quiet localized resolution notifications once, marks them read and r
   expect(notificationLocales).toContain('en');
   expect(notificationLocales).toContain('de');
   await toast.getByRole('button', { name: 'Benachrichtigung schließen' }).click();
+  await expect(page.locator('.bottom-nav [role="tab"][aria-selected="true"]')).toBeFocused();
   const callsBeforeReplay = notificationReads;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect.poll(() => notificationReads).toBe(callsBeforeReplay + 1);

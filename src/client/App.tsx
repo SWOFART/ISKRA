@@ -307,8 +307,10 @@ export function App(
   }
 
   function hideNotificationToast(): void {
+    const restoreFocus = notificationToast.contains(document.activeElement);
     toastNotification = null;
     notificationToast.hidden = true;
+    if (restoreFocus) tabs.get(selectedTab)?.focus();
   }
 
   function renderNotificationToast(): void {
