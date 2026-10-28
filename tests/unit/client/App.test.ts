@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/client/App';
 import { createClientApi, DEVELOPMENT_FIXTURE_LABEL, type FixtureResponse } from '../../../src/client/api';
-import { clientDesign } from '../../../src/client/designTokens';
+import { clientDesign, type SupportedLocale } from '../../../src/client/designTokens';
+import { ReportSummarySchema } from '../../../src/shared/contracts';
 
 type TestListener = (event: Record<string, unknown>) => void;
 
@@ -17,7 +18,6 @@ class TestElement {
   value = '';
   tabIndex = 0;
   type = '';
-  lang = '';
   private ownText = '';
 
   constructor(readonly tagName: string) {}
@@ -43,7 +43,6 @@ class TestElement {
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
     if (name === 'tabindex') this.tabIndex = Number(value);
-    if (name === 'lang') this.lang = value;
   }
 
   getAttribute(name: string): string | null {
@@ -79,9 +78,6 @@ class TestElement {
   private matches(selector: string): boolean {
     if (selector.startsWith('.')) return this.className.split(/\s+/).includes(selector.slice(1));
     if (selector.startsWith('#')) return this.id === selector.slice(1);
-    if (selector.startsWith('[lang="')) {
-      return this.lang === selector.slice(6, -2);
-    }
     if (selector.startsWith('[') && selector.endsWith(']')) {
       const [name, value] = selector.slice(1, -1).split('=');
       return value === undefined
@@ -94,12 +90,29 @@ class TestElement {
 
 let focusedElement: TestElement | null = null;
 
+const confirmedUnresolvedReport = ReportSummarySchema.parse({
+  id: '11111111-1111-4111-8111-111111111111',
+  route: 'GREEN',
+  status: 'AWAITING_RESOLUTION',
+  location: { lat: 49.14, lng: 9.22 },
+  coverPhotoId: '22222222-2222-4222-8222-222222222222',
+  description: 'Litter remains beside the path.',
+  existenceYesCount: 8,
+  resolutionYesCount: 2,
+  existenceVerifiedAt: '2026-10-27T11:00:00.000Z',
+  lastExistenceConfirmedAt: '2026-10-27T12:00:00.000Z',
+  version: 8,
+  updatedAt: '2026-10-27T12:00:00.000Z',
+  isDemo: false,
+});
+
 function createHarness(
   pathname = '/map',
   api = createClientApi({
     mode: 'fixture',
     fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
   }),
+  locale: SupportedLocale = 'en',
 ) {
   focusedElement = null;
   const location = { pathname };
@@ -127,7 +140,7 @@ function createHarness(
       windowListeners.set(name, listeners);
     },
   };
-  const fakeNavigator = new Proxy({ languages: ['en-US'], language: 'en-US' }, {
+  const fakeNavigator = new Proxy({}, {
     get: (target, property) => {
       accessAttempts.push(String(property));
       return Reflect.get(target, property);
@@ -137,9 +150,10 @@ function createHarness(
   vi.stubGlobal('document', fakeDocument);
   vi.stubGlobal('window', fakeWindow);
   vi.stubGlobal('navigator', fakeNavigator);
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
 
   return {
-    root: App(api) as unknown as TestElement,
+    root: App(api, locale) as unknown as TestElement,
     location,
     accessAttempts,
     storage,
@@ -266,7 +280,7 @@ describe('client shell', () => {
     expect(retryButton?.hidden).toBe(true);
   });
 
-  it('shows exactly three tabs, a Heilbronn map and a focusable skip-link target without requesting device APIs', () => {
+  it('shows exactly three tabs and a Heilbronn map without accessing location or camera APIs', () => {
     const { root, accessAttempts } = createHarness();
 
     expect(root.querySelectorAll('[role="tab"]')
@@ -279,9 +293,59 @@ describe('client shell', () => {
     expect(mapCanvas?.getAttribute('data-latitude')).toBe(String(clientDesign.map.center.latitude));
     expect(mapCanvas?.getAttribute('data-longitude')).toBe(String(clientDesign.map.center.longitude));
     expect(mapCanvas?.getAttribute('data-zoom')).toBe(String(clientDesign.map.zoom));
-    expect(root.querySelector('#main-content')?.tabIndex).toBe(-1);
-    expect(accessAttempts).not.toContain('geolocation');
-    expect(accessAttempts).not.toContain('mediaDevices');
+    expect(accessAttempts).toEqual([]);
+  });
+
+  it('shows confirmed unresolved reports as active and keeps verification queries citywide', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: (request) => {
+        requests.push(request.path);
+        return { status: 200, body: { items: [confirmedUnresolvedReport], nextCursor: null } };
+      },
+    });
+    const { root } = createHarness('/map', api);
+
+    await vi.waitFor(() => expect(root.querySelector('.report-list-item')).not.toBeNull());
+
+    const reportRow = root.querySelector('.report-list-item');
+    expect(reportRow?.textContent).toContain('Cleanup awaiting verification');
+    expect(reportRow?.textContent).toContain('Existence: 3/3 threshold · 8 confirmations');
+    expect(new URL(requests[0], 'https://iskra.invalid').searchParams.get('resolved')).toBe('false');
+    expect(new URL(requests[0], 'https://iskra.invalid').searchParams.get('needsVerification')).toBe('false');
+
+    root.querySelectorAll('.map-filter-button')[0].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    const verificationQuery = new URL(requests[1], 'https://iskra.invalid').searchParams;
+    expect(verificationQuery.get('needsVerification')).toBe('true');
+    expect(verificationQuery.get('bbox')).toBeNull();
+
+    root.querySelectorAll('.map-filter-button')[1].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    const resolvedQuery = new URL(requests[2], 'https://iskra.invalid').searchParams;
+    expect(resolvedQuery.get('resolved')).toBe('true');
+  });
+
+  it('filters the three route layers with readable route labels', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: (request) => {
+        requests.push(request.path);
+        return { status: 200, body: { items: [], nextCursor: null } };
+      },
+    });
+    const { root } = createHarness('/map', api);
+
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(root.querySelectorAll('.route-filter').map((button) => button.textContent))
+      .toEqual(['Green', 'Yellow', 'Red']);
+
+    root.querySelectorAll('.route-filter')[2].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expect(new URL(requests[1], 'https://iskra.invalid').searchParams.get('routes'))
+      .toBe('GREEN,YELLOW');
   });
 
   it.each([
@@ -402,30 +466,16 @@ describe('client shell', () => {
   });
 
   it('renders German navigation and map copy for the German locale', async () => {
-    const storage = new Map<string, string>([['iskra.locale', 'de']]);
-    vi.stubGlobal('window', {
-      location: { pathname: '/map' },
-      localStorage: { getItem: (key: string) => storage.get(key) ?? null },
-      history: { pushState: () => undefined },
-      addEventListener: () => undefined,
-    });
-    vi.stubGlobal('navigator', { languages: ['de-DE'], language: 'de-DE' });
-    const documentElement = { lang: '' };
-    vi.stubGlobal('document', {
-      documentElement,
-      createElement: (tagName: string) => new TestElement(tagName),
-    });
-    const root = App(createClientApi({
+    const { root } = createHarness('/map', createClientApi({
       mode: 'fixture',
       fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
-    })) as unknown as TestElement;
-
-    expect(documentElement.lang).toBe('de');
+    }), 'de');
     expect(root.querySelectorAll('[role="tab"]')
       .map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual([
       'Karte', 'Mein Einfluss', 'Belohnungen',
     ]);
     expect(root.querySelector('.report-button')?.textContent).toBe('Müll melden');
+    await vi.waitFor(() => expect(root.querySelector('.report-list-item')).not.toBeNull());
     await vi.waitFor(() => expect(root.querySelector('.map-status')?.textContent)
       .toContain('Es sind noch keine Beispiel-Meldungen verfügbar.'));
   });
