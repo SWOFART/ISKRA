@@ -17,14 +17,14 @@
   "dependencies": {
     "hono": "4.13.14",
     "jose": "6.2.13",
-    "jpeg-js": "0.4.4"
+    "jpeg-js": "0.4.4",
+    "pg": "8.23.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261027.1",
     "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
-    "pg": "8.23.1",
     "typescript": "7.0.2",
     "vitest": "5.0.5",
     "wrangler": "4.153.0"
