@@ -1,3 +1,5 @@
+import { clientDesign } from './designTokens';
+
 type TabId = 'map' | 'impact' | 'rewards';
 
 const tabPaths: Record<TabId, string> = {
@@ -5,12 +7,6 @@ const tabPaths: Record<TabId, string> = {
   impact: '/impact',
   rewards: '/rewards',
 };
-
-const defaultMapCamera = {
-  latitude: 49.14,
-  longitude: 9.22,
-  zoom: 13,
-} as const;
 
 function tabFromPath(pathname: string): TabId {
   if (pathname === tabPaths.impact) return 'impact';
@@ -46,9 +42,9 @@ function renderMapPanel(onReport: () => void): HTMLElement {
   const mapCanvas = makeElement('div', 'map-canvas');
   mapCanvas.setAttribute('role', 'img');
   mapCanvas.setAttribute('aria-label', 'Map preview centered on Heilbronn');
-  mapCanvas.setAttribute('data-latitude', String(defaultMapCamera.latitude));
-  mapCanvas.setAttribute('data-longitude', String(defaultMapCamera.longitude));
-  mapCanvas.setAttribute('data-zoom', String(defaultMapCamera.zoom));
+  mapCanvas.setAttribute('data-latitude', String(clientDesign.map.center.latitude));
+  mapCanvas.setAttribute('data-longitude', String(clientDesign.map.center.longitude));
+  mapCanvas.setAttribute('data-zoom', String(clientDesign.map.zoom));
 
   const mapLabel = makeElement('div', 'map-location');
   appendElements(mapLabel,
