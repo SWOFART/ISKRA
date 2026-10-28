@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { API_ERROR_POLICY } from '../../shared/contracts';
 import type { TransactionDatabase } from '../db/client';
-import { verifyFirebaseToken } from '../middleware/auth';
+import { requireAuth, verifyFirebaseToken } from '../middleware/auth';
 import type { WorkerEnv } from '../middleware/context';
 import { ApiError } from '../middleware/errors';
 import { createMeRoutes } from './me';
@@ -31,7 +31,7 @@ export function createDomainRoutes({ database, reportMedia, verify, now }: Domai
     routes.route('/', createVoteRoutes({ database, media: reportMedia, verify, now }));
     routes.route('/', createCleanupRoutes({ database, media: reportMedia, verify, now }));
   }
-  else routes.post('/me/bootstrap', unavailable);
+  else routes.post('/me/bootstrap', requireAuth(verify), unavailable);
 
   return routes
     .get('/reports', unavailable)

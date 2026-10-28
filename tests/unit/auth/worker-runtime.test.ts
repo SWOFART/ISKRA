@@ -36,15 +36,25 @@ describe('Worker Hyperdrive runtime', () => {
 
   it('keeps bootstrap unavailable when the runtime has no Hyperdrive binding', async () => {
     const createDatabase = vi.fn();
-    const worker = createWorkerHandler({ createDatabase });
+    const verify = vi.fn(async () => ({ uid: 'verified-resident' }));
+    const worker = createWorkerHandler({ createDatabase, verify });
     const response = await worker.fetch(new Request('https://iskra.test/api/me/bootstrap', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { Authorization: 'Bearer valid-token', 'Content-Type': 'application/json' },
       body: '{}',
     }), { FIREBASE_PROJECT_ID: 'iskra-test' }, {} as ExecutionContext);
 
     expect(response.status).toBe(503);
+    expect(verify).toHaveBeenCalledWith('valid-token', 'iskra-test');
     expect(createDatabase).not.toHaveBeenCalled();
+  });
+
+  it('rejects anonymous bootstrap before missing-database availability', async () => {
+    const worker = createWorkerHandler();
+    const response = await worker.fetch(new Request('https://iskra.test/api/me/bootstrap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }), { FIREBASE_PROJECT_ID: 'iskra-test' }, {} as ExecutionContext);
+    expect(response.status).toBe(401);
   });
 
   it('uses one lazy pg client for transactions and closes it after the Worker request', async () => {

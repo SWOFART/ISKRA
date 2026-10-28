@@ -8,7 +8,13 @@ export default defineConfig({
   reporter: 'list',
   use: { baseURL: 'http://127.0.0.1:8789', browserName: 'chromium', trace: 'off' },
   webServer: {
-    command: 'npm run dev -- --local --ip 127.0.0.1 --port 8789',
+    command: 'npm run dev -- --local --ip 127.0.0.1 --port 8789 --var FIREBASE_PROJECT_ID:iskra-browser-test',
+    env: {
+      VITE_FIREBASE_API_KEY: 'local-browser-fixture-key',
+      VITE_FIREBASE_PROJECT_ID: 'iskra-browser-test',
+      VITE_FIREBASE_AUTH_DOMAIN: 'iskra-browser-test.firebaseapp.com',
+      VITE_FIREBASE_APP_ID: 'local-browser-fixture-app',
+    },
     url: 'http://127.0.0.1:8789/api/health',
     reuseExistingServer: false,
     timeout: 60_000,

@@ -26,7 +26,7 @@ describe('mounted v1 API boundary', () => {
   });
 
   it.each([
-    ['GET', '/api/reports'], ['POST', '/api/me/bootstrap'], ['GET', '/api/me/impact'],
+    ['GET', '/api/reports'], ['GET', '/api/me/impact'],
   ])('mounts B facade %s %s with honest JSON unavailability', async (method, path) => {
     const response = await createApp().request(path, { method });
     expect(response.status).toBe(503);

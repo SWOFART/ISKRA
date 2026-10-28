@@ -6,8 +6,9 @@ import tempfile
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
-from cloudflare_env import deployment_summary, validate_config, validate_health, write_private_json
+from cloudflare_env import deployment_summary, main, validate_config, validate_health, write_private_json
 
 
 class CloudConfigurationTests(unittest.TestCase):
@@ -68,11 +69,38 @@ class CloudConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_config(self.valid(), self.template, "production", "application")
 
+    def test_staging_auth_can_deploy_before_media_ai_and_map_are_connected(self):
+        values = json.loads(self.valid()) | {
+            "APP_ENV": "staging", "FIREBASE_PROJECT_ID": "sample-project",
+            "VITE_FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_API_KEY": "browser-key",
+            "VITE_FIREBASE_AUTH_DOMAIN": "sample-project.firebaseapp.com", "VITE_FIREBASE_APP_ID": "sample-app",
+        }
+        self.assertEqual(validate_config(json.dumps(values), self.template, "staging", "application"), values)
+        values["VITE_FIREBASE_PROJECT_ID"] = "another-project"
+        with self.assertRaisesRegex(ValueError, "projects must match"):
+            validate_config(json.dumps(values), self.template, "staging", "application")
+
+    def test_deployment_url_is_only_published_after_release_health_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "iskra-environment.json"
+            config.write_text(self.valid())
+            output = Path(directory) / "outputs"
+            env = {"RUNNER_TEMP": directory, "GITHUB_OUTPUT": str(output), "GITHUB_SHA": "abc123"}
+            with patch.dict(os.environ, env), patch.object(sys, "argv", ["cloudflare_env.py", "smoke", "staging", "application"]):
+                with patch("cloudflare_env.subprocess.check_output", return_value='{"ok":true,"release":"old"}'):
+                    with self.assertRaises(ValueError): main()
+                self.assertFalse(output.exists())
+                with patch("cloudflare_env.subprocess.check_output", return_value='{"ok":true,"release":"abc123"}'):
+                    main()
+                self.assertEqual(output.read_text(), "verified_url=https://app.example.test\n")
+
     def test_preparation_excludes_deployment_and_migration_keys_from_worker(self):
         values = json.loads(self.valid()) | {
             "APP_ENV": "staging", "GEMINI_API_KEY": "sample-gemini-key",
             "MEDIA_SIGNING_SECRET": "sample-signing-key", "GEMINI_MODEL_ID": "sample-model",
             "FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_API_KEY": "sample-browser-key",
+            "VITE_FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_AUTH_DOMAIN": "sample-project.firebaseapp.com",
+            "VITE_FIREBASE_APP_ID": "sample-app",
             "VITE_MAPTILER_KEY": "sample-map-key", "MIGRATION_DATABASE_URL": "postgres://operator",
         }
         with tempfile.TemporaryDirectory() as directory:
