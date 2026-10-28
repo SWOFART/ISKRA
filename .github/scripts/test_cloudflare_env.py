@@ -124,6 +124,15 @@ class CloudConfigurationTests(unittest.TestCase):
         self.assertIn("no deployment link", deployment_summary("true", "application", "https://iskra.test", "abc", "failure"))
         self.assertIn("no target URL", deployment_summary("true", "application", "", "abc", "success"))
 
+    def test_summary_survives_missing_target_when_config_validation_failed(self):
+        result = subprocess.run(
+            [sys.executable, ".github/scripts/cloudflare_env.py", "summary", "staging", ""],
+            env=os.environ | {"DEPLOY_ENABLED": "", "TARGET_URL": "", "SMOKE_OUTCOME": ""},
+            check=True, capture_output=True, text=True,
+        )
+        self.assertIn("Deployment configuration did not validate", result.stdout)
+        self.assertNotIn("Open deployed", result.stdout)
+
     def test_application_smoke_rejects_infrastructure_worker_at_same_release(self):
         health = {
             "ok": True, "service": "iskra-deployment-check",

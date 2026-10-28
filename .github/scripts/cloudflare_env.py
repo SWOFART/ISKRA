@@ -94,6 +94,13 @@ def validate_health(health, target, release):
 
 def main():
     mode, environment, target = sys.argv[1:]
+    if mode == "summary":
+        print(deployment_summary(
+            os.environ.get("DEPLOY_ENABLED", ""), target,
+            os.environ.get("TARGET_URL", ""), os.environ.get("GITHUB_SHA", ""),
+            os.environ.get("SMOKE_OUTCOME", ""),
+        ), end="")
+        return
     if environment not in ("staging", "production"):
         raise ValueError("Unknown deployment environment")
     if target == "auto":
@@ -126,14 +133,6 @@ def main():
         if target == "application":
             runtime = {name: value for name, value in values.items() if name in RUNTIME_KEYS and value}
             write_private_json(runtime_path, runtime)
-        return
-
-    if mode == "summary":
-        print(deployment_summary(
-            os.environ.get("DEPLOY_ENABLED", ""), target,
-            os.environ.get("TARGET_URL", ""), os.environ.get("GITHUB_SHA", ""),
-            os.environ.get("SMOKE_OUTCOME", ""),
-        ), end="")
         return
 
     values = json.loads(config_path.read_text())
