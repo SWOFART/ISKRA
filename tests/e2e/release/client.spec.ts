@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../fixtures';
 
 test('missing files stay 404 while generated JS and CSS load with their own content types', async ({ request }) => {
   for (const path of ['/assets/missing.js', '/assets/missing.css', '/assets/missing', '/missing.ico']) {

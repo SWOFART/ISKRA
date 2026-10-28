@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/client/App';
 import { createClientApi, DEVELOPMENT_FIXTURE_LABEL, type FixtureResponse } from '../../../src/client/api';
 import { clientDesign, type SupportedLocale } from '../../../src/client/designTokens';
+import { ReportSummarySchema } from '../../../src/shared/contracts';
 
 type TestListener = (event: Record<string, unknown>) => void;
 
@@ -14,6 +15,7 @@ class TestElement {
   id = '';
   hidden = false;
   href = '';
+  value = '';
   tabIndex = 0;
   type = '';
   private ownText = '';
@@ -40,6 +42,7 @@ class TestElement {
 
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
+    if (name === 'tabindex') this.tabIndex = Number(value);
   }
 
   getAttribute(name: string): string | null {
@@ -99,12 +102,17 @@ function createHarness(
   const location = { pathname };
   const windowListeners = new Map<string, ((event: unknown) => void)[]>();
   const accessAttempts: string[] = [];
+  const storage = new Map<string, string>();
   const fakeDocument = {
     createElement: (tagName: string) => new TestElement(tagName),
     documentElement: { lang: '' },
   };
   const fakeWindow = {
     location,
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    },
     history: {
       pushState: (_state: unknown, _title: string, path: string) => {
         location.pathname = path;
@@ -117,9 +125,9 @@ function createHarness(
     },
   };
   const fakeNavigator = new Proxy({}, {
-    get: (_target, property) => {
+    get: (target, property) => {
       accessAttempts.push(String(property));
-      return undefined;
+      return Reflect.get(target, property);
     },
   });
 
@@ -127,15 +135,11 @@ function createHarness(
   vi.stubGlobal('window', fakeWindow);
   vi.stubGlobal('navigator', fakeNavigator);
 
-  vi.stubGlobal('localStorage', {
-    getItem: () => null,
-    setItem: () => undefined,
-  });
-
   return {
     root: App(api, locale) as unknown as TestElement,
     location,
     accessAttempts,
+    storage,
     dispatchWindowEvent(name: string) {
       for (const listener of windowListeners.get(name) ?? []) listener({});
     },
@@ -147,6 +151,22 @@ function selectedTab(root: TestElement): TestElement | undefined {
     (tab) => tab.getAttribute('aria-selected') === 'true',
   );
 }
+
+const confirmedUnresolvedReport = ReportSummarySchema.parse({
+  id: '11111111-1111-4111-8111-111111111111',
+  route: 'GREEN',
+  status: 'AWAITING_RESOLUTION',
+  location: { lat: 49.14, lng: 9.22 },
+  coverPhotoId: '22222222-2222-4222-8222-222222222222',
+  description: 'Litter remains beside the path.',
+  existenceYesCount: 8,
+  resolutionYesCount: 2,
+  existenceVerifiedAt: '2026-10-27T11:00:00.000Z',
+  lastExistenceConfirmedAt: '2026-10-27T12:00:00.000Z',
+  version: 8,
+  updatedAt: '2026-10-27T12:00:00.000Z',
+  isDemo: false,
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -275,6 +295,58 @@ describe('client shell', () => {
     expect(accessAttempts).toEqual([]);
   });
 
+  it('shows confirmed unresolved reports as active and keeps verification queries citywide', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: (request) => {
+        requests.push(request.path);
+        return { status: 200, body: { items: [confirmedUnresolvedReport], nextCursor: null } };
+      },
+    });
+    const { root } = createHarness('/map', api);
+
+    await vi.waitFor(() => expect(root.querySelector('.report-list-item')).not.toBeNull());
+
+    const reportRow = root.querySelector('.report-list-item');
+    expect(reportRow?.textContent).toContain('Cleanup awaiting verification');
+    expect(reportRow?.textContent).toContain('Existence: 3/3 threshold · 8 confirmations');
+    expect(new URL(requests[0], 'https://iskra.invalid').searchParams.get('resolved')).toBe('false');
+    expect(new URL(requests[0], 'https://iskra.invalid').searchParams.get('needsVerification')).toBe('false');
+
+    root.querySelectorAll('.map-filter-button')[0].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    const verificationQuery = new URL(requests[1], 'https://iskra.invalid').searchParams;
+    expect(verificationQuery.get('needsVerification')).toBe('true');
+    expect(verificationQuery.get('bbox')).toBeNull();
+
+    root.querySelectorAll('.map-filter-button')[1].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    const resolvedQuery = new URL(requests[2], 'https://iskra.invalid').searchParams;
+    expect(resolvedQuery.get('resolved')).toBe('true');
+  });
+
+  it('filters the three route layers with readable route labels', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: (request) => {
+        requests.push(request.path);
+        return { status: 200, body: { items: [], nextCursor: null } };
+      },
+    });
+    const { root } = createHarness('/map', api);
+
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(root.querySelectorAll('.route-filter').map((button) => button.textContent))
+      .toEqual(['Green', 'Yellow', 'Red']);
+
+    root.querySelectorAll('.route-filter')[2].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expect(new URL(requests[1], 'https://iskra.invalid').searchParams.get('routes'))
+      .toBe('GREEN,YELLOW');
+  });
+
   it.each([
     ['/impact', 'My Impact', 'Sign in to see your reports and community contributions.'],
     ['/rewards', 'Rewards', 'Sign in to see your reward balance and available rewards.'],
@@ -329,7 +401,8 @@ describe('client shell', () => {
     const notice = root.querySelector('.map-notice');
     expect(notice?.hidden).toBe(false);
     expect(notice?.textContent).toContain('No location or photos have been requested.');
-    expect(accessAttempts).toEqual([]);
+    expect(accessAttempts).not.toContain('geolocation');
+    expect(accessAttempts).not.toContain('mediaDevices');
   });
 
   it('restores the selected tab on browser back/forward navigation', () => {
@@ -341,6 +414,43 @@ describe('client shell', () => {
     expect(root.querySelector('.tab-panel')?.textContent).toContain(
       'Sign in to see your reward balance and available rewards.',
     );
+  });
+
+  it('applies a stored language before rendering the active view', () => {
+    const storage = new Map<string, string>([['iskra.locale', 'de']]);
+    vi.stubGlobal('window', {
+      location: { pathname: '/impact' },
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null },
+      history: { pushState: () => undefined },
+      addEventListener: () => undefined,
+    });
+    vi.stubGlobal('navigator', { language: 'en-US' });
+    vi.stubGlobal('localStorage', { getItem: () => 'de', setItem: () => undefined });
+    const documentElement = { lang: '' };
+    vi.stubGlobal('document', {
+      documentElement,
+      createElement: (tagName: string) => new TestElement(tagName),
+    });
+
+    const root = App() as unknown as TestElement;
+
+    expect(documentElement.lang).toBe('de');
+    expect(root.querySelector('[role="tablist"]')?.getAttribute('aria-label')).toBe('Hauptnavigation');
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
+  });
+
+  it('switches language without losing the selected tab or route and persists the choice', () => {
+    const { root, location, storage } = createHarness('/impact');
+    const germanButton = root.querySelectorAll('.locale-button')
+      .find((button) => button.getAttribute('lang') === 'de');
+
+    germanButton?.dispatch('click');
+
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
+    expect(location.pathname).toBe('/impact');
+    expect(storage.get('iskra.locale')).toBe('de');
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Dein Einfluss');
+    expect(root.querySelector('.map-notice')).toBeNull();
   });
 
   it.each(['/impact', '/rewards'])('keeps deferred %s actions honest', (path) => {
@@ -360,7 +470,6 @@ describe('client shell', () => {
       mode: 'fixture',
       fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
     }), 'de');
-
     expect(root.querySelectorAll('[role="tab"]')
       .map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual([
       'Karte', 'Mein Einfluss', 'Belohnungen',
@@ -371,7 +480,7 @@ describe('client shell', () => {
   });
 
   it('switches language without losing the selected tab', () => {
-    const { root, location } = createHarness('/impact');
+    const { root, location, storage } = createHarness('/impact');
     const germanButton = root.querySelectorAll('.locale-button')
       .find((button) => button.getAttribute('lang') === 'de');
 
@@ -379,6 +488,7 @@ describe('client shell', () => {
 
     expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
     expect(location.pathname).toBe('/impact');
+    expect(storage.get('iskra.locale')).toBe('de');
     expect(root.querySelector('.tab-panel')?.textContent).toContain('Dein Einfluss');
     const activeLocale = root.querySelectorAll('.locale-button')
       .find((button) => button.getAttribute('aria-pressed') === 'true');

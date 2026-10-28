@@ -1,3 +1,4 @@
+import 'maplibre-gl/dist/maplibre-gl.css';
 import './styles.css';
 import { App } from './App';
 import { applyClientDesignTokens } from './applyDesignTokens';
