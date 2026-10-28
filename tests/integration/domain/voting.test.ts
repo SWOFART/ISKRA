@@ -662,6 +662,78 @@ describe('PostgreSQL report voting', () => {
         .toBeGreaterThan(before.rows[0].last_existence_confirmed_at.getTime());
     }));
 
+  it('keeps existence support open in VERIFIED without repeating verification effects', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const priorVoters = ['vote-verified-prior-1', 'vote-verified-prior-2', 'vote-verified-prior-3'];
+      const supportVoters = Array.from({ length: 5 }, (_, index) => `vote-verified-support-${index + 4}`);
+      await Promise.all([reportAuthor, 'vote-verified-observer', ...priorVoters, ...supportVoters]
+        .map((id) => createUser(pool, id)));
+      const report = await createReport(pool, { status: 'VERIFIED', existenceYesCount: 3 });
+      await seedReportAward(pool, reportAuthor, report.id);
+      for (const actor of priorVoters) {
+        const vote = await pool.query<{ id: string }>(
+          "INSERT INTO votes (report_id, stage, voter_user_id, choice, distance_m, accuracy_m) VALUES ($1::uuid, 'EXISTENCE', $2::text, 'YES', 10, 10) RETURNING id",
+          [report.id, actor],
+        );
+        await pool.query(
+          "INSERT INTO reward_ledger (user_id, kind, delta, source_ref, report_id, vote_id) VALUES ($1::text, 'VOTE', 5, $2::varchar, $3::uuid, $4::uuid)",
+          [actor, 'vote:' + vote.rows[0].id, report.id, vote.rows[0].id],
+        );
+        await pool.query('UPDATE users SET rp_balance = rp_balance + 5 WHERE id = $1::text', [actor]);
+      }
+      await pool.query(
+        "INSERT INTO notifications (user_id, report_id, kind, message) VALUES ($1::text, $2::uuid, 'EXISTENCE_VERIFIED', 'Residents confirmed your report.')",
+        [reportAuthor, report.id],
+      );
+
+      let nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+      const before = await pool.query<{ existence_verified_at: Date; last_existence_confirmed_at: Date }>(
+        'SELECT existence_verified_at, last_existence_confirmed_at FROM reports WHERE id = $1::uuid', [report.id],
+      );
+      for (let index = 0; index < supportVoters.length; index++) {
+        nowValue += 1_000;
+        const response = await sendVote(
+          app, supportVoters[index], report.id, 'EXISTENCE', 'YES', crypto.randomUUID(), location(nowValue),
+        );
+        expect(response.status).toBe(200);
+        expect(VoteReceiptSchema.parse(await response.json())).toMatchObject({
+          replayed: false, rpAwarded: 5, balanceVersion: 1,
+          report: { status: 'VERIFIED', existenceYesCount: index + 4, version: index + 1 },
+        });
+      }
+
+      const detailResponse = await app.request(`/api/reports/${report.id}`, {
+        headers: { Authorization: 'Bearer vote-verified-observer' },
+      }, { FIREBASE_PROJECT_ID: 'voting-test-project' });
+      expect(detailResponse.status).toBe(200);
+      expect(ViewerReportDetailSchema.parse(await detailResponse.json())).toMatchObject({
+        status: 'VERIFIED', existenceYesCount: 8, openVoteStages: ['EXISTENCE'],
+        viewer: { stages: { EXISTENCE: { canVote: true }, RESOLUTION: { canVote: false, reason: 'STAGE_CLOSED' } } },
+      });
+
+      const state = await pool.query<{
+        status: string; existence_yes_count: number; verified_at: Date; last_confirmed_at: Date;
+        notifications: number; votes: number; credits: number;
+      }>(
+        `SELECT status, existence_yes_count, existence_verified_at AS verified_at,
+           last_existence_confirmed_at AS last_confirmed_at,
+           (SELECT count(*)::int FROM notifications WHERE report_id = reports.id AND kind = 'EXISTENCE_VERIFIED') AS notifications,
+           (SELECT count(*)::int FROM votes WHERE report_id = reports.id AND stage = 'EXISTENCE') AS votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = reports.id AND kind = 'VOTE') AS credits
+         FROM reports WHERE id = $1::uuid`,
+        [report.id],
+      );
+      expect(state.rows[0]).toMatchObject({
+        status: 'VERIFIED', existence_yes_count: 8,
+        verified_at: before.rows[0].existence_verified_at,
+        notifications: 1, votes: 8, credits: 8,
+      });
+      expect(state.rows[0].last_confirmed_at.getTime())
+        .toBeGreaterThan(before.rows[0].last_existence_confirmed_at.getTime());
+    }));
+
   it('closes both vote stages after resolution while an accepted vote still replays safely', () =>
     withTestDatabase(async (pool) => {
       await installSchema(pool);
