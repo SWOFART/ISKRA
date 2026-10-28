@@ -144,7 +144,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function validateConfig(config: GeminiConfig) {
+export function validateGeminiConfig(config: GeminiConfig) {
   if (!config || typeof config.apiKey !== 'string' || !config.apiKey
     || config.apiKey !== config.apiKey.trim() || /[\r\n]/.test(config.apiKey)
     || typeof config.modelId !== 'string' || !modelIdPattern.test(config.modelId)) {
@@ -254,7 +254,7 @@ async function generate<T>(
   assessmentSchema: { safeParse(value: unknown): { success: true; data: T } | { success: false } },
   fetcher: typeof fetch,
 ): Promise<T> {
-  validateConfig(config);
+  validateGeminiConfig(config);
   let response: Response;
   try {
     response = await fetcher(
