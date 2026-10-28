@@ -20,6 +20,7 @@ interface LockedReport extends Record<string, unknown> {
   lng: number;
   existence_yes_count: number;
   resolution_yes_count: number;
+  is_demo: boolean;
 }
 
 interface CleanupRow extends Record<string, unknown> {
@@ -33,6 +34,7 @@ interface VoteRow extends Record<string, unknown> {
   report_id: string;
   stage: Stage;
   choice: 'YES' | 'NO';
+  is_demo: boolean;
 }
 
 interface BalanceRow extends Record<string, unknown> {
@@ -55,6 +57,19 @@ interface VoteRequest {
   readonly location: Location;
 }
 
+interface InternalVoteOptions {
+  readonly deterministicVoteId?: string;
+  /** Set only by the trusted local accelerated-vote tool; never exposed by HTTP. */
+  readonly demoProvenance?: 'accelerated-sandbox';
+}
+
+/** Shared transaction lock keeps accelerated votes serialized with seed/reset operations. */
+export const DEMO_SEED_LOCK_KEY = 'iskra-demo-seed-v1';
+
+export function acceleratedDemoVoteIdentityLabel(reportId: string, voterId: string, stage: Stage): string {
+  return `${reportId.toLowerCase()}/${voterId}/${stage}`;
+}
+
 interface LedgerAward {
   readonly userId: string;
   readonly kind: 'VOTE' | 'REPORT_FINAL' | 'CLEANUP';
@@ -71,13 +86,21 @@ function alreadyVoted(): never {
   throw new ApiError(409, 'ALREADY_VOTED', 'A vote for this report and stage has already been recorded.');
 }
 
-async function hashRequest(reportId: string, input: VoteRequest, voteId: string | null): Promise<string> {
+async function hashRequest(
+  reportId: string,
+  input: VoteRequest,
+  voteId: string | null,
+  demoProvenance: InternalVoteOptions['demoProvenance'],
+): Promise<string> {
   const value = JSON.stringify({
     reportId: reportId.toLowerCase(),
     stage: input.stage,
     choice: input.choice,
-    location: input.location,
+    location: demoProvenance === undefined
+      ? input.location
+      : { ...input.location, observedAt: 'synthetic-report-pin' },
     ...(voteId === null ? {} : { deterministicVoteId: voteId }),
+    ...(demoProvenance === undefined ? {} : { demoProvenance }),
   });
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -121,8 +144,15 @@ export class PostgresReportVotingService {
     idempotencyKey: string,
     rawReportId: string,
     input: VoteRequest,
-    internal: { readonly deterministicVoteId?: string } = {},
+    internal: InternalVoteOptions = {},
   ) {
+    if (internal.demoProvenance !== undefined && internal.demoProvenance !== 'accelerated-sandbox') {
+      throw new TypeError('Unsupported internal vote provenance.');
+    }
+    const acceleratedDemo = internal.demoProvenance === 'accelerated-sandbox';
+    if (acceleratedDemo && internal.deterministicVoteId === undefined) {
+      throw new TypeError('Accelerated demo votes require a deterministic vote ID.');
+    }
     if (!this.media) {
       throw new ApiError(503, 'UNAVAILABLE', 'Report photos are not available yet.', true);
     }
@@ -130,7 +160,7 @@ export class PostgresReportVotingService {
     const reportId = UuidSchema.parse(rawReportId).toLowerCase();
     const deterministicVoteId = internal.deterministicVoteId === undefined
       ? null : UuidSchema.parse(internal.deterministicVoteId).toLowerCase();
-    const requestHash = await hashRequest(reportId, input, deterministicVoteId);
+    const requestHash = await hashRequest(reportId, input, deterministicVoteId, internal.demoProvenance);
     let execution;
     try {
       execution = await retryDeadlocks(() => executeIdempotently<VoteReceiptState>(
@@ -142,24 +172,39 @@ export class PostgresReportVotingService {
           requestHash,
         },
         async (client) => {
+          if (acceleratedDemo) {
+            await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))', [DEMO_SEED_LOCK_KEY]);
+          }
           const reportResult = await client.query<LockedReport>(
-            'SELECT id, author_user_id, route, status, lat, lng, existence_yes_count, resolution_yes_count '
+            'SELECT id, author_user_id, route, status, lat, lng, existence_yes_count, resolution_yes_count, is_demo '
               + 'FROM reports WHERE id = $1::uuid FOR UPDATE',
             [reportId],
           );
           const report = reportResult.rows[0];
           if (!report) notFound();
 
+          if (acceleratedDemo) {
+            const actor = await client.query<{ is_demo: boolean }>(
+              'SELECT is_demo FROM users WHERE id = $1::text', [actorId],
+            );
+            if (!report.is_demo || !actor.rows[0]?.is_demo) {
+              throw new ApiError(403, 'FORBIDDEN', 'Accelerated votes require a marked demo report and demo voter.');
+            }
+          }
+
           // Semantic deduplication precedes freshness, stage and role checks, just like a
           // same-key replay. A resident can never change their immutable stage choice.
           const priorResult = await client.query<VoteRow>(
-            'SELECT id, report_id, stage, choice FROM votes '
+            'SELECT id, report_id, stage, choice, is_demo FROM votes '
               + 'WHERE report_id = $1::uuid AND stage = $2::vote_stage AND voter_user_id = $3::text',
             [reportId, input.stage, actorId],
           );
           const priorVote = priorResult.rows[0];
           if (priorVote) {
             if (priorVote.choice !== input.choice) alreadyVoted();
+            if (acceleratedDemo && (!priorVote.is_demo || priorVote.id !== deterministicVoteId)) {
+              throw new ApiError(409, 'ALREADY_VOTED', 'A genuine vote already exists; no accelerated vote was recorded.');
+            }
             await lockAccounts(client, [actorId]);
             const balance = await currentBalance(client, actorId);
             const reportSnapshot = await this.reports.getDetailSnapshot(client, reportId, actorId);
@@ -206,6 +251,9 @@ export class PostgresReportVotingService {
 
           const admission = locationAdmission(input.location, this.now(),
             { lat: Number(report.lat), lng: Number(report.lng) }, POLICY.voteRadiusM);
+          if (acceleratedDemo && distanceM(input.location, { lat: Number(report.lat), lng: Number(report.lng) }) > 0.01) {
+            throw new ApiError(400, 'INVALID_INPUT', 'Accelerated votes require the synthetic report-pin location.');
+          }
           if (admission === 'LOCATION_INACCURATE') {
             throw new ApiError(422, admission, 'The reported location accuracy is too low.');
           }
@@ -227,11 +275,12 @@ export class PostgresReportVotingService {
 
           const distance = distanceM(input.location, { lat: Number(report.lat), lng: Number(report.lng) });
           const inserted = await client.query<{ id: string }>(
-            'INSERT INTO votes (id, report_id, stage, voter_user_id, choice, distance_m, accuracy_m) '
+            'INSERT INTO votes (id, report_id, stage, voter_user_id, choice, distance_m, accuracy_m, is_demo) '
               + 'VALUES (COALESCE($1::uuid, gen_random_uuid()), $2::uuid, $3::vote_stage, $4::text, '
-              + '$5::vote_choice, $6::double precision, $7::double precision) '
+              + '$5::vote_choice, $6::double precision, $7::double precision, $8::boolean) '
               + 'RETURNING id',
-            [deterministicVoteId, reportId, input.stage, actorId, input.choice, distance, input.location.accuracyM],
+            [deterministicVoteId, reportId, input.stage, actorId, input.choice, distance, input.location.accuracyM,
+              acceleratedDemo],
           );
           const voteId = inserted.rows[0]?.id;
           if (!voteId) throw new Error('Vote insert did not return its ID.');
@@ -310,9 +359,10 @@ export class PostgresReportVotingService {
           const balanceDeltas = new Map<string, number>();
           for (const award of awards) {
             await client.query(
-              'INSERT INTO reward_ledger (user_id, kind, delta, source_ref, report_id, vote_id) '
-                + 'VALUES ($1::text, $2::ledger_kind, $3::integer, $4::varchar, $5::uuid, $6::uuid)',
-              [award.userId, award.kind, award.delta, award.sourceRef, reportId, award.voteId ?? null],
+              'INSERT INTO reward_ledger (user_id, kind, delta, source_ref, report_id, vote_id, is_demo) '
+                + 'VALUES ($1::text, $2::ledger_kind, $3::integer, $4::varchar, $5::uuid, $6::uuid, $7::boolean)',
+              [award.userId, award.kind, award.delta, award.sourceRef, reportId, award.voteId ?? null,
+                acceleratedDemo],
             );
             balanceDeltas.set(award.userId, (balanceDeltas.get(award.userId) ?? 0) + award.delta);
           }
@@ -347,7 +397,7 @@ export class PostgresReportVotingService {
         async (client, receipt) => {
           await lockAccounts(client, [actorId]);
           const vote = await client.query<VoteRow>(
-            'SELECT id, report_id, stage, choice FROM votes WHERE id = $1::uuid AND voter_user_id = $2::text',
+            'SELECT id, report_id, stage, choice, is_demo FROM votes WHERE id = $1::uuid AND voter_user_id = $2::text',
             [receipt.resourceId, actorId],
           );
           const accepted = vote.rows[0];

@@ -10,12 +10,12 @@ import { PostgresCleanupSubmissionService } from './cleanup';
 import { PostgresImpactService } from './impact';
 import { PostgresReportPublicationService } from './publication';
 import { hashBeforeEvidence, type ReportMediaResolver } from './report-context';
-import { PostgresReportVotingService } from './voting';
+import { DEMO_SEED_LOCK_KEY, PostgresReportVotingService } from './voting';
+export { acceleratedDemoVoteIdentityLabel, DEMO_SEED_LOCK_KEY } from './voting';
 
 export const DEMO_SCHEMA_VERSION = 1;
 export const DEMO_MARKER_OPERATION = 'DEMO_SEED';
 export const DEMO_MARKER_KEY = 'seed-v1';
-export const DEMO_SEED_LOCK_KEY = 'iskra-demo-seed-v1';
 export const DEMO_SEED_USER_PREFIX = 'iskra-demo-seed:v1:';
 export const DEMO_SEED_OBJECT_PREFIX = 'demo-fixtures/seed-v1/';
 const MODEL_ID = 'demo-recorded-fixture-v1';

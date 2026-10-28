@@ -11,7 +11,9 @@ import type { WorkerEnv } from '../../../src/worker/middleware/context';
 import { handleError } from '../../../src/worker/middleware/errors';
 import { apiSecurity } from '../../../src/worker/middleware/security';
 import { createDomainRoutes } from '../../../src/worker/routes/domain';
+import { stableUuid } from '../../../src/worker/services/demo-seeds';
 import type { ReportMediaResolver } from '../../../src/worker/services/report-context';
+import { acceleratedDemoVoteIdentityLabel, PostgresReportVotingService } from '../../../src/worker/services/voting';
 import { withTestDatabase } from '../auth/postgres';
 
 const migration = await readFile(new URL('../../../migrations/0001_p0_core.sql', import.meta.url), 'utf8');
@@ -1148,5 +1150,106 @@ describe('PostgreSQL report voting', () => {
         [report.id, afterClose],
       );
       expect(state.rows[0]).toEqual({ existence_votes: 3, resolution_votes: 3, support_balance: 0, support_credits: 0 });
+    }));
+});
+
+describe('operator accelerated demo votes', () => {
+  it('uses the voting transaction service and marks the synthetic vote and every reward entry as demo', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const actorId = 'accelerated-demo-voter';
+      await Promise.all([reportAuthor, actorId].map((id) => createUser(pool, id)));
+      const report = await createReport(pool);
+      await pool.query('UPDATE users SET is_demo = true WHERE id = ANY($1::text[])', [[reportAuthor, actorId]]);
+      await pool.query('UPDATE reports SET is_demo = true WHERE id = $1::uuid', [report.id]);
+
+      const nowValue = Date.now();
+      const service = new PostgresReportVotingService(
+        new PostgresTransactionDatabase(pool), mediaResolver(), () => nowValue,
+      );
+      const identity = acceleratedDemoVoteIdentityLabel(report.id, actorId, 'EXISTENCE');
+      const voteId = await stableUuid('vote/accelerated/' + identity);
+      const key = await stableUuid('idempotency/accelerated/' + identity);
+      const input = { stage: 'EXISTENCE' as const, choice: 'YES' as const, location: location(nowValue) };
+      const first = await service.vote(actorId, key, report.id, input, {
+        deterministicVoteId: voteId, demoProvenance: 'accelerated-sandbox',
+      });
+      const replay = await service.vote(actorId, key, report.id, {
+        stage: input.stage, choice: input.choice,
+        location: { ...input.location, observedAt: new Date(nowValue - 1_000).toISOString() },
+      }, { deterministicVoteId: voteId, demoProvenance: 'accelerated-sandbox' });
+
+      expect(first.receipt).toMatchObject({ replayed: false, rpAwarded: 5 });
+      expect(replay.receipt).toMatchObject({ replayed: true, rpAwarded: 0 });
+      const state = await pool.query<{ votes: number; demo_votes: number; ledger: number; demo_ledger: number; balance: number }>(
+        `SELECT (SELECT count(*)::int FROM votes WHERE report_id = $1::uuid) AS votes,
+           (SELECT count(*)::int FROM votes WHERE report_id = $1::uuid AND is_demo) AS demo_votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = $1::uuid) AS ledger,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = $1::uuid AND is_demo) AS demo_ledger,
+           (SELECT rp_balance FROM users WHERE id = $2::text) AS balance`,
+        [report.id, actorId],
+      );
+      expect(state.rows[0]).toEqual({ votes: 1, demo_votes: 1, ledger: 1, demo_ledger: 1, balance: 5 });
+    }));
+
+  it('refuses a synthetic vote for a genuine report or voter', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const demoActor = 'accelerated-demo-actor';
+      const ordinaryActor = 'accelerated-ordinary-actor';
+      const demoAuthor = 'accelerated-demo-author';
+      const ordinaryAuthor = 'accelerated-ordinary-author';
+      await Promise.all([demoActor, ordinaryActor, demoAuthor, ordinaryAuthor].map((id) => createUser(pool, id)));
+      const demoReport = await createReport(pool, { author: demoAuthor });
+      const ordinaryReport = await createReport(pool, { author: ordinaryAuthor });
+      await pool.query('UPDATE users SET is_demo = true WHERE id = ANY($1::text[])', [[demoActor, demoAuthor]]);
+      await pool.query('UPDATE reports SET is_demo = true WHERE id = $1::uuid', [demoReport.id]);
+
+      const service = new PostgresReportVotingService(new PostgresTransactionDatabase(pool), mediaResolver());
+      const input = { stage: 'EXISTENCE' as const, choice: 'YES' as const, location: location(Date.now()) };
+      const demoReportIdentity = acceleratedDemoVoteIdentityLabel(demoReport.id, ordinaryActor, 'EXISTENCE');
+      await expect(service.vote(ordinaryActor, crypto.randomUUID(), demoReport.id, input,
+        {
+          deterministicVoteId: await stableUuid('vote/accelerated/' + demoReportIdentity),
+          demoProvenance: 'accelerated-sandbox',
+        })).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN' });
+      const ordinaryReportIdentity = acceleratedDemoVoteIdentityLabel(ordinaryReport.id, demoActor, 'EXISTENCE');
+      await expect(service.vote(demoActor, crypto.randomUUID(), ordinaryReport.id, input,
+        {
+          deterministicVoteId: await stableUuid('vote/accelerated/' + ordinaryReportIdentity),
+          demoProvenance: 'accelerated-sandbox',
+        })).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN' });
+
+      const count = await pool.query<{ votes: number }>('SELECT count(*)::int AS votes FROM votes');
+      expect(count.rows[0]?.votes).toBe(0);
+    }));
+
+  it('does not add a public header or query bypass for the genuine vote route', () =>
+    withTestDatabase(async (pool) => {
+      await installSchema(pool);
+      const actorId = 'accelerated-public-route-user';
+      await Promise.all([reportAuthor, actorId].map((id) => createUser(pool, id)));
+      const report = await createReport(pool);
+      const nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+      const response = await app.request(`/api/reports/${report.id}/votes?accelerated=true&demo=true`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${actorId}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': crypto.randomUUID(),
+          'X-Iskra-Accelerated-Vote': 'true',
+        },
+        body: JSON.stringify({ stage: 'EXISTENCE', choice: 'YES', location: location(nowValue, 1_000) }),
+      }, { FIREBASE_PROJECT_ID: 'voting-test-project' });
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: { code: 'TOO_FAR' } });
+      const state = await pool.query<{ votes: number; ledger: number }>(
+        `SELECT (SELECT count(*)::int FROM votes WHERE report_id = $1::uuid) AS votes,
+           (SELECT count(*)::int FROM reward_ledger WHERE report_id = $1::uuid) AS ledger`,
+        [report.id],
+      );
+      expect(state.rows[0]).toEqual({ votes: 0, ledger: 0 });
     }));
 });

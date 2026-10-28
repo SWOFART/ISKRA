@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { PostgresTransactionDatabase } from '../../../src/worker/db/client';
 import {
+  acceleratedDemoVoteIdentityLabel,
   DEMO_MARKER_KEY,
   DEMO_MARKER_OPERATION,
   DEMO_SEED_OBJECT_PREFIX,
@@ -11,6 +12,7 @@ import {
   PostgresDemoSeedService,
   stableUuid,
 } from '../../../src/worker/services/demo-seeds';
+import { PostgresReportVotingService } from '../../../src/worker/services/voting';
 import type { ReportMediaResolver } from '../../../src/worker/services/report-context';
 import { resetDemoSeed, type DemoObjectStore } from '../../../scripts/reset-demo';
 import { withTestDatabase } from '../auth/postgres';
@@ -141,6 +143,38 @@ describe('guarded demo reset', () => {
       expect(repeated.alreadyReset).toBe(true);
       expect(objectStore.deleted).toHaveLength(4);
       expect((await seed.seed()).alreadySeeded).toBe(false);
+    }));
+
+  it('resets only registered accelerated demo vote slots and their exact receipts', () =>
+    withTestDatabase(async (pool) => {
+      await installDemoSchema(pool);
+      await seedDemo(pool);
+      const reportId = await stableUuid('report/yellow-pending');
+      const voterId = DEMO_SEED_USER_IDS[4]!;
+      const identity = acceleratedDemoVoteIdentityLabel(reportId, voterId, 'EXISTENCE');
+      const voteId = await stableUuid('vote/accelerated/' + identity);
+      const key = await stableUuid('idempotency/accelerated/' + identity);
+      const now = Date.now();
+      const service = new PostgresReportVotingService(
+        new PostgresTransactionDatabase(pool), createMediaResolver(), () => now,
+      );
+      const accelerated = await service.vote(voterId, key, reportId, {
+        stage: 'EXISTENCE',
+        choice: 'YES',
+        location: { lat: 49.14, lng: 9.22, accuracyM: 10, observedAt: new Date(now).toISOString() },
+      }, { deterministicVoteId: voteId, demoProvenance: 'accelerated-sandbox' });
+      expect(accelerated.receipt).toMatchObject({ rpAwarded: 5, replayed: false });
+
+      const objectStore = {
+        deleted: [] as string[],
+        async deleteObjectKeys(keys: readonly string[]) { this.deleted.push(...keys); },
+      };
+      const reset = await resetDemoSeed(new PostgresTransactionDatabase(pool), objectStore);
+      expect(reset.deleted).toMatchObject({ votes: 11, ledger: 16, notifications: 3, idempotencyKeys: 16 });
+      expect(objectStore.deleted).toHaveLength(4);
+      expect((await pool.query<{ count: number }>(
+        'SELECT count(*)::int AS count FROM votes WHERE id = $1::uuid', [voteId],
+      )).rows[0]?.count).toBe(0);
     }));
 
   it('refuses to remove non-demo rows attached to a seeded report', () =>

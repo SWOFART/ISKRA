@@ -15,6 +15,7 @@ import {
   DEMO_SEED_OBJECT_PREFIX,
   DEMO_SEED_REQUEST_HASH,
   DEMO_SEED_USER_IDS,
+  acceleratedDemoVoteIdentityLabel,
   stableUuid,
 } from '../src/worker/services/demo-seeds';
 
@@ -67,14 +68,25 @@ interface SeedManifest {
     readonly id: string; readonly reportId: string; readonly voterUserId: string;
     readonly stage: 'EXISTENCE' | 'RESOLUTION';
   }[];
+  readonly acceleratedVotes: readonly {
+    readonly id: string; readonly reportId: string; readonly voterUserId: string;
+    readonly stage: 'EXISTENCE';
+  }[];
   readonly ledger: readonly {
     readonly userId: string; readonly kind: string; readonly delta: number; readonly sourceRef: string;
     readonly reportId: string; readonly voteId: string | null;
   }[];
-  readonly notifications: readonly { readonly reportId: string; readonly userId: string; readonly kind: string }[];
+  readonly notifications: readonly {
+    readonly reportId: string; readonly userId: string; readonly kind: string; readonly optional?: boolean;
+  }[];
   readonly idempotencyKeys: readonly {
     readonly userId: string; readonly operation: string; readonly key: string;
-    readonly resourceId: string; readonly responseStatus: number;
+    readonly resourceId: string; readonly responseStatus: number; readonly optional?: boolean;
+    readonly label?: string;
+  }[];
+  readonly acceleratedLedger: readonly {
+    readonly userId: string; readonly kind: string; readonly delta: number; readonly sourceRef: string;
+    readonly reportId: string; readonly voteId: string;
   }[];
 }
 
@@ -146,6 +158,25 @@ async function getSeedManifest(): Promise<SeedManifest> {
     })),
   ];
   const voteIds = await Promise.all(voteDefinitions.map(({ label }) => stableUuid('vote/' + label)));
+  const acceleratedVoteDefinitions = reportIds.slice(1).flatMap((reportId, index) => {
+    const authorId = users[index + 1]!;
+    const alreadyVoted = index === 0 ? new Set([users[12]!, users[13]!]) : new Set<string>();
+    return users.filter((voterUserId) => voterUserId !== authorId && !alreadyVoted.has(voterUserId))
+      .map((voterUserId) => ({
+        reportId,
+        voterUserId,
+        stage: 'EXISTENCE' as const,
+        identity: acceleratedDemoVoteIdentityLabel(reportId, voterUserId, 'EXISTENCE'),
+      }));
+  });
+  const acceleratedVoteIds = await Promise.all(acceleratedVoteDefinitions.map(({ identity }) =>
+    stableUuid('vote/accelerated/' + identity)));
+  const acceleratedVoteExpectations = acceleratedVoteDefinitions.map((definition, index) => ({
+    id: acceleratedVoteIds[index]!,
+    reportId: definition.reportId,
+    voterUserId: definition.voterUserId,
+    stage: definition.stage,
+  }));
   const photoIds = await Promise.all([
     stableUuid('photo/report/green-resolved/before'),
     stableUuid('photo/report/yellow-pending/before'),
@@ -206,7 +237,10 @@ async function getSeedManifest(): Promise<SeedManifest> {
     { userId: users[3]!, kind: 'CLEANUP', delta: POLICY.cleanerRp,
       sourceRef: 'cleanup-final:' + reportIds[0]!, reportId: reportIds[0]!, voteId: null },
   ];
-  const idempotencyKeys = [
+  const idempotencyKeys: Array<{
+    userId: string; operation: string; key: string; resourceId: string;
+    responseStatus: number; optional?: boolean; label?: string;
+  }> = [
     ...reports.map((report, index) => ({
       userId: report.authorUserId, operation: 'REPORT_PUBLICATION',
       key: '', resourceId: report.id, responseStatus: 201,
@@ -221,21 +255,39 @@ async function getSeedManifest(): Promise<SeedManifest> {
   for (const item of idempotencyKeys) {
     item.key = await stableUuid('idempotency/' + item.label);
   }
+  idempotencyKeys.push(...await Promise.all(acceleratedVoteDefinitions.map(async (vote, index) => ({
+    userId: vote.voterUserId,
+    operation: 'REPORT_VOTE',
+    key: await stableUuid('idempotency/accelerated/' + vote.identity),
+    resourceId: acceleratedVoteIds[index]!,
+    responseStatus: 200,
+    optional: true,
+  }))));
   idempotencyKeys.push({
     userId: users[0]!, operation: DEMO_MARKER_OPERATION, key: DEMO_MARKER_KEY,
     resourceId: reportIds[0]!, responseStatus: 200, label: 'seed-marker',
   });
-  const notifications = [
+  const notifications: SeedManifest['notifications'][number][] = [
     { reportId: reportIds[0]!, userId: users[0]!, kind: 'EXISTENCE_VERIFIED' },
     { reportId: reportIds[0]!, userId: users[0]!, kind: 'REPORT_RESOLVED' },
+    { reportId: reportIds[1]!, userId: users[1]!, kind: 'EXISTENCE_VERIFIED', optional: true },
+    { reportId: reportIds[2]!, userId: users[2]!, kind: 'EXISTENCE_VERIFIED', optional: true },
   ];
+  const acceleratedLedger = acceleratedVoteExpectations.map((vote) => ({
+    userId: vote.voterUserId,
+    kind: 'VOTE',
+    delta: POLICY.voteRp,
+    sourceRef: 'vote:' + vote.id,
+    reportId: vote.reportId,
+    voteId: vote.id,
+  }));
   return {
     reporterId: DEMO_SEED_USER_IDS[0]!,
     userIds: DEMO_SEED_USER_IDS,
     reportIds,
     analysisIds,
     cleanupIds,
-    voteIds,
+    voteIds: [...voteIds, ...acceleratedVoteIds],
     photoIds,
     objectKeys,
     reports,
@@ -244,7 +296,9 @@ async function getSeedManifest(): Promise<SeedManifest> {
     cleanups,
     photos,
     votes: voteExpectations,
+    acceleratedVotes: acceleratedVoteExpectations,
     ledger,
+    acceleratedLedger,
     notifications,
     idempotencyKeys,
   };
@@ -393,30 +447,59 @@ async function loadResetPlan(client: CheckedOutClient, manifest: SeedManifest): 
   'A foreign or unlisted photo is attached to the seed; refusing deletion.');
   const objectKeys = photos.rows.map((row) => row.object_key).sort();
   assertDemoObjectKeys(objectKeys, manifest.objectKeys);
-  requireThat(votes.rows.length === manifest.votes.length && votes.rows.every((row) => manifest.votes.some((item) =>
-    item.id === row.id && item.reportId === row.report_id && item.voterUserId === row.voter_user_id
-      && item.stage === row.stage) && row.choice === 'YES' && row.is_demo),
+  const matchesVote = (row: { id: string; report_id: string; voter_user_id: string; stage: string }, item: {
+    id: string; reportId: string; voterUserId: string; stage: string;
+  }) => item.id === row.id && item.reportId === row.report_id
+    && item.voterUserId === row.voter_user_id && item.stage === row.stage;
+  const matchesBaseVote = (row: (typeof votes.rows)[number]) => manifest.votes.some((item) =>
+    matchesVote(row, item) && row.choice === 'YES' && row.is_demo);
+  const matchesAcceleratedVote = (row: (typeof votes.rows)[number]) => manifest.acceleratedVotes.some((item) =>
+    matchesVote(row, item) && (row.choice === 'YES' || row.choice === 'NO') && row.is_demo);
+  const actualAcceleratedVotes = votes.rows.filter(matchesAcceleratedVote);
+  const actualAcceleratedVoteIds = new Set(actualAcceleratedVotes.map((row) => row.id));
+  requireThat(manifest.votes.every((item) => votes.rows.some((row) => matchesVote(row, item)
+    && row.choice === 'YES' && row.is_demo))
+    && votes.rows.every((row) => matchesBaseVote(row) || matchesAcceleratedVote(row)),
   'A non-demo or unknown vote is attached to the seed; refusing to delete foreign data.');
-  requireThat(ledger.rows.length === manifest.ledger.length && ledger.rows.every((row) => manifest.ledger.some((item) =>
+  const matchesLedger = (row: (typeof ledger.rows)[number], item: (typeof manifest.ledger)[number]) =>
     item.reportId === row.report_id && item.userId === row.user_id && item.kind === row.kind
-      && item.delta === row.delta && item.sourceRef === row.source_ref && item.voteId === row.vote_id) && row.is_demo),
+      && item.delta === row.delta && item.sourceRef === row.source_ref && item.voteId === row.vote_id;
+  const actualAcceleratedLedger = manifest.acceleratedLedger.filter((item) => actualAcceleratedVoteIds.has(item.voteId));
+  requireThat(manifest.ledger.every((item) => ledger.rows.some((row) => matchesLedger(row, item) && row.is_demo))
+    && actualAcceleratedVotes.every((vote) => actualAcceleratedLedger.some((item) => item.voteId === vote.id
+      && ledger.rows.some((row) => matchesLedger(row, item) && row.is_demo)))
+    && ledger.rows.every((row) => row.is_demo && (manifest.ledger.some((item) => matchesLedger(row, item))
+      || actualAcceleratedLedger.some((item) => matchesLedger(row, item)))),
   'A non-demo or unknown ledger entry is attached to the seed; refusing to delete foreign data.');
-  requireThat(notifications.rows.length === manifest.notifications.length && notifications.rows.every((row) => manifest.notifications.some((item) =>
-    item.reportId === row.report_id && item.userId === row.user_id && item.kind === row.kind)),
+  const matchesNotification = (row: (typeof notifications.rows)[number], item: (typeof manifest.notifications)[number]) =>
+    item.reportId === row.report_id && item.userId === row.user_id && item.kind === row.kind;
+  const requiredNotifications = manifest.notifications.filter((item) => !item.optional);
+  const expectedAcceleratedThresholdNotifications = manifest.notifications.filter((item) => item.optional
+    && votes.rows.filter((row) => row.report_id === item.reportId && row.stage === 'EXISTENCE' && row.choice === 'YES').length >= 3);
+  requireThat(requiredNotifications.every((item) => notifications.rows.some((row) => matchesNotification(row, item)))
+    && expectedAcceleratedThresholdNotifications.every((item) =>
+      notifications.rows.some((row) => matchesNotification(row, item)))
+    && notifications.rows.every((row) => requiredNotifications.some((item) => matchesNotification(row, item))
+      || expectedAcceleratedThresholdNotifications.some((item) => matchesNotification(row, item))),
     'A notification for a foreign user is attached to the seed; refusing deletion.');
-  requireThat(idempotency.rows.length === manifest.idempotencyKeys.length && idempotency.rows.every((row) => manifest.idempotencyKeys.some((item) =>
+  const matchesIdempotency = (row: (typeof idempotency.rows)[number], item: (typeof manifest.idempotencyKeys)[number]) =>
     item.userId === row.user_id && item.operation === row.operation && item.key === row.key
-      && item.resourceId === row.resource_id && item.responseStatus === row.response_status)),
+      && item.resourceId === row.resource_id && item.responseStatus === row.response_status;
+  const requiredIdempotencyKeys = manifest.idempotencyKeys.filter((item) => !item.optional);
+  const activeAcceleratedIdempotencyKeys = manifest.idempotencyKeys.filter((item) => item.optional
+    && actualAcceleratedVoteIds.has(item.resourceId));
+  requireThat(requiredIdempotencyKeys.every((item) => idempotency.rows.some((row) => matchesIdempotency(row, item)))
+    && actualAcceleratedVotes.every((vote) => activeAcceleratedIdempotencyKeys.some((item) => item.resourceId === vote.id
+      && idempotency.rows.some((row) => matchesIdempotency(row, item))))
+    && idempotency.rows.every((row) => requiredIdempotencyKeys.some((item) => matchesIdempotency(row, item))
+      || activeAcceleratedIdempotencyKeys.some((item) => matchesIdempotency(row, item))),
     'An unknown idempotency row is attached to the seed; refusing deletion.');
 
   const pending = pendingObjectKeys !== null;
   if (!noArtifacts) {
     const complete = users.rows.length === DEMO_SEED_USER_IDS.length
       && reports.rows.length === 3 && analyses.rows.length === 4 && leases.rows.length === 4
-      && cleanups.rows.length === 1 && photos.rows.length === manifest.photos.length
-      && votes.rows.length === manifest.votes.length && ledger.rows.length === manifest.ledger.length
-      && notifications.rows.length === manifest.notifications.length
-      && idempotency.rows.length === manifest.idempotencyKeys.length;
+      && cleanups.rows.length === 1 && photos.rows.length === manifest.photos.length;
     requireThat(complete, 'Demo seed data is partial or contains attached foreign rows; refusing reset.');
   }
 
@@ -576,7 +659,7 @@ export async function resetDemoSeed(
         [manifest.reportIds, manifest.userIds]),
       ledger: await deleteCount(client,
         'DELETE FROM reward_ledger WHERE source_ref = ANY($1::varchar[]) AND is_demo = true',
-        [manifest.ledger.map((item) => item.sourceRef)]),
+        [[...manifest.ledger, ...manifest.acceleratedLedger].map((item) => item.sourceRef)]),
       votes: await deleteCount(client,
         'DELETE FROM votes WHERE id = ANY($1::uuid[]) AND report_id = ANY($2::uuid[])',
         [manifest.voteIds, manifest.reportIds]),
