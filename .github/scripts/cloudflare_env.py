@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from urllib.parse import urlsplit
 
 
@@ -19,6 +20,10 @@ PRIVATE_KEYS = {
     "CLOUDFLARE_API_TOKEN", "GEMINI_API_KEY", "MEDIA_SIGNING_SECRET",
     "VITE_FIREBASE_API_KEY", "VITE_MAPTILER_KEY", "MIGRATION_DATABASE_URL",
 }
+SMOKE_MAX_ATTEMPTS = 7
+SMOKE_REQUEST_TIMEOUT_SECONDS = 10
+SMOKE_PROCESS_TIMEOUT_SECONDS = 12
+SMOKE_RETRY_DELAY_SECONDS = 3
 
 
 def validate_config(raw, template, environment, target):
@@ -159,13 +164,31 @@ def main():
         subprocess.run(command, cwd=project, env=process_env, check=True)
     elif mode == "smoke":
         url_name = "APP_URL" if target == "application" else "DEPLOYMENT_CHECK_URL"
-        url = values[url_name].rstrip("/") + "/api/health?release=" + os.environ["GITHUB_SHA"]
-        result = subprocess.check_output([
-            "curl", "--fail", "--silent", "--show-error", "--retry", "5",
-            "--retry-all-errors", "--retry-delay", "3", "--max-time", "15", url,
-        ], text=True)
-        health = json.loads(result)
-        validate_health(health, target, os.environ["GITHUB_SHA"])
+        release = os.environ["GITHUB_SHA"]
+        url = values[url_name].rstrip("/") + "/api/health?release=" + release
+        for attempt in range(SMOKE_MAX_ATTEMPTS):
+            health = None
+            try:
+                result = subprocess.check_output([
+                    "curl", "--fail", "--silent", "--show-error",
+                    "--max-time", str(SMOKE_REQUEST_TIMEOUT_SECONDS), url,
+                ], text=True, timeout=SMOKE_PROCESS_TIMEOUT_SECONDS)
+                health = json.loads(result)
+                if not isinstance(health, dict):
+                    raise ValueError("Health endpoint returned a non-object response")
+                validate_health(health, target, release)
+            except (subprocess.SubprocessError, json.JSONDecodeError) as error:
+                failure = error
+            except ValueError as error:
+                if isinstance(health, dict) and health.get("ok") is True and health.get("release") == release:
+                    raise
+                failure = error
+            else:
+                break
+            if attempt + 1 < SMOKE_MAX_ATTEMPTS:
+                time.sleep(SMOKE_RETRY_DELAY_SECONDS)
+        else:
+            raise ValueError("Release health check did not pass within the bounded retry window") from failure
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write(f"verified_url={values[url_name]}\n")
         print("Deployment release health check passed")
