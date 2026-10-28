@@ -6,6 +6,7 @@ export type WorkerEnv = {
     MEDIA_SIGNING_SECRET?: string;
     VERTEX_AUTH_JSON?: string;
     GEMINI_MODEL_ID?: string;
+    AI_RATE_PER_MINUTE?: string;
     HYPERDRIVE?: { readonly connectionString: string };
     RELEASE_SHA?: string;
   };

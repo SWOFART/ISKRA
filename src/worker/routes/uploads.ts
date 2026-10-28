@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { errors, jwtVerify, SignJWT } from 'jose';
 import { POLICY, UidSchema, UploadRequestSchema, UploadResultSchema, UploadTicketSchema, UuidSchema } from '../../shared/contracts';
 import { object } from '../../shared/schema';
-import { admitUpload, finalizeReportPhoto } from '../db/evidence-store';
+import { admitUpload, assertUploadRate, evidenceQuota, finalizeReportPhoto } from '../db/evidence-store';
 import type { TransactionDatabase } from '../db/client';
 import { requireAuth, verifyFirebaseToken } from '../middleware/auth';
 import type { WorkerEnv } from '../middleware/context';
@@ -71,6 +71,9 @@ export function createUploadRoutes({ database, verify }: {
 } = {}) {
   const routes = new Hono<WorkerEnv>();
   routes.post('/uploads', requireAuth(verify), async (c) => {
+    if (evidenceQuota(c.env.AI_RATE_PER_MINUTE, 10) === 0) {
+      throw new ApiError(503, 'UNAVAILABLE', 'Photo uploads are temporarily paused.', true);
+    }
     const request = await parseJsonBody(c, UploadRequestSchema);
     const key = signingKey(c.env.MEDIA_SIGNING_SECRET);
     if (!database) throw new ApiError(503, 'UNAVAILABLE', 'Upload storage is not integrated yet.', true);
@@ -101,11 +104,13 @@ export function createUploadRoutes({ database, verify }: {
     if (url.searchParams.size !== 1 || url.searchParams.getAll('ticket').length !== 1) {
       throw new ApiError(403, 'FORBIDDEN', 'Invalid upload ticket.');
     }
-    const reservation = await authorizeUpload(c.req.query('ticket'), c.get('identity')!.uid, c.req.param('id'),
+    const uid = c.get('identity')!.uid;
+    const uploadLimit = evidenceQuota(c.env.AI_RATE_PER_MINUTE, 10);
+    if (uploadLimit === 0) throw new ApiError(503, 'UNAVAILABLE', 'Photo uploads are temporarily paused.', true);
+    const reservation = await authorizeUpload(c.req.query('ticket'), uid, c.req.param('id'),
       new URL(c.req.url).origin, c.env.MEDIA_SIGNING_SECRET, database);
-    if (!c.env.PHOTOS || reservation.request.purpose !== 'REPORT') {
-      throw new ApiError(503, 'UNAVAILABLE', 'Photo storage or cleanup target binding is not integrated yet.', true);
-    }
+    await assertUploadRate(database, uid, uploadLimit);
+    if (!c.env.PHOTOS) throw new ApiError(503, 'UNAVAILABLE', 'Photo storage is not integrated yet.', true);
     const input = await readBoundedBody(c.req.raw);
     if (input.byteLength !== reservation.request.byteSize) {
       throw new ApiError(400, 'INVALID_INPUT', 'Photo size does not match its upload ticket.');
@@ -129,7 +134,8 @@ export function createUploadRoutes({ database, verify }: {
     if (!stored) throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', 'This photo ID has already been used.');
     await finalizeReportPhoto(database, {
       ...reservation, byteSize: bytes.byteLength, sha256, ordinal: reservation.request.ordinal,
-    });
+      purpose: reservation.request.purpose,
+    }, uploadLimit);
     return c.json(UploadResultSchema.parse({ photoId: reservation.photoId, state: 'UPLOADED' }), 201);
   });
   return routes;
