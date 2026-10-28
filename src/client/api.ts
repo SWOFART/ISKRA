@@ -1,6 +1,7 @@
 import {
   API_ERROR_POLICY,
   ErrorEnvelopeSchema,
+  NotificationListSchema,
   PublishRequestSchema,
   PublicReportDetailSchema,
   ReportListSchema,
@@ -216,6 +217,7 @@ async function parseP0Fixture(request: FixtureRequest): Promise<FixtureResponse>
   const { default: fixtures } = await import('../../tests/fixtures/contracts/p0.json');
   const path = new URL(request.path, 'https://iskra.invalid').pathname;
   const report = PublicReportDetailSchema.parse(fixtures.publicReport);
+  const notifications = NotificationListSchema.parse(fixtures.notifications);
   const reportSummary = ReportSummarySchema.parse({
     id: report.id,
     route: report.route,
@@ -245,7 +247,38 @@ async function parseP0Fixture(request: FixtureRequest): Promise<FixtureResponse>
     return { status: 200, body: fixtures.impact };
   }
   if (request.method === 'GET' && path === '/me/notifications') {
-    return { status: 200, body: fixtures.notifications };
+    const locale = new URL(request.path, 'https://iskra.invalid').searchParams.get('locale') === 'de' ? 'de' : 'en';
+    const messages = {
+      en: {
+        EXISTENCE_VERIFIED: 'Residents confirmed your report.',
+        REPORT_RESOLVED: 'Your city is cleaner thanks to you!',
+      },
+      de: {
+        EXISTENCE_VERIFIED: 'Die Bewohner haben deinen Bericht bestätigt.',
+        REPORT_RESOLVED: 'Dank dir ist deine Stadt sauberer!',
+      },
+    } as const;
+    return {
+      status: 200,
+      body: {
+        ...notifications,
+        items: notifications.items.map((item) => ({
+          ...item,
+          message: `DEMO: ${messages[locale][item.kind]}`,
+        })),
+      },
+    };
+  }
+  const notificationReadMatch = /^\/me\/notifications\/([0-9a-f-]+)$/i.exec(path);
+  if (request.method === 'PATCH' && notificationReadMatch) {
+    const notificationId = notificationReadMatch[1];
+    if (notifications.items.some((item) => item.id === notificationId)) {
+      return { status: 200, body: { id: notificationId, readAt: new Date().toISOString() } };
+    }
+    return { status: 404, body: { error: {
+      code: 'NOT_FOUND', message: 'Notification not found.',
+      requestId: '11111111-1111-4111-8111-000000000009', retryable: false,
+    } } };
   }
   if (request.method === 'POST' && path === '/reports') {
     return { status: 201, body: fixtures.publication };

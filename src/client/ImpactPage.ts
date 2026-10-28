@@ -1,15 +1,28 @@
-import { ImpactSchema, type Impact, type ReportSummary } from '../shared/contracts';
+import {
+  ImpactSchema, NotificationSchema, type Impact, type ReportSummary,
+} from '../shared/contracts';
 import { ApiClientError, createClientApi } from './api';
 import { errorMessageKey, formatDateTime, formatNumber, type MessageKey, type MessageValues } from './i18n';
 import type { SupportedLocale } from './designTokens';
 
 type ClientApi = ReturnType<typeof createClientApi>;
 type ImpactRole = Impact['items'][number]['roles'][number];
+export type ImpactNotification = ReturnType<typeof NotificationSchema.parse>;
+export type NotificationLoadState = 'loading' | 'ready' | 'error';
 type Translate = (key: MessageKey, values?: MessageValues) => string;
+
+export interface ImpactPageOptions {
+  notifications: readonly ImpactNotification[];
+  notificationState: NotificationLoadState;
+  onOpenNotificationReport: (reportId: string, notificationId: string, report?: ReportSummary) => void;
+  onMarkNotificationRead: (notificationId: string) => Promise<boolean>;
+  onRefreshNotifications: () => void;
+}
 
 export interface ImpactPageView {
   element: HTMLElement;
   readonly scrollTop: number;
+  setNotifications(items: readonly ImpactNotification[], state: NotificationLoadState): void;
   dispose(): void;
 }
 
@@ -67,6 +80,13 @@ export function renderImpactPage(
   locale: SupportedLocale,
   onOpenReport: (report: ReportSummary) => void,
   initialScrollTop = 0,
+  options: ImpactPageOptions = {
+    notifications: [],
+    notificationState: 'loading',
+    onOpenNotificationReport: () => undefined,
+    onMarkNotificationRead: async () => false,
+    onRefreshNotifications: () => undefined,
+  },
 ): ImpactPageView {
   const page = makeElement('section', 'impact-page');
   page.setAttribute('aria-labelledby', 'impact-heading');
@@ -105,6 +125,22 @@ export function renderImpactPage(
   const verificationMetrics = makeElement('div', 'impact-metric-grid');
   append(verificationSection, makeElement('h2', undefined, t('impact.verification')), verificationMetrics);
 
+  const notificationsSection = makeElement('section', 'impact-notifications-section');
+  const notificationsStatus = makeElement('p', 'impact-notifications-status', t('impact.notificationsLoading'));
+  notificationsStatus.setAttribute('role', 'status');
+  notificationsStatus.setAttribute('aria-live', 'polite');
+  const notificationsList = makeElement('ul', 'impact-notifications-list');
+  const emptyNotifications = makeElement('p', 'impact-empty-notifications', t('impact.notificationsEmpty'));
+  emptyNotifications.hidden = true;
+  const refreshNotificationsButton = makeButton(t('impact.notificationsRetry'), 'impact-notifications-retry');
+  refreshNotificationsButton.hidden = true;
+  append(notificationsSection,
+    makeElement('h2', undefined, t('impact.notifications')),
+    notificationsStatus,
+    notificationsList,
+    emptyNotifications,
+    refreshNotificationsButton);
+
   const historySection = makeElement('section', 'impact-history-section');
   historySection.hidden = true;
   const historyList = makeElement('ul', 'impact-history-list');
@@ -119,7 +155,7 @@ export function renderImpactPage(
     emptyHistory, retryButton, moreButton);
 
   append(page, heading, status, fixtureBanner, totals, reporterSection, cleanerSection,
-    verificationSection, historySection);
+    verificationSection, notificationsSection, historySection);
 
   let active = true;
   let generation = 0;
@@ -128,6 +164,69 @@ export function renderImpactPage(
   let nextCursor: string | null = null;
   let failedCursor: string | null = null;
   let restoreScrollPending = initialScrollTop > 0;
+  let notificationItems: readonly ImpactNotification[] = options.notifications;
+  let notificationState = options.notificationState;
+
+  function setNotificationStatus(text: string): void {
+    if (notificationsStatus.textContent !== text) notificationsStatus.textContent = text;
+  }
+
+  function renderNotifications(): void {
+    notificationsList.replaceChildren();
+    refreshNotificationsButton.hidden = notificationState !== 'error';
+    refreshNotificationsButton.disabled = false;
+    emptyNotifications.hidden = notificationState !== 'ready' || notificationItems.length > 0;
+    if (notificationState === 'loading') {
+      setNotificationStatus(t('impact.notificationsLoading'));
+    } else if (notificationState === 'error') {
+      setNotificationStatus(t('impact.notificationsUnavailable'));
+    } else {
+      const unreadCount = notificationItems.filter((item) => item.readAt === null).length;
+      setNotificationStatus(notificationItems.length === 0
+        ? ''
+        : unreadCount === 0
+          ? t('impact.notificationsAllRead')
+          : t('impact.notificationsUnreadCount', { count: unreadCount }));
+    }
+
+    for (const notification of notificationItems) {
+      const item = makeElement('li', `impact-notification-item${notification.readAt === null
+        ? ' impact-notification-item--unread' : ''}`);
+      item.setAttribute('data-notification-id', notification.id);
+      const message = makeElement('p', 'impact-notification-message', notification.message);
+      const readState = makeElement('span', 'impact-notification-read-state', t(
+        notification.readAt === null ? 'impact.notificationUnread' : 'impact.notificationRead',
+      ));
+      const actions = makeElement('div', 'impact-notification-actions');
+      const openReport = makeButton(t('impact.openNotificationReport'), 'impact-notification-open-report');
+      openReport.addEventListener('click', () => {
+        const report = currentData?.items.find(({ report: summary }) => summary.id === notification.reportId)?.report;
+        options.onOpenNotificationReport(notification.reportId, notification.id, report);
+      });
+      actions.appendChild(openReport);
+
+      if (notification.readAt === null) {
+        const markRead = makeButton(t('impact.markNotificationRead'), 'impact-notification-mark-read');
+        markRead.setAttribute('data-notification-id', notification.id);
+        const actionStatus = makeElement('span', 'impact-notification-action-status');
+        actionStatus.setAttribute('role', 'status');
+        markRead.addEventListener('click', () => {
+          markRead.disabled = true;
+          actionStatus.textContent = '';
+          void options.onMarkNotificationRead(notification.id).then((marked) => {
+            if (active && !marked) {
+              markRead.disabled = false;
+              actionStatus.textContent = t('impact.notificationReadFailed');
+            }
+          });
+        });
+        append(actions, markRead, actionStatus);
+      }
+
+      append(item, message, readState, actions);
+      notificationsList.appendChild(item);
+    }
+  }
 
   function renderMetrics(data: Impact): void {
     totalMetrics.replaceChildren(
@@ -268,11 +367,18 @@ export function renderImpactPage(
 
   retryButton.addEventListener('click', () => { void load(failedCursor); });
   moreButton.addEventListener('click', () => { if (nextCursor) void load(nextCursor); });
+  refreshNotificationsButton.addEventListener('click', () => options.onRefreshNotifications());
+  renderNotifications();
   void load();
 
   return {
     element: page,
     get scrollTop() { return page.scrollTop; },
+    setNotifications(items, state) {
+      notificationItems = items;
+      notificationState = state;
+      if (active) renderNotifications();
+    },
     dispose() {
       active = false;
       generation += 1;

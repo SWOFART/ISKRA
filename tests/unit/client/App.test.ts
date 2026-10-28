@@ -108,14 +108,29 @@ function createHarness(
   focusedElement = null;
   const location = { pathname };
   const windowListeners = new Map<string, ((event: unknown) => void)[]>();
+  const documentListeners = new Map<string, ((event: unknown) => void)[]>();
+  const timeoutCallbacks = new Map<number, () => void>();
+  let nextTimeoutId = 0;
   const accessAttempts: string[] = [];
   const storage = new Map<string, string>();
   const fakeDocument = {
     createElement: (tagName: string) => new TestElement(tagName),
     documentElement: { lang: '' },
+    visibilityState: 'visible',
+    addEventListener: (name: string, listener: (event: unknown) => void) => {
+      const listeners = documentListeners.get(name) ?? [];
+      listeners.push(listener);
+      documentListeners.set(name, listeners);
+    },
   };
   const fakeWindow = {
     location,
+    setTimeout: (callback: () => void) => {
+      const id = ++nextTimeoutId;
+      timeoutCallbacks.set(id, callback);
+      return id;
+    },
+    clearTimeout: (id: number) => timeoutCallbacks.delete(id),
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => storage.set(key, value),
@@ -149,6 +164,15 @@ function createHarness(
     storage,
     dispatchWindowEvent(name: string) {
       for (const listener of windowListeners.get(name) ?? []) listener({});
+    },
+    dispatchDocumentEvent(name: string) {
+      for (const listener of documentListeners.get(name) ?? []) listener({});
+    },
+    fireNotificationTimer() {
+      const [id, callback] = timeoutCallbacks.entries().next().value ?? [];
+      if (id === undefined || callback === undefined) return;
+      timeoutCallbacks.delete(id);
+      callback();
     },
   };
 }
@@ -511,6 +535,8 @@ describe('client shell', () => {
     const storage = new Map<string, string>([['iskra.locale', 'de']]);
     vi.stubGlobal('window', {
       location: { pathname: '/impact' },
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
       localStorage: { getItem: (key: string) => storage.get(key) ?? null },
       history: { pushState: () => undefined },
       addEventListener: () => undefined,
@@ -521,6 +547,8 @@ describe('client shell', () => {
     vi.stubGlobal('document', {
       documentElement,
       createElement: (tagName: string) => new TestElement(tagName),
+      visibilityState: 'visible',
+      addEventListener: () => undefined,
     });
 
     const root = App() as unknown as TestElement;
