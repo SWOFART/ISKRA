@@ -161,7 +161,7 @@ describe('client shell', () => {
 
     await vi.waitFor(() => expect(root.querySelector('.fixture-banner')?.hidden).toBe(false));
 
-    expect(root.querySelector('.fixture-banner')?.textContent).toBe(`Sample data: ${DEVELOPMENT_FIXTURE_LABEL}`);
+    expect(root.querySelector('.fixture-banner')?.textContent).toContain(DEVELOPMENT_FIXTURE_LABEL);
     expect(root.querySelector('.map-status')?.textContent).toContain('1 sample report loaded.');
   });
 

@@ -1,9 +1,17 @@
 import { clientDesign, type SupportedLocale } from './designTokens';
-import { ApiClientError, createClientApi } from './api';
+import { ApiClientError, createClientApi, DEVELOPMENT_FIXTURE_LABEL } from './api';
 import { ReportListSchema } from '../shared/contracts';
 import type { FirebaseSession } from './auth';
 import { renderAuthPanel } from './auth-panel';
-import { errorMessageKey, storeLocale, translate, type MessageKey, type MessageValues } from './i18n';
+import {
+  errorMessageKey,
+  localeFromBrowserLanguages,
+  readStoredLocale,
+  storeLocale,
+  translate,
+  type MessageKey,
+  type MessageValues,
+} from './i18n';
 
 type ClientApi = ReturnType<typeof createClientApi>;
 type Translate = (key: MessageKey, values?: MessageValues) => string;
@@ -48,7 +56,12 @@ function appendElements(parent: HTMLElement, ...elements: HTMLElement[]): void {
   for (const element of elements) parent.appendChild(element);
 }
 
-function renderMapPanel(onReport: () => void, api: ClientApi, t: Translate): HTMLElement {
+function renderMapPanel(
+  onReport: () => void,
+  api: ClientApi,
+  t: Translate,
+  locale: SupportedLocale,
+): HTMLElement {
   const page = makeElement('section', 'map-page');
   page.setAttribute('aria-label', t('map.region'));
 
@@ -209,7 +222,10 @@ function renderDeferredPanel(
 
 export function App(
   api: ClientApi = createClientApi({ mode: import.meta.env.DEV ? 'fixture' : 'live' }),
-  initialLocale: SupportedLocale = 'en',
+  initialLocale: SupportedLocale = readStoredLocale()
+    ?? localeFromBrowserLanguages(typeof navigator === 'undefined'
+      ? []
+      : navigator.languages ?? [navigator.language]),
   session?: FirebaseSession,
 ): HTMLElement {
   let locale = initialLocale;
@@ -390,7 +406,7 @@ export function App(
           notice.textContent = t('map.cameraNotConnected');
           notice.hidden = false;
         }
-      }, api, t);
+      }, api, t, locale);
       appendElements(panel, map);
     } else if (selectedTab === 'impact') {
       appendElements(panel,

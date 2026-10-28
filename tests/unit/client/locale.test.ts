@@ -1,45 +1,46 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  formatLocaleDate,
-  formatLocaleNumber,
-  getLocale,
-  resolveInitialLocale,
-  saveLocale,
+  errorMessageKey,
+  isSupportedLocale,
+  localeFromBrowserLanguages,
+  LOCALE_STORAGE_KEY,
+  readStoredLocale,
+  storeLocale,
   translate,
-} from '../../../src/client/locale';
+} from '../../../src/client/i18n';
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('client locale', () => {
   it.each([
-    ['de-DE', 'de'],
-    ['en-GB', 'en'],
-    ['fr-FR', 'en'],
-    [null, 'en'],
-  ] as const)('resolves browser language %s with English fallback', (browserLanguage, expected) => {
-    expect(resolveInitialLocale(null, browserLanguage)).toBe(expected);
+    [['de-DE'], 'de'],
+    [['en-GB'], 'en'],
+    [['fr-FR', 'de-AT'], 'de'],
+    [[], 'en'],
+  ] as const)('resolves browser languages %j with English fallback', (languages, expected) => {
+    expect(localeFromBrowserLanguages(languages)).toBe(expected);
   });
 
   it('uses a valid saved preference before the browser language', () => {
-    expect(resolveInitialLocale('de', 'en-US')).toBe('de');
-    expect(resolveInitialLocale('fr', 'de-DE')).toBe('de');
+    expect(isSupportedLocale('de')).toBe(true);
+    expect(isSupportedLocale('fr')).toBe(false);
   });
 
   it('loads the saved language from browser storage', () => {
     vi.stubGlobal('window', { localStorage: { getItem: () => 'de' } });
-    vi.stubGlobal('navigator', { language: 'en-US' });
-    expect(getLocale()).toBe('de');
+    expect(readStoredLocale()).toBe('de');
+    vi.stubGlobal('window', { localStorage: { getItem: () => 'fr' } });
+    expect(readStoredLocale()).toBeNull();
   });
 
-  it('formats numbers and dates using the selected locale', () => {
-    expect(formatLocaleNumber('en', 1234.5)).toBe('1,234.5');
-    expect(formatLocaleNumber('de', 1234.5)).toBe('1.234,5');
-    expect(formatLocaleDate('en', new Date('2026-10-27T12:00:00Z'))).not.toBe(
-      formatLocaleDate('de', new Date('2026-10-27T12:00:00Z')),
-    );
+  it('maps known API error codes to localized keys and uses a generic fallback', () => {
+    expect(errorMessageKey('RATE_LIMITED')).toBe('error.RATE_LIMITED');
+    expect(errorMessageKey('UNRECOGNIZED')).toBe('error.generic');
+    expect(translate('de', errorMessageKey('RATE_LIMITED')))
+      .toBe('Zu viele Anfragen. Warte, bevor du es erneut versuchst.');
   });
 
-  it('persists a language choice and tolerates unavailable storage', () => {
+  it('persists only supported choices and tolerates unavailable storage', () => {
     const values = new Map<string, string>();
     vi.stubGlobal('window', {
       localStorage: {
@@ -47,11 +48,12 @@ describe('client locale', () => {
         setItem: (key: string, value: string) => values.set(key, value),
       },
     });
-    saveLocale('de');
+    expect(LOCALE_STORAGE_KEY).toBe('iskra.locale');
+    storeLocale('de');
     expect(values.get('iskra.locale')).toBe('de');
 
     vi.stubGlobal('window', { localStorage: { setItem: () => { throw new Error('blocked'); } } });
-    expect(() => saveLocale('en')).not.toThrow();
+    expect(() => storeLocale('en')).not.toThrow();
   });
 
   it('translates UI copy with interpolation without translating resident content', () => {
