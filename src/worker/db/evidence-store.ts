@@ -5,6 +5,30 @@ import { reportPinAdmission } from '../../shared/location';
 import { executeIdempotently, IdempotencyConflictError, type CheckedOutClient, type TransactionDatabase } from './client';
 import { ApiError } from '../middleware/errors';
 
+/** ponytail: one UID/minute cap from AI_RATE_PER_MINUTE. 0 pauses AI and uploads. Per-IP caps need a new table. */
+export function evidenceQuota(raw: string | undefined, fallback: number) {
+  if (raw == null || raw === '') return fallback;
+  if (!/^\d{1,2}$/.test(raw)) throw new ApiError(503, 'UNAVAILABLE', 'Evidence quota is not configured.', true);
+  return Number(raw);
+}
+
+async function rejectUploadBurst(client: CheckedOutClient, uid: string, limit: number) {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended('iskra:upload:' || $1::text, 0))", [uid]);
+  const recent = await client.query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM report_photos
+     WHERE owner_user_id = $1 AND created_at > clock_timestamp() - interval '1 minute'`, [uid],
+  );
+  if (recent.rows[0].count >= limit) {
+    throw new ApiError(429, 'RATE_LIMITED', 'Wait a minute before uploading another photo.');
+  }
+}
+
+/** Checked again inside finalization. A concurrent overflow can still leave one unusable object. */
+export async function assertUploadRate(database: TransactionDatabase, uid: string, limit: number) {
+  if (limit === 0) throw new ApiError(503, 'UNAVAILABLE', 'Photo uploads are temporarily paused.', true);
+  await database.withTransaction((client) => rejectUploadBurst(client, uid, limit));
+}
+
 /** Read admission only: a ticket does not claim a cleanup or create usable evidence. */
 export async function admitUpload(
   database: TransactionDatabase,
@@ -40,8 +64,10 @@ export async function admitUpload(
 export async function finalizeReportPhoto(database: TransactionDatabase, photo: {
   uid: string; photoId: string; objectKey: string; byteSize: number; sha256: string;
   ordinal: number; expiresAt: string;
-}) {
+}, limit = 10) {
+  if (limit === 0) throw new ApiError(503, 'UNAVAILABLE', 'Photo uploads are temporarily paused.', true);
   await database.withTransaction(async (client) => {
+    await rejectUploadBurst(client, photo.uid, limit);
     const result = await client.query(
       `INSERT INTO report_photos (id, owner_user_id, purpose, state, object_key, ordinal,
          mime_type, byte_size, sha256, upload_expires_at)
@@ -137,7 +163,9 @@ async function reportInputPhotos(client: CheckedOutClient, uid: string, ids: str
 /** Claims/reuses SQL work only. No model or object transfer is allowed inside this transaction. */
 export async function beginReportAnalysis(
   database: TransactionDatabase, uid: string, key: string, input: ReportInput, modelId: string, now = Date.now,
+  limit = 5,
 ) {
+  if (limit === 0) throw new ApiError(503, 'UNAVAILABLE', 'Analysis is temporarily paused.', true);
   const account = await database.withTransaction((client) => client.query('SELECT id FROM users WHERE id = $1', [uid]));
   if (!account.rows.length) throw new ApiError(403, 'NOT_ELIGIBLE', 'Complete account setup before analysis.');
   try {
@@ -177,7 +205,7 @@ export async function beginReportAnalysis(
           `SELECT count(*)::int AS count FROM ai_analyses
            WHERE owner_user_id = $1 AND created_at > clock_timestamp() - interval '1 minute'`, [uid],
         );
-        if (count.rows[0].count >= 5) throw new ApiError(429, 'RATE_LIMITED', 'Wait a minute before starting another analysis.');
+        if (count.rows[0].count >= limit) throw new ApiError(429, 'RATE_LIMITED', 'Wait a minute before starting another analysis.');
         const rejection = reportPinAdmission(input.measuredLocation, input.pin, now());
         if (rejection) throw new ApiError(API_ERROR_POLICY[rejection].httpStatus, rejection, 'Acquire a fresh accurate location and keep the pin within 3 metres.');
         analysisId = crypto.randomUUID();

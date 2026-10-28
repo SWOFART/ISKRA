@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { ReportAnalysisRequestSchema, ReportAnalysisSchema, UuidSchema } from '../../shared/contracts';
 import type { TransactionDatabase } from '../db/client';
-import { beginReportAnalysis, finishReportAnalysis, readReportAnalysis, type AnalysisPhoto } from '../db/evidence-store';
+import { beginReportAnalysis, evidenceQuota, finishReportAnalysis, readReportAnalysis, type AnalysisPhoto } from '../db/evidence-store';
 import { requireAuth, verifyFirebaseToken } from '../middleware/auth';
 import type { WorkerEnv } from '../middleware/context';
 import { ApiError } from '../middleware/errors';
@@ -36,6 +36,8 @@ export function createAnalysisRoutes({ database, verify, now = Date.now, fetcher
 } = {}) {
   const routes = new Hono<WorkerEnv>();
   routes.post('/ai/analyze-report', requireAuth(verify), async (c) => {
+    const limit = evidenceQuota(c.env.AI_RATE_PER_MINUTE, 5);
+    if (limit === 0) throw new ApiError(503, 'UNAVAILABLE', 'Analysis is temporarily paused.', true);
     const key = UuidSchema.safeParse(c.req.header('Idempotency-Key'));
     if (!key.success) throw new ApiError(400, 'INVALID_INPUT', 'Provide a valid analysis operation key.');
     const parsed = await parseJsonBody(c, ReportAnalysisRequestSchema);
@@ -44,7 +46,7 @@ export function createAnalysisRoutes({ database, verify, now = Date.now, fetcher
     const config = { authJson: c.env.VERTEX_AUTH_JSON ?? '', modelId: c.env.GEMINI_MODEL_ID ?? '' };
     validateGeminiConfig(config);
     const uid = c.get('identity')!.uid;
-    const work = await beginReportAnalysis(database, uid, key.data.toLowerCase(), input, config.modelId, now);
+    const work = await beginReportAnalysis(database, uid, key.data.toLowerCase(), input, config.modelId, now, limit);
     if (work.started) {
       try {
         const photos = await loadReportBytes(c.env.PHOTOS, work.photos);
