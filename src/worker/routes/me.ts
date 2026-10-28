@@ -5,6 +5,7 @@ import type { WorkerEnv } from '../middleware/context';
 import { ApiError } from '../middleware/errors';
 import { requireAuth, verifyFirebaseToken } from '../middleware/auth';
 import { parseJsonBody } from '../middleware/validation';
+import { PostgresImpactService } from '../services/impact';
 
 interface UserRow extends Record<string, unknown> {
   id: string;
@@ -21,7 +22,20 @@ export interface MeRouteDependencies {
 
 /** B-owned authenticated account routes; the database and verifier are provided by runtime integration. */
 export function createMeRoutes({ database, verify = verifyFirebaseToken }: MeRouteDependencies) {
-  return new Hono<WorkerEnv>().post('/me/bootstrap', requireAuth(verify), async (c) => {
+  const impact = new PostgresImpactService(database);
+  return new Hono<WorkerEnv>()
+    .get('/me/impact', requireAuth(verify), async (c) => {
+      const actorId = c.get('identity')?.uid;
+      if (!actorId) throw new ApiError(401, 'UNAUTHENTICATED', 'Sign in to continue.');
+      const params = new URL(c.req.url).searchParams;
+      if ([...params.keys()].some((key) => key !== 'cursor') || params.getAll('cursor').length > 1) {
+        throw new ApiError(400, 'INVALID_INPUT', 'The Impact query is invalid.');
+      }
+      const result = await impact.get(actorId, params.get('cursor'));
+      c.header('Cache-Control', 'no-store');
+      return c.json(result, 200);
+    })
+    .post('/me/bootstrap', requireAuth(verify), async (c) => {
     await parseJsonBody(c, BootstrapRequestSchema);
     const actorId = c.get('identity')?.uid;
     if (!actorId) throw new ApiError(401, 'UNAUTHENTICATED', 'Sign in to continue.');
@@ -50,5 +64,5 @@ export function createMeRoutes({ database, verify = verifyFirebaseToken }: MeRou
 
     c.header('Cache-Control', 'no-store');
     return c.json(receipt, 200);
-  });
+    });
 }
