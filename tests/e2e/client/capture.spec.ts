@@ -1,12 +1,23 @@
 import { expect, test } from '../fixtures';
 
-type CaptureTestState = { mode: 'allow' | 'denied'; unsupported: boolean; stopped: number; revoked: number };
+type CaptureTestState = {
+  mode: 'allow' | 'denied';
+  unsupported: boolean;
+  stopped: number;
+  revoked: number;
+  locationRequests: number;
+  locationMode: 'allow' | 'denied';
+  locationOptions: { enableHighAccuracy?: boolean; maximumAge?: number; timeout?: number } | null;
+};
 const loginEmail = 'capture@example.test';
 const loginPassword = 'capture-test-password';
 
 async function enableCameraHarness(page: import('@playwright/test').Page): Promise<void> {
   await page.addInitScript(() => {
-    const state: CaptureTestState = { mode: 'allow', unsupported: false, stopped: 0, revoked: 0 };
+    const state: CaptureTestState = {
+      mode: 'allow', unsupported: false, stopped: 0, revoked: 0,
+      locationRequests: 0, locationMode: 'allow', locationOptions: null,
+    };
     const mediaDevices = {
       async getUserMedia() {
         if (state.mode === 'denied') throw new DOMException('Permission denied', 'NotAllowedError');
@@ -21,6 +32,32 @@ async function enableCameraHarness(page: import('@playwright/test').Page): Promi
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
       get: () => state.unsupported ? undefined : mediaDevices,
+    });
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: {
+        getCurrentPosition(success: PositionCallback, error: PositionErrorCallback, options?: PositionOptions) {
+          state.locationRequests += 1;
+          state.locationOptions = options ? {
+            enableHighAccuracy: options.enableHighAccuracy,
+            maximumAge: options.maximumAge,
+            timeout: options.timeout,
+          } : null;
+          if (state.locationMode === 'denied') {
+            error({ code: 1, message: 'Permission denied', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+            return;
+          }
+          const timestamp = Date.now();
+          success({
+            coords: {
+              latitude: 49.14, longitude: 9.22, accuracy: 12, altitude: null,
+              altitudeAccuracy: null, heading: null, speed: null, toJSON: () => ({}),
+            },
+            timestamp,
+            toJSON: () => ({}),
+          });
+        },
+      },
     });
     HTMLVideoElement.prototype.play = () => Promise.resolve();
     Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', { configurable: true, get: () => 640 });
@@ -79,6 +116,7 @@ async function captureState(page: import('@playwright/test').Page): Promise<Capt
 test('captures at most five camera photos, supports retake and explicit discard without a draft', async ({ page }) => {
   await enableCameraHarness(page);
   await signIn(page);
+  expect((await captureState(page)).locationRequests).toBe(0);
   await page.locator('.report-button').click();
 
   const dialog = page.getByRole('dialog', { name: 'Capture report photos' });
@@ -98,6 +136,7 @@ test('captures at most five camera photos, supports retake and explicit discard 
   await expect(dialog.locator('.photo-capture-item')).toHaveCount(5);
   await expect(dialog.locator('.photo-capture-shutter')).toBeDisabled();
   await expect(dialog.getByRole('button', { name: 'Continue with photos' })).toBeEnabled();
+  expect((await captureState(page)).locationRequests).toBe(0);
 
   await dialog.getByRole('button', { name: 'Delete photo 5', exact: true }).click();
   await expect(dialog.locator('.photo-capture-count')).toHaveText('4 of 5 photos');
@@ -112,9 +151,25 @@ test('captures at most five camera photos, supports retake and explicit discard 
   const handoff = page.getByRole('dialog', { name: 'Photos ready for the next step' });
   await expect(dialog).toBeHidden();
   await expect(handoff).toBeVisible();
-  await expect(handoff).toContainText('5 photos were handed to this report session and remain in memory.');
+  await expect(handoff).toContainText('5 photos were handed to this session and remain in memory.');
   await expect(handoff.locator('.photo-capture-preview')).toHaveCount(5);
+  expect((await captureState(page)).locationRequests).toBe(0);
   await expect.poll(async () => (await captureState(page)).stopped).toBe(1);
+
+  await page.evaluate(() => {
+    (window as unknown as { __captureTestState: CaptureTestState }).__captureTestState.locationMode = 'denied';
+  });
+  await handoff.getByRole('button', { name: 'Get fresh location' }).click();
+  await expect(handoff).toContainText('Location access was blocked.');
+  expect((await captureState(page)).locationRequests).toBe(1);
+  await page.evaluate(() => {
+    (window as unknown as { __captureTestState: CaptureTestState }).__captureTestState.locationMode = 'allow';
+  });
+  await handoff.getByRole('button', { name: 'Try location again' }).click();
+  await expect(handoff).toContainText('Fresh location captured (±12 m).');
+  const firstLocationState = await captureState(page);
+  expect(firstLocationState.locationRequests).toBe(2);
+  expect(firstLocationState.locationOptions).toMatchObject({ enableHighAccuracy: true, maximumAge: 0 });
 
   await handoff.getByRole('button', { name: 'Edit photos' }).click();
   await expect(dialog).toBeVisible();
@@ -132,6 +187,10 @@ test('captures at most five camera photos, supports retake and explicit discard 
   await dialog.getByRole('button', { name: 'Continue with photos' }).click();
   await expect(handoff).toBeVisible();
   await expect(handoff.locator('.photo-capture-preview')).toHaveCount(1);
+  expect((await captureState(page)).locationRequests).toBe(2);
+  await handoff.getByRole('button', { name: 'Get fresh location' }).click();
+  await expect(handoff).toContainText('Fresh location captured (±12 m).');
+  expect((await captureState(page)).locationRequests).toBe(3);
   await expect.poll(async () => (await captureState(page)).stopped).toBe(2);
 
   await handoff.getByRole('button', { name: 'Discard photos and exit' }).click();
