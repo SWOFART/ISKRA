@@ -32,8 +32,10 @@ All shapes below use the exported schemas in [contracts.ts](contracts.ts). The o
 | C | `POST /ai/analyze-cleanup` | Auth + key; `CleanupAnalysisRequest` | `200 READY` or `202 RUNNING` using `CleanupAnalysis` |
 | B | `POST /reports/:id/cleanups` | Auth + key; `CleanupRequest` | `201 CleanupReceipt`; 40 RP is provisional only |
 | B | `GET /me/impact` | Auth; owner-only | `200 Impact` |
-| B | `GET /me/notifications` | Auth; owner-only | `200 NotificationList` |
+| B | `GET /me/notifications` | Auth; owner-only; optional `locale=en|de` (default `en`) and cursor | `200 NotificationList`; maximum 100 items |
 | B | `PATCH /me/notifications/:id` | Auth; `{read:true}` | `200 NotificationReadReceipt`; idempotent |
+
+Notification text is projected from its stored kind in the requested interface locale; the database message is not rewritten when the resident switches languages. The cursor orders by immutable creation time and UUID, and a read acknowledgment only updates the authenticated resident's notification. Missing and other residents' notification IDs return the same `404 NOT_FOUND` response.
 
 Conditional Yellow, Red and rewards routes are outside this P0 API candidate. They must not use the Green cleanup route to bypass their own verification rules.
 
