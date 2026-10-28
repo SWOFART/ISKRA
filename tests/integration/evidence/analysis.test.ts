@@ -4,7 +4,8 @@ import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ReportAnalysisSchema } from '../../../src/shared/contracts';
 import { PostgresTransactionDatabase, type TransactionDatabase } from '../../../src/worker/db/client';
-import { beginReportAnalysis, finishReportAnalysis, readReportAnalysis, removeExpiredPhotos } from '../../../src/worker/db/evidence-store';
+import { beginCleanupAnalysis, beginReportAnalysis, finishReportAnalysis, readReportAnalysis, removeExpiredPhotos } from '../../../src/worker/db/evidence-store';
+import { PostgresCleanupSubmissionService } from '../../../src/worker/services/cleanup';
 import { createApp } from '../../../src/worker/index';
 import { PostgresReportPublicationService } from '../../../src/worker/services/publication';
 import { createReportMediaResolver } from '../../../src/worker/services/media';
@@ -327,5 +328,65 @@ describe('report-analysis HTTP orchestration (real SQL; explicit R2/provider dou
         expect(await response.json()).toMatchObject({ status: 'FAILED' });
         expect(api.fetcher).not.toHaveBeenCalled();
       } finally { vi.useRealTimers(); }
+    }));
+});
+
+describe('cleanup analysis binding consumed by submission', () => {
+  it('stores a CLEANUP analysis on the verified report and lets submission attach the after photo', () =>
+    withTestDatabase(async (pool) => {
+      await pool.query(migration);
+      await pool.query("INSERT INTO users (id, nickname) VALUES ('resident', 'Resident')");
+      const reportAnalysis = await pool.query<{ id: string }>(
+        `INSERT INTO ai_analyses (owner_user_id, kind, status, input_hash, result, expires_at)
+         VALUES ('resident', 'REPORT', 'READY', 'report-binding', '{"decision":"ACCEPT"}'::jsonb, now() + interval '15 minutes')
+         RETURNING id`,
+      );
+      const report = await pool.query<{ id: string }>(
+        `INSERT INTO reports (author_user_id, route, status, description, lat, lng, measured_lat, measured_lng,
+           accuracy_m, captured_location_at, analysis_id, existence_yes_count, existence_verified_at, last_existence_confirmed_at)
+         VALUES ('resident', 'GREEN', 'VERIFIED', 'Litter beside a path.', 49.14, 9.22, 49.14, 9.22,
+           10, now(), $1, 3, now(), now()) RETURNING id`, [reportAnalysis.rows[0].id],
+      );
+      const before = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO report_photos (id, owner_user_id, report_id, purpose, state, object_key, ordinal, mime_type,
+           byte_size, sha256, upload_expires_at)
+         VALUES ($1, 'resident', $2, 'REPORT', 'ATTACHED', $3, 0, 'image/jpeg', 128, $4, now() + interval '5 minutes')`,
+        [before, report.rows[0].id, 'photos/' + before, 'a'.repeat(64)],
+      );
+      const after = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO report_photos (id, owner_user_id, purpose, state, object_key, ordinal, mime_type,
+           byte_size, sha256, upload_expires_at)
+         VALUES ($1, 'resident', 'CLEANUP', 'UPLOADED', $2, 0, 'image/jpeg', 128, $3, now() + interval '5 minutes')`,
+        [after, 'photos/' + after, 'b'.repeat(64)],
+      );
+      const database = new PostgresTransactionDatabase(pool);
+      const observedAt = new Date().toISOString();
+      const work = await beginCleanupAnalysis(database, 'resident', crypto.randomUUID(), {
+        reportId: report.rows[0].id, photoIds: [after], outputLocale: 'en',
+        location: { lat: 49.14, lng: 9.22, accuracyM: 10, observedAt },
+      }, model);
+      const cleanupAssessment = {
+        decision: 'ACCEPT' as const, sameScene: 'LIKELY' as const, appearsClean: true as const,
+        hazardRemaining: false as const, reason: 'The litter is gone.', confidence: 0.9,
+      };
+      expect(await finishReportAnalysis(database, 'resident', work.analysisId, cleanupAssessment, 'CLEANUP')).toBe(true);
+      const stored = await pool.query<{ kind: string; report_id: string }>(
+        'SELECT kind, report_id FROM ai_analyses WHERE id = $1', [work.analysisId],
+      );
+      expect(stored.rows[0]).toEqual({ kind: 'CLEANUP', report_id: report.rows[0].id });
+      const service = new PostgresCleanupSubmissionService(database, {
+        async resolveAttachedPhotos(photos) {
+          const expiresAt = new Date(Date.now() + 60_000).toISOString();
+          return photos.map((photo) => ({
+            id: photo.id, ordinal: photo.ordinal, mediaUrl: 'https://iskra.test/api/photos/' + photo.id, expiresAt,
+          }));
+        },
+      });
+      const submitted = await service.submit('resident', crypto.randomUUID(), report.rows[0].id, { analysisId: work.analysisId });
+      expect(submitted.receipt.report.status).toBe('AWAITING_RESOLUTION');
+      expect((await pool.query("SELECT state, cleanup_id IS NOT NULL AS attached FROM report_photos WHERE id = $1", [after])).rows[0])
+        .toEqual({ state: 'ATTACHED', attached: true });
     }));
 });

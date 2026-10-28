@@ -501,3 +501,7 @@ At the published global Vertex standard rates ofUS$0.30/input-million andUS$2.50
 A separate private local workerd invocation also completed the actual federation and Vertex call, returning200 with schema-valid RETAKE; it used in-memory Google-sourced bindings and created no public bypass or deployed diagnostic route. Local checks passed: typecheck,368unit tests,85real-PostgreSQL tests plus1intentional skipped invariant probe,28browser checks,29Python configuration tests and build. Provider calls are genuine; the wider SQL/browser suites still use explicit provider/storage doubles.
 
 Remaining: live deployed upload→Vertex→publication, real ACCEPT/blur/hazard/model-quality cases, owner preview/quotas/private R2/durable cleanup binding and full Green. The production cleanup producer still returns503 pending its existing target handoff; the ten-image adapter probe does not complete that endpoint. Keep #8/#30/#33 and full #19/#32 outcomes open.
+
+## Evidence quota — issue #54, partial
+
+`AI_RATE_PER_MINUTE` is the existing Worker setting. Blank keeps five new report analyses and ten finalized photos per account per minute, enforced in SQL so separate Worker isolates share the count. `0` pauses both before storage or the model call. Any other non-numeric value fails closed. This is not a provider budget kill switch and not a per-IP limit. Google Cloud billing caps stay outside the Worker. Issue #54 stays open: the live Green slice and the rest of plan §13 are still unverified.
