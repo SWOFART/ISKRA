@@ -113,7 +113,7 @@ Do not add a GitHub secret or settings variable to complete this checklist.
 
 - [x] Added a new version of `iskra-staging-env` in **Google Cloud project `iskra-512914`**. For the infrastructure test, populate `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `DEPLOYMENT_CHECK_URL`, then set string `DEPLOY_ENABLED` to `true`. Keep it `false` while values are missing.
 - [x] `DEPLOYMENT_CHECK_URL` is the verified check Worker origin above, not the tunnel URL. Use an account-scoped Workers deployment token with minimum verified permissions; never a Global API Key. Create/rotate that token at Cloudflare and save its value directly in Google Secret Manager, not chat or GitHub.
-- [ ] Run **Deploy to Cloudflare** from `develop`, environment `staging`, target `deployment-check`; verify a matching Git SHA in live health.
+- [x] Ran **Deploy to Cloudflare** from `develop`, environment `staging`, target `deployment-check`; workflow 40708613504 and live health match SHA bd3a412412ca997695f25c0976ea808bf0158d65.
 - [ ] For the product: set `APP_URL` to the confirmed product Worker origin, while retaining `DEPLOYMENT_CHECK_URL` for the optional isolated test. Add the remaining relevant `.env.example` values to Google's environment JSON. Configure separate named Workers, Hyperdrive/R2 bindings, Firebase domains, MapTiler origins and release health.
 - [ ] Google is also the source for any origin DB/R2 credentials; provision their operational copies in Hyperdrive or storage integrations as appropriate. Do not expose origin credentials to the browser.
 - [ ] Add real-PostgreSQL integration checks and a reviewed migration/backup gate before data-changing releases; current CI has no database to migrate.
@@ -134,7 +134,7 @@ Branch: `codex/person-c-delivery`, based on `develop` at `f2287d1`. B remains th
 
 | Task | Evidence / remaining requirement |
 |---|---|
-| 1.4, partial | Read-only Firebase and Google configuration probes below; current Firebase/Workers documentation reviewed. The user-confirmed credit/budget/access owner is @kapustazh. Remaining credit balance, cap/currency/overage authorization, teardown, model/quota, map origins, isolated product resources and deployment credentials remain unverified/unconfigured. |
+| 1.4, partial | Read-only Firebase and Google configuration probes below; current Firebase/Workers documentation reviewed. The user-confirmed credit/budget/access owner is @kapustazh. Remaining credit balance, cap/currency/overage authorization, teardown, model/quota, map origins and isolated product resources remain unverified/unconfigured. Staging credentials were subsequently verified; see current activation evidence below. |
 | 2.3, local integration prepared | Root pinned package/lockfile, Vite client build, strict TS/TSX, Hono Worker with B's router facade, health/release, ASSETS/SPA fallback and API JSON 404. Browser checks cover direct client links; review/merge and live staging remain separate. |
 | 2.7, local evidence | RS256 signature verification using `jose`/Web Crypto, issuer/audience/subject/time checks, UID-only context and bounded key refresh tests. Real Firebase token on deployed Workers and real sign-in remain unverified. |
 | 2.9, middleware implemented | Safe JSON error envelope using B's shared validators/error mapping, server-generated request IDs, actual-byte body cap, mutation-origin guard, no-store/no-referrer and API security headers. Live domain/media privacy acceptance remains separate. |
