@@ -22,6 +22,17 @@ function setup() {
 }
 
 describe('analysis request boundary', () => {
+  it('pauses analysis when AI_RATE_PER_MINUTE is 0 before any database call', async () => {
+    const { app, env, query } = setup();
+    const response = await app.request('https://iskra.test/api/ai/analyze-report', {
+      method: 'POST', headers: { Authorization: 'Bearer resident', 'Content-Type': 'application/json',
+        'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(input),
+    }, { ...env, AI_RATE_PER_MINUTE: '0' });
+    expect(response.status).toBe(503);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('requires verified authentication for report, cleanup and polling', async () => {
     const { app, env, query } = setup();
     for (const path of ['/ai/analyze-report', '/ai/analyze-cleanup', '/ai/analyses/' + crypto.randomUUID()]) {

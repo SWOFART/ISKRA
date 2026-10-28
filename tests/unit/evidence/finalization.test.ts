@@ -38,6 +38,17 @@ function setup() {
 }
 
 describe('immutable report JPEG finalization', () => {
+  it('pauses uploads when AI_RATE_PER_MINUTE is 0 and does not touch storage', async () => {
+    const { app, env, query, put } = setup();
+    const response = await app.request('https://iskra.test/api/uploads', {
+      method: 'POST', headers: { Authorization: 'Bearer resident', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ purpose: 'REPORT', mimeType: 'image/jpeg', byteSize: jpeg.length, ordinal: 1 }),
+    }, { ...env, AI_RATE_PER_MINUTE: '0' });
+    expect(response.status).toBe(503);
+    expect(query).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  });
+
   it('stores sanitized content conditionally before recording its actual hash/size and zero-based ordinal', async () => {
     const { issue, upload, objects, put, query } = setup();
     const ticket = await issue({ ordinal: 5 });

@@ -112,6 +112,23 @@ describe('report finalization with real PostgreSQL and an explicit conditional R
       expect((await pool.query('SELECT count(*)::int AS n FROM report_photos')).rows[0].n).toBe(0);
     }));
 
+  it('rejects another finalized photo after ten in the same minute for one account', () =>
+    withTestDatabase(async (pool) => {
+      const { upload, put } = await prepareFinalization(pool);
+      for (let n = 0; n < 10; n += 1) {
+        const id = crypto.randomUUID();
+        await pool.query(
+          `INSERT INTO report_photos (id, owner_user_id, purpose, object_key, ordinal, mime_type,
+             byte_size, sha256, upload_expires_at)
+           VALUES ($1, 'resident', 'REPORT', $2, 0, 'image/jpeg', 123, $3, now() + interval '5 minutes')`,
+          [id, `photos/${id}`, 'b'.repeat(64)],
+        );
+      }
+      expect((await upload()).status).toBe(429);
+      expect(put).not.toHaveBeenCalled();
+      expect((await pool.query('SELECT count(*)::int AS n FROM report_photos')).rows[0].n).toBe(10);
+    }));
+
   it('creates no SQL evidence when storage fails', () =>
     withTestDatabase(async (pool) => {
       const { upload, put, objects } = await prepareFinalization(pool);
