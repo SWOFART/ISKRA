@@ -1,10 +1,11 @@
-import { ReportListSchema, type ReportSummary, type Route } from '../shared/contracts';
+import { ReportDetailSchema, ReportListSchema, type Photo, type ReportSummary, type Route } from '../shared/contracts';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { ApiClientError, createClientApi } from './api';
 import { clientDesign, type SupportedLocale } from './designTokens';
 import { errorMessageKey, type MessageKey, type MessageValues } from './i18n';
 import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from './mapModel';
+import { renderReportSheet } from './ReportSheet';
 
 type ClientApi = ReturnType<typeof createClientApi>;
 type Translate = (key: MessageKey, values?: MessageValues) => string;
@@ -165,6 +166,8 @@ export function renderMapPage(
   t: Translate,
   locale: SupportedLocale,
   initialState?: MapPageState,
+  setChromeInert?: (inert: boolean) => void,
+  onLocaleChange?: (locale: SupportedLocale) => void,
 ): MapPageView {
   const pageState = initialState ?? createMapPageState();
   const page = makeElement('section', 'map-page');
@@ -300,6 +303,34 @@ export function renderMapPage(
   appendElements(page, mapArea, listPanel);
 
   let reports: ReportSummary[] = [];
+  let detailLoadGeneration = 0;
+  const reportSheet = renderReportSheet({
+    t,
+    locale,
+    onLocaleChange: (nextLocale) => onLocaleChange?.(nextLocale),
+    onClose: (reportId) => {
+      detailLoadGeneration += 1;
+      selectedReportId = null;
+      pageState.selectedReportId = null;
+      renderReports();
+      reportList.querySelector<HTMLButtonElement>(`.report-list-item[data-report-id="${reportId}"]`)?.focus();
+    },
+    onRetry: (reportId) => { void loadReportDetail(reportId); },
+    refreshPhotos: async (reportId, stage): Promise<readonly Photo[]> => {
+      const response = await api.request({
+        path: `/reports/${reportId}`,
+        responseSchema: ReportDetailSchema,
+      });
+      return stage === 'before' ? response.data.beforePhotos : response.data.afterPhotos;
+    },
+    onVisibilityChange: (open) => {
+      mapArea.inert = open;
+      listPanel.inert = open;
+      setChromeInert?.(open);
+    },
+  });
+  page.appendChild(reportSheet.element);
+
   let mapInstance: MapLibreMap | null = null;
   let mapReady = false;
   let tileFailureSeen = false;
@@ -350,6 +381,29 @@ export function renderMapPage(
       maxZoom: 16,
       duration: 300,
     });
+  }
+
+  async function loadReportDetail(reportId: string): Promise<void> {
+    const generation = ++detailLoadGeneration;
+    try {
+      const response = await api.request({
+        path: `/reports/${reportId}`,
+        responseSchema: ReportDetailSchema,
+      });
+      if (generation !== detailLoadGeneration || selectedReportId !== reportId) return;
+      reportSheet.setDetail(response.data);
+    } catch {
+      if (generation === detailLoadGeneration && selectedReportId === reportId) reportSheet.setError();
+    }
+  }
+
+  function selectReport(report: ReportSummary, fit = false): void {
+    if (fit) fitMapToReports([report]);
+    selectedReportId = report.id;
+    pageState.selectedReportId = report.id;
+    reportSheet.open(report);
+    renderReports();
+    void loadReportDetail(report.id);
   }
 
   function rememberMapCamera(): void {
@@ -405,10 +459,7 @@ export function renderMapPage(
           : null;
         pageState.expandedClusterReportIds = expandedClusterReportIds;
         if (cluster.reports.length > 1) fitMapToReports(cluster.reports);
-        selectedReportId = cluster.reports[0].id;
-        pageState.selectedReportId = selectedReportId;
-        renderReports();
-        reportList.querySelector<HTMLButtonElement>(`[data-report-id="${selectedReportId}"]`)?.focus();
+        selectReport(cluster.reports[0]);
       });
       markerLayer.appendChild(marker);
     }
@@ -436,11 +487,7 @@ export function renderMapPage(
         makeElement('span', 'report-status-text', statusLabel(report, t)),
         makeElement('span', 'report-description', report.description));
       select.addEventListener('click', () => {
-        selectedReportId = report.id;
-        pageState.selectedReportId = selectedReportId;
-        fitMapToReports([report]);
-        renderReports();
-        reportList.querySelector<HTMLButtonElement>(`[data-report-id="${report.id}"]`)?.focus();
+        selectReport(report, true);
       });
       item.appendChild(select);
       clusterDetailsList.appendChild(item);
@@ -461,10 +508,7 @@ export function renderMapPage(
       }
       appendElements(select, route, status, description, progress);
       select.addEventListener('click', () => {
-        selectedReportId = report.id;
-        pageState.selectedReportId = selectedReportId;
-        fitMapToReports([report]);
-        renderReports();
+        selectReport(report, true);
       });
       item.appendChild(select);
       reportList.appendChild(item);
@@ -500,6 +544,8 @@ export function renderMapPage(
       expandedClusterReportIds = null;
       pageState.selectedReportId = null;
       pageState.expandedClusterReportIds = null;
+      detailLoadGeneration += 1;
+      reportSheet.dismiss();
     }
     fixtureBanner.hidden = true;
     renderReports();
@@ -543,11 +589,19 @@ export function renderMapPage(
       if (!reports.some(({ id }) => id === selectedReportId)) {
         selectedReportId = null;
         pageState.selectedReportId = null;
+        reportSheet.dismiss();
       }
       expandedClusterReportIds = expandedClusterReportIds?.filter((id) => reports.some(({ id: reportId }) => reportId === id)) ?? null;
       pageState.expandedClusterReportIds = expandedClusterReportIds;
       reportLoadBusy = false;
       fixtureBanner.hidden = !fixture;
+      if (preserveSelection && selectedReportId) {
+        const selectedReport = reports.find(({ id }) => id === selectedReportId);
+        if (selectedReport) {
+          reportSheet.open(selectedReport);
+          void loadReportDetail(selectedReport.id);
+        }
+      }
       renderReports();
       mapStatusText.textContent = hasMore
         ? t('map.countLoadedTruncated', { count: reports.filter((report) => selectedRoutes.has(report.route)
@@ -674,6 +728,7 @@ export function renderMapPage(
   function disposeMap(): void {
     loadGeneration += 1;
     mapGeneration += 1;
+    detailLoadGeneration += 1;
     clearRetryTimer();
     resizeObserver?.disconnect();
     resizeObserver = undefined;
@@ -681,6 +736,7 @@ export function renderMapPage(
     mapInstance?.remove();
     mapInstance = null;
     mapReady = false;
+    reportSheet.dispose();
   }
 
   void loadReports(initialState !== undefined);
