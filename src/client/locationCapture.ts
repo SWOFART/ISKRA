@@ -223,6 +223,27 @@ export function bindVoteLocation(location: Location, reportPin: Point, now = Dat
   return bindProximityLocation('vote', location, reportPin, now);
 }
 
+export async function captureFreshReportLocation(runtime: LocationCaptureRuntime = {}): Promise<ReportLocationBinding> {
+  const location = await acquireFreshLocation(runtime);
+  return bindReportLocation(location, undefined, (runtime.now ?? Date.now)());
+}
+
+export async function captureFreshCleanupLocation(
+  reportPin: Point,
+  runtime: LocationCaptureRuntime = {},
+): Promise<CleanupLocationBinding> {
+  const location = await acquireFreshLocation(runtime);
+  return bindCleanupLocation(location, reportPin, (runtime.now ?? Date.now)());
+}
+
+export async function captureFreshVoteLocation(
+  reportPin: Point,
+  runtime: LocationCaptureRuntime = {},
+): Promise<VoteLocationBinding> {
+  const location = await acquireFreshLocation(runtime);
+  return bindVoteLocation(location, reportPin, (runtime.now ?? Date.now)());
+}
+
 const locationRecoveryCodes = new Set<ErrorCode>([
   'TOO_FAR', 'LOCATION_INACCURATE', 'LOCATION_STALE', 'PIN_TOO_FAR',
 ]);

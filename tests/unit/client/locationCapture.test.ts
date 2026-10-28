@@ -7,6 +7,8 @@ import {
   bindReportLocation,
   bindVoteLocation,
   clampPinToMeasuredFix,
+  captureFreshCleanupLocation,
+  captureFreshReportLocation,
   distanceMeters,
   isLocationRecoveryError,
   LocationCaptureError,
@@ -63,13 +65,14 @@ function eastAtMeters(origin: Point, meters: number): Point {
 }
 
 describe('fresh GPS capture and proximity validation', () => {
-  it('requests a fresh high-accuracy fix and never accepts a browser cache', async () => {
+  it('requests independent fresh report and cleanup fixes without reusing the report location', async () => {
     const runtime = runtimeFor([geoPosition(), geoPosition({ lat: 49.1401 })]);
-    const first = await acquireFreshLocation(runtime);
-    const cleanup = await acquireFreshLocation(runtime);
+    const report = await captureFreshReportLocation(runtime);
+    const cleanup = await captureFreshCleanupLocation({ lat: 49.14, lng: 9.22 }, runtime);
 
-    expect(first.lat).toBe(49.14);
-    expect(cleanup.lat).toBe(49.1401);
+    expect(report.location.lat).toBe(49.14);
+    expect(cleanup.location.lat).toBe(49.1401);
+    expect(cleanup.location).not.toEqual(report.location);
     expect(runtime.getCurrentPosition).toHaveBeenCalledTimes(2);
     expect(runtime.options).toEqual([
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 },

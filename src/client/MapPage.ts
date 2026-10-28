@@ -8,9 +8,8 @@ import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from
 import { renderPhotoCapture, type CapturedPhoto, type CaptureStage } from './PhotoCapture';
 import { renderReportSheet } from './ReportSheet';
 import {
-  acquireFreshLocation,
-  bindCleanupLocation,
-  bindReportLocation,
+  captureFreshCleanupLocation,
+  captureFreshReportLocation,
   isLocationRecoveryError,
   LocationCaptureError,
   type AnalysisLocationBinding,
@@ -416,11 +415,10 @@ export function renderMapPage(
     handoffLocationStatus.setAttribute('aria-busy', 'true');
     requestLocationButton.disabled = true;
     try {
-      const fix = await acquireFreshLocation();
       const binding = handoffStage === 'report'
-        ? bindReportLocation(fix)
+        ? await captureFreshReportLocation()
         : handoffTarget
-          ? bindCleanupLocation(fix, handoffTarget)
+          ? await captureFreshCleanupLocation(handoffTarget)
           : null;
       if (!binding) throw new Error('Cleanup location capture requires the report pin.');
       if (generation !== locationRequestGeneration || captureHandoff.hidden) return;
