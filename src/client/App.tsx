@@ -115,6 +115,7 @@ export function App(
   const main = makeElement('main', 'app-main');
   main.id = 'main-content';
   main.tabIndex = -1;
+  skipLink.addEventListener('click', () => main.focus());
   const tablist = makeElement('nav', 'bottom-nav');
   tablist.setAttribute('role', 'tablist');
 
