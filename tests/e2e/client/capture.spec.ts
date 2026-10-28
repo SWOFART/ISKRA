@@ -177,6 +177,10 @@ async function installReportApi(
     expect(route.request().headers().authorization).toBe(`Bearer ${token}`);
   };
 
+  await page.route('**/api/me/notifications*', async (route) => {
+    checkAuth(route);
+    return response(route, 200, { items: [], nextCursor: null });
+  });
   await page.route('**/api/reports*', async (route) => {
     checkAuth(route);
     if (route.request().method() === 'GET') return response(route, 200, { items: [], nextCursor: null });
