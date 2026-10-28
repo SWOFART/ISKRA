@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/client/App';
+import { clientDesign } from '../../../src/client/designTokens';
 
 type TestListener = (event: Record<string, unknown>) => void;
 
@@ -146,9 +147,9 @@ describe('client shell', () => {
     expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Map');
 
     const mapCanvas = root.querySelector('.map-canvas');
-    expect(mapCanvas?.getAttribute('data-latitude')).toBe('49.14');
-    expect(mapCanvas?.getAttribute('data-longitude')).toBe('9.22');
-    expect(mapCanvas?.getAttribute('data-zoom')).toBe('13');
+    expect(mapCanvas?.getAttribute('data-latitude')).toBe(String(clientDesign.map.center.latitude));
+    expect(mapCanvas?.getAttribute('data-longitude')).toBe(String(clientDesign.map.center.longitude));
+    expect(mapCanvas?.getAttribute('data-zoom')).toBe(String(clientDesign.map.zoom));
     expect(accessAttempts).toEqual([]);
   });
 
