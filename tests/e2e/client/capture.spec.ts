@@ -79,7 +79,8 @@ async function enableCameraHarness(page: import('@playwright/test').Page): Promi
   });
 }
 
-type ReportApiScenario = 'accept-running' | 'retake' | 'retry-analysis';
+type ReportApiScenario = 'accept-running' | 'retake' | 'retry-analysis'
+  | 'retry-after-upload' | 'retry-after-analysis' | 'retry-after-publication';
 
 async function signIn(
   page: import('@playwright/test').Page,
@@ -140,12 +141,27 @@ async function installReportApi(
   const analysisRequests: { body: Record<string, unknown>; operationKey: string | undefined }[] = [];
   let uploadRequests = 0;
   let publicationRequest: Record<string, unknown> | null = null;
+  let publicationRequests = 0;
   let analysisPolls = 0;
-  const response = (route: import('@playwright/test').Route, status: number, body: unknown) => route.fulfill({
+  const response = (
+    route: import('@playwright/test').Route,
+    status: number,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ) => route.fulfill({
     status,
     contentType: 'application/json',
+    headers,
     body: JSON.stringify(body),
   });
+  const rateLimitResponse = (route: import('@playwright/test').Route) => response(route, 429, {
+    error: {
+      code: 'RATE_LIMITED',
+      message: 'Please wait before trying again.',
+      requestId: '11111111-1111-4111-8111-111111111123',
+      retryable: true,
+    },
+  }, { 'Retry-After': '1' });
   const acceptedResult = locale === 'de' ? {
     decision: 'ACCEPT', route: 'RED', description: 'Scharfe Glasscherben am Bordstein.',
     hazardLevel: 'URGENT', safetyMessage: 'Berühren Sie das scharfe Material nicht und halten Sie andere fern.',
@@ -163,6 +179,8 @@ async function installReportApi(
     checkAuth(route);
     if (route.request().method() === 'GET') return response(route, 200, { items: [], nextCursor: null });
     publicationRequest = route.request().postDataJSON() as Record<string, unknown>;
+    publicationRequests += 1;
+    if (scenario === 'retry-after-publication' && publicationRequests === 1) return rateLimitResponse(route);
     const reportId = '11111111-1111-4111-8111-111111111121';
     const description = String(publicationRequest.description);
     const report = {
@@ -206,6 +224,7 @@ async function installReportApi(
     expect(request.purpose).toBe('REPORT');
     expect(request.byteSize).toBeGreaterThan(0);
     uploadRequests += 1;
+    if (scenario === 'retry-after-upload' && uploadRequests === 1) return rateLimitResponse(route);
     const photoId = `11111111-1111-4111-8111-1111111111${String(uploadRequests + 10).padStart(2, '0')}`;
     photoIds.push(photoId);
     return response(route, 201, {
@@ -231,6 +250,7 @@ async function installReportApi(
     expect(route.request().headers()['idempotency-key']).toBeTruthy();
     analysisRequests.push({ body, operationKey: route.request().headers()['idempotency-key'] });
     const analysisId = '11111111-1111-4111-8111-111111111122';
+    if (scenario === 'retry-after-analysis' && analysisRequests.length === 1) return rateLimitResponse(route);
     if (scenario === 'retry-analysis' && analysisRequests.length === 1) {
       return response(route, 202, {
         analysisId,
@@ -274,7 +294,14 @@ async function installReportApi(
       expiresAt: '2030-01-01T00:00:00.000Z',
     });
   });
-  return { photoIds, analysisRequests, get uploadRequests() { return uploadRequests; }, get publicationRequest() { return publicationRequest; }, get analysisPolls() { return analysisPolls; } };
+  return {
+    photoIds,
+    analysisRequests,
+    get uploadRequests() { return uploadRequests; },
+    get publicationRequest() { return publicationRequest; },
+    get publicationRequests() { return publicationRequests; },
+    get analysisPolls() { return analysisPolls; },
+  };
 }
 
 async function submitOneReportPhoto(page: import('@playwright/test').Page, locale: 'en' | 'de') {
@@ -512,4 +539,56 @@ test('retries a technical analysis failure with the retained uploaded photo and 
   expect(apiState?.analysisRequests).toHaveLength(2);
   expect(apiState?.analysisRequests[1].body.photoIds).toEqual(apiState?.analysisRequests[0].body.photoIds);
   expect(apiState?.analysisRequests[1].operationKey).not.toBe(apiState?.analysisRequests[0].operationKey);
+});
+
+test('honors Retry-After before retrying a failed photo upload', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-upload'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  const retryButton = dialog.getByRole('button', { name: 'Retry photo upload' });
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await expect(retryButton).toBeDisabled();
+  await retryButton.dispatchEvent('click');
+  expect(apiState?.uploadRequests).toBe(1);
+  await expect(retryButton).toBeEnabled();
+  await retryButton.click();
+  await expect(dialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.uploadRequests).toBe(2);
+});
+
+test('honors Retry-After before retrying a failed analysis', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-analysis'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  const retryButton = dialog.getByRole('button', { name: 'Retry assessment with these photos' });
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await expect(retryButton).toBeDisabled();
+  await retryButton.dispatchEvent('click');
+  expect(apiState?.analysisRequests).toHaveLength(1);
+  await expect(retryButton).toBeEnabled();
+  await retryButton.click();
+  await expect(dialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.analysisRequests).toHaveLength(2);
+});
+
+test('honors Retry-After before retrying publication', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-publication'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  await dialog.getByLabel('Factual description').fill('Sharp broken glass beside the curb.');
+  const retryButton = dialog.getByRole('button', { name: 'Retry publication' });
+  await dialog.getByRole('button', { name: 'Publish report' }).click();
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await expect(retryButton).toBeDisabled();
+  await retryButton.dispatchEvent('click');
+  expect(apiState?.publicationRequests).toBe(1);
+  await expect(retryButton).toBeEnabled();
+  await retryButton.click();
+  await expect(dialog).toBeHidden();
+  expect(apiState?.publicationRequests).toBe(2);
 });

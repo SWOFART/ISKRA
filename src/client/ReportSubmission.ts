@@ -140,10 +140,46 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   let flowGeneration = 0;
   let busy = false;
   let disposed = false;
-  let retryAction: 'analysis' | 'status' | null = null;
+  let retryAction: 'analysis' | 'status' | 'publication' | null = null;
   let failureStep: 'upload' | 'analysis' | null = null;
+  let retryAvailableAt = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const analysisOperation = createOperationKeyScope();
   const publishOperation = createOperationKeyScope();
+
+  function retryIsBlocked(): boolean {
+    return retryAvailableAt > Date.now();
+  }
+
+  function clearRetryDelay(): void {
+    if (retryTimer !== undefined) clearTimeout(retryTimer);
+    retryTimer = undefined;
+    retryAvailableAt = 0;
+  }
+
+  function deferRetry(error: unknown): void {
+    const delayMs = error instanceof ApiClientError && error.retryable ? error.retryAfterMs : undefined;
+    if (!delayMs || delayMs <= 0) return;
+    clearRetryDelay();
+    retryAvailableAt = Date.now() + delayMs;
+    const failureMessage = analysisStatus.textContent;
+    analysisStatus.textContent = t('capture.retryWait');
+    const enableRetry = () => {
+      const remainingMs = retryAvailableAt - Date.now();
+      if (remainingMs > 0) {
+        retryTimer = setTimeout(enableRetry, Math.min(remainingMs, 2_147_483_647));
+        return;
+      }
+      retryTimer = undefined;
+      retryAvailableAt = 0;
+      if (!disposed && !root.hidden) {
+        analysisStatus.textContent = failureMessage;
+        updateActions();
+      }
+    };
+    retryTimer = setTimeout(enableRetry, Math.min(delayMs, 2_147_483_647));
+    updateActions();
+  }
 
   function setLocationMessage(key: MessageKey, values?: MessageValues): void {
     locationStatus.textContent = t(key, values);
@@ -158,12 +194,14 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
     requestLocationButton.hidden = !!assessment || busy;
     requestLocationButton.disabled = busy;
     analyzeButton.hidden = !!assessment || busy;
-    analyzeButton.disabled = busy || !locationBinding;
+    analyzeButton.disabled = busy || !locationBinding || (failureStep === 'upload' && retryIsBlocked());
     analyzeButton.textContent = t(failureStep === 'upload' ? 'capture.retryUpload' : 'capture.analyzePhotos');
     retryButton.hidden = busy || retryAction === null || !!accepting || !!retaking;
-    retryButton.disabled = busy;
+    retryButton.disabled = busy || retryIsBlocked();
     publishButton.hidden = !accepting || busy;
-    publishButton.disabled = busy || description.value.trim().length === 0;
+    publishButton.textContent = t(retryAction === 'publication' ? 'capture.retryPublish' : 'capture.publishReport');
+    publishButton.disabled = busy || description.value.trim().length === 0
+      || (retryAction === 'publication' && retryIsBlocked());
     discardButton.disabled = busy;
   }
 
@@ -175,6 +213,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   }
 
   function resetHandoff(): void {
+    clearRetryDelay();
     flowGeneration += 1;
     locationGeneration += 1;
     uploads = photos.map(() => ({}));
@@ -225,6 +264,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   }
 
   function close(): void {
+    clearRetryDelay();
     locationGeneration += 1;
     flowGeneration += 1;
     root.hidden = true;
@@ -369,7 +409,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   }
 
   async function analyzePhotos(): Promise<void> {
-    if (!locationBinding || photos.length < 1 || busy) return;
+    if (!locationBinding || photos.length < 1 || busy || (failureStep === 'upload' && retryIsBlocked())) return;
     const generation = ++flowGeneration;
     retryAction = null;
     failureStep = activeAnalysisId ? 'analysis' : 'upload';
@@ -425,13 +465,16 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
         retryAction = 'analysis';
         retryButton.textContent = t('capture.retryAnalysis');
       }
+      deferRetry(error);
       updateActions();
     }
   }
 
   async function publishReport(): Promise<void> {
-    if (!assessment || assessment.decision !== 'ACCEPT' || !lastAcceptedAnalysisId || busy) return;
+    if (!assessment || assessment.decision !== 'ACCEPT' || !lastAcceptedAnalysisId || busy
+      || (retryAction === 'publication' && retryIsBlocked())) return;
     const generation = ++flowGeneration;
+    retryAction = null;
     setBusy(true, 'capture.publishing');
     let result: ApiResult<PublicationReceipt>;
     try {
@@ -448,7 +491,9 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
       if (generation !== flowGeneration || disposed || root.hidden) return;
       const code = errorCode(error);
       if (error instanceof ApiClientError && !error.retryable) publishOperation.complete();
+      retryAction = error instanceof ApiClientError && error.retryable ? 'publication' : null;
       setBusy(false, code ? errorMessageKey(code) : 'error.generic');
+      deferRetry(error);
       updateActions();
       return;
     }
@@ -461,6 +506,7 @@ export function renderReportSubmission(options: ReportSubmissionOptions): Report
   requestLocationButton.addEventListener('click', () => { void requestLocation(); });
   analyzeButton.addEventListener('click', () => { void analyzePhotos(); });
   retryButton.addEventListener('click', () => {
+    if (busy || retryIsBlocked()) return;
     retryButton.hidden = true;
     if (assessment?.decision === 'ACCEPT') void publishReport();
     else void analyzePhotos();
