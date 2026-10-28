@@ -1,8 +1,10 @@
-import { clientDesign } from './designTokens';
-import { ApiClientError, createClientApi, DEVELOPMENT_FIXTURE_LABEL } from './api';
+import { clientDesign, type SupportedLocale } from './designTokens';
+import { ApiClientError, createClientApi } from './api';
 import { ReportListSchema } from '../shared/contracts';
+import { errorMessageKey, storeLocale, translate, type MessageKey, type MessageValues } from './i18n';
 
 type ClientApi = ReturnType<typeof createClientApi>;
+type Translate = (key: MessageKey, values?: MessageValues) => string;
 
 type TabId = 'map' | 'impact' | 'rewards';
 
@@ -10,6 +12,11 @@ const tabPaths: Record<TabId, string> = {
   map: '/map',
   impact: '/impact',
   rewards: '/rewards',
+};
+
+const localeNames: Record<SupportedLocale, string> = {
+  en: 'English',
+  de: 'Deutsch',
 };
 
 function tabFromPath(pathname: string): TabId {
@@ -39,30 +46,30 @@ function appendElements(parent: HTMLElement, ...elements: HTMLElement[]): void {
   for (const element of elements) parent.appendChild(element);
 }
 
-function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
+function renderMapPanel(onReport: () => void, api: ClientApi, t: Translate): HTMLElement {
   const page = makeElement('section', 'map-page');
-  page.setAttribute('aria-label', 'Map of Heilbronn');
+  page.setAttribute('aria-label', t('map.region'));
 
   const mapCanvas = makeElement('div', 'map-canvas');
   mapCanvas.setAttribute('role', 'img');
-  mapCanvas.setAttribute('aria-label', 'Map preview centered on Heilbronn');
+  mapCanvas.setAttribute('aria-label', t('map.canvasLabel'));
   mapCanvas.setAttribute('data-latitude', String(clientDesign.map.center.latitude));
   mapCanvas.setAttribute('data-longitude', String(clientDesign.map.center.longitude));
   mapCanvas.setAttribute('data-zoom', String(clientDesign.map.zoom));
 
   const mapLabel = makeElement('div', 'map-location');
   appendElements(mapLabel,
-    makeElement('span', 'eyebrow', 'YOUR CITY'),
-    makeElement('strong', undefined, 'Heilbronn'),
+    makeElement('span', 'eyebrow', t('map.eyebrow')),
+    makeElement('strong', undefined, t('map.city')),
   );
 
   const mapStatus = makeElement('div', 'map-status');
   mapStatus.setAttribute('role', 'status');
   mapStatus.setAttribute('aria-live', 'polite');
   mapStatus.setAttribute('aria-busy', 'true');
-  const mapStatusText = makeElement('span', 'map-status-message', 'Loading reports…');
-  const retryButton = makeButton('Retry', 'retry-button');
-  retryButton.setAttribute('aria-label', 'Retry loading reports');
+  const mapStatusText = makeElement('span', 'map-status-message', t('map.loading'));
+  const retryButton = makeButton(t('map.retry'), 'retry-button');
+  retryButton.setAttribute('aria-label', t('map.retryLabel'));
   retryButton.hidden = true;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   appendElements(mapStatus,
@@ -73,11 +80,11 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
 
   const fixtureBanner = makeElement('aside', 'fixture-banner');
   fixtureBanner.setAttribute('role', 'note');
-  fixtureBanner.textContent = DEVELOPMENT_FIXTURE_LABEL;
+  fixtureBanner.textContent = t('fixture.banner');
   fixtureBanner.hidden = true;
 
-  const reportButton = makeButton('Report litter', 'report-button');
-  reportButton.setAttribute('aria-label', 'Start a litter report');
+  const reportButton = makeButton(t('map.reportButton'), 'report-button');
+  reportButton.setAttribute('aria-label', t('map.reportLabel'));
   reportButton.addEventListener('click', onReport);
 
   const mapNotice = makeElement('p', 'map-notice');
@@ -89,12 +96,16 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
     retryTimer = undefined;
   }
 
+  function errorText(error: ApiClientError): string {
+    return t(errorMessageKey(error.code));
+  }
+
   function deferRetry(error: ApiClientError): void {
     let remainingMs = error.retryAfterMs ?? 0;
     if (remainingMs <= 0) return;
 
     retryButton.disabled = true;
-    mapStatusText.textContent = `${error.message} Please wait before retrying.`;
+    mapStatusText.textContent = `${errorText(error)} ${t('map.waitBeforeRetry')}`;
 
     const scheduleEnable = (): void => {
       const delayMs = Math.min(remainingMs, 2_147_483_647);
@@ -106,7 +117,7 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
         }
         retryTimer = undefined;
         retryButton.disabled = false;
-        mapStatusText.textContent = error.message;
+        mapStatusText.textContent = errorText(error);
       }, delayMs);
     };
 
@@ -118,7 +129,7 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
     retryButton.disabled = false;
     retryButton.hidden = true;
     mapStatus.setAttribute('aria-busy', 'true');
-    mapStatusText.textContent = 'Loading reports…';
+    mapStatusText.textContent = t('map.loading');
     try {
       const result = await api.request({
         path: '/reports?cityId=heilbronn',
@@ -126,17 +137,20 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
       });
       const isFixture = result.provenance.mode === 'fixture';
       fixtureBanner.hidden = !isFixture;
-      fixtureBanner.textContent = result.provenance.label;
       const count = result.data.items.length;
-      const source = isFixture ? 'sample ' : '';
+      const source = isFixture ? t('map.countSource.sample') : '';
       mapStatusText.textContent = count === 0
-        ? `No ${source}reports are available yet.`
-        : `${count} ${source}${count === 1 ? 'report' : 'reports'} loaded.`;
+        ? t('map.countNone', { source })
+        : t('map.countLoaded', {
+          count,
+          source,
+          noun: t(count === 1 ? 'map.noun.one' : 'map.noun.other'),
+        });
     } catch (error) {
       fixtureBanner.hidden = true;
       mapStatusText.textContent = error instanceof ApiClientError
-        ? error.message
-        : 'Reports could not be loaded.';
+        ? errorText(error)
+        : t('map.reportsUnavailable');
       const canRetry = error instanceof ApiClientError && error.retryable;
       retryButton.hidden = !canRetry;
       if (canRetry) deferRetry(error);
@@ -157,7 +171,8 @@ function renderMapPanel(onReport: () => void, api: ClientApi): HTMLElement {
 function renderDeferredPanel(
   heading: string,
   message: string,
-  actionLabel?: string,
+  actionLabel: string | undefined,
+  pendingMessage: string,
 ): HTMLElement {
   const page = makeElement('section', 'deferred-page');
   page.setAttribute('aria-labelledby', 'deferred-heading');
@@ -175,7 +190,7 @@ function renderDeferredPanel(
     notice.hidden = true;
     notice.setAttribute('role', 'status');
     action.addEventListener('click', () => {
-      notice.textContent = 'Sign-in will be available when account access is connected.';
+      notice.textContent = pendingMessage;
       notice.hidden = false;
     });
     appendElements(card, action, notice);
@@ -187,41 +202,42 @@ function renderDeferredPanel(
   return page;
 }
 
-export function App(api: ClientApi = createClientApi({ mode: import.meta.env.DEV ? 'fixture' : 'live' })): HTMLElement {
+export function App(
+  api: ClientApi = createClientApi({ mode: import.meta.env.DEV ? 'fixture' : 'live' }),
+  initialLocale: SupportedLocale = 'en',
+): HTMLElement {
+  let locale = initialLocale;
+  const t: Translate = (key, values) => translate(locale, key, values);
+
   const shell = makeElement('div', 'app-shell');
   const header = makeElement('header', 'app-header');
-  const brand = makeElement('a', 'brand', 'ISKRA');
-  brand.href = tabPaths.map;
-  brand.setAttribute('aria-label', 'ISKRA — Map');
-  appendElements(header, brand, makeElement('span', 'header-caption', 'A cleaner city, together'));
-
   const main = makeElement('main', 'app-main');
   const tablist = makeElement('nav', 'bottom-nav');
   tablist.setAttribute('role', 'tablist');
-  tablist.setAttribute('aria-label', 'Main navigation');
 
-  const labels: Record<TabId, string> = {
-    map: 'Map',
-    impact: 'My Impact',
-    rewards: 'Rewards',
-  };
   const tabOrder = ['map', 'impact', 'rewards'] as const;
   const icons: Record<TabId, string> = {
     map: '⌖',
     impact: '◉',
     rewards: '◇',
   };
-  const tabs = new Map<TabId, HTMLButtonElement>();
+  const tabLabelKeys: Record<TabId, MessageKey> = {
+    map: 'nav.map',
+    impact: 'nav.impact',
+    rewards: 'nav.rewards',
+  };
+  let tabs = new Map<TabId, HTMLButtonElement>();
 
-  for (const tabId of ['map', 'impact', 'rewards'] as const) {
+  function createTab(tabId: TabId): HTMLButtonElement {
+    const label = t(tabLabelKeys[tabId]);
     const tab = makeButton('', 'nav-tab');
     tab.setAttribute('role', 'tab');
-    tab.setAttribute('aria-label', labels[tabId]);
+    tab.setAttribute('aria-label', label);
     tab.id = `tab-${tabId}`;
     tab.setAttribute('aria-controls', 'main-panel');
     appendElements(tab,
       makeElement('span', 'nav-icon', icons[tabId]),
-      makeElement('span', 'nav-label', labels[tabId]),
+      makeElement('span', 'nav-label', label),
     );
     tab.addEventListener('click', () => activateTab(tabId, true));
     tab.addEventListener('keydown', (event) => {
@@ -245,8 +261,40 @@ export function App(api: ClientApi = createClientApi({ mode: import.meta.env.DEV
       nextTab?.focus();
       activateTab(tabOrder[nextIndex], true);
     });
-    tabs.set(tabId, tab);
-    appendElements(tablist, tab);
+    return tab;
+  }
+
+  const localeButtons = new Map<SupportedLocale, HTMLButtonElement>();
+
+  function createLocaleSwitch(): HTMLElement {
+    const group = makeElement('div', 'locale-switch');
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', t('header.localeLabel'));
+    localeButtons.clear();
+    for (const option of clientDesign.locale.supported) {
+      const button = makeButton(localeNames[option], 'locale-button');
+      button.setAttribute('lang', option);
+      button.setAttribute('aria-pressed', String(option === locale));
+      button.addEventListener('click', () => setLocale(option));
+      localeButtons.set(option, button);
+      group.appendChild(button);
+    }
+    return group;
+  }
+
+  function renderChrome(): void {
+    const brand = makeElement('a', 'brand', 'ISKRA');
+    brand.href = tabPaths.map;
+    brand.setAttribute('aria-label', t('brand.label'));
+    header.replaceChildren(
+      brand,
+      makeElement('span', 'header-caption', t('header.caption')),
+      createLocaleSwitch(),
+    );
+
+    tabs = new Map(tabOrder.map((tabId) => [tabId, createTab(tabId)]));
+    tablist.setAttribute('aria-label', t('nav.main'));
+    tablist.replaceChildren(...tabs.values());
   }
 
   let selectedTab = tabFromPath(window.location.pathname);
@@ -272,25 +320,27 @@ export function App(api: ClientApi = createClientApi({ mode: import.meta.env.DEV
       const map = renderMapPanel(() => {
         const notice = panel.querySelector<HTMLElement>('.map-notice');
         if (notice) {
-          notice.textContent = 'Camera reporting is not connected yet. No location or photos have been requested.';
+          notice.textContent = t('map.cameraNotConnected');
           notice.hidden = false;
         }
-      }, api);
+      }, api, t);
       appendElements(panel, map);
     } else if (selectedTab === 'impact') {
       appendElements(panel,
         renderDeferredPanel(
-          'Your impact',
-          'Sign in to see your reports and community contributions.',
-          'Sign in',
+          t('deferred.impact.heading'),
+          t('deferred.impact.message'),
+          t('deferred.signIn'),
+          t('deferred.signInPending'),
         ),
       );
     } else {
       appendElements(panel,
         renderDeferredPanel(
-          'Rewards',
-          'Sign in to see your reward balance and available rewards.',
-          'Sign in',
+          t('deferred.rewards.heading'),
+          t('deferred.rewards.message'),
+          t('deferred.signIn'),
+          t('deferred.signInPending'),
         ),
       );
     }
@@ -298,11 +348,22 @@ export function App(api: ClientApi = createClientApi({ mode: import.meta.env.DEV
     main.replaceChildren(panel);
   }
 
+  function setLocale(next: SupportedLocale): void {
+    if (next === locale) return;
+    locale = next;
+    storeLocale(next);
+    document.documentElement.lang = next;
+    renderChrome();
+    activateTab(selectedTab, false);
+    localeButtons.get(next)?.focus();
+  }
+
   window.addEventListener('popstate', () => {
     activateTab(tabFromPath(window.location.pathname), false);
   });
 
   appendElements(shell, header, main, tablist);
+  renderChrome();
   activateTab(selectedTab, false);
   return shell;
 }

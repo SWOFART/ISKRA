@@ -1,5 +1,3 @@
-import type { Pool } from 'pg';
-
 /** Result shape shared by SQL consumers without binding the domain to a driver. */
 export interface QueryResult<Row extends Record<string, unknown> = Record<string, unknown>> {
   readonly rows: readonly Row[];
@@ -19,9 +17,22 @@ export interface TransactionDatabase {
   withTransaction<T>(work: (client: CheckedOutClient) => Promise<T>): Promise<T>;
 }
 
+/** PostgreSQL connection returned by either node-postgres Pool or a request-scoped Hyperdrive client. */
+export interface PostgresConnection {
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    parameters?: unknown[],
+  ): Promise<QueryResult<Row> & { readonly command?: string }>;
+  release(error?: Error): void;
+}
+
+export interface PostgresConnectionPool {
+  connect(): Promise<PostgresConnection>;
+}
+
 /** A PostgreSQL-backed implementation that keeps BEGIN, work, and COMMIT on one checked-out client. */
 export class PostgresTransactionDatabase implements TransactionDatabase {
-  constructor(private readonly pool: Pick<Pool, 'connect'>) {}
+  constructor(private readonly pool: PostgresConnectionPool) {}
 
   async withTransaction<T>(work: (client: CheckedOutClient) => Promise<T>): Promise<T> {
     const connection = await this.pool.connect();

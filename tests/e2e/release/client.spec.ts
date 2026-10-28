@@ -57,7 +57,7 @@ test('renders retryable Worker report failures and retries only after user actio
   await page.goto('/');
 
   expect((await firstResponse).status()).toBe(503);
-  await expect(page.locator('.map-status')).toContainText('This domain endpoint is not integrated yet.');
+  await expect(page.locator('.map-status')).toContainText('The service could not be reached.');
   const retryButton = page.getByRole('button', { name: 'Retry loading reports' });
   await expect(retryButton).toBeVisible();
   await expect(page.locator('.fixture-banner')).toBeHidden();
@@ -65,7 +65,7 @@ test('renders retryable Worker report failures and retries only after user actio
   const retryResponse = page.waitForResponse(isReportResponse);
   await retryButton.click();
   expect((await retryResponse).status()).toBe(503);
-  await expect(page.locator('.map-status')).toContainText('This domain endpoint is not integrated yet.');
+  await expect(page.locator('.map-status')).toContainText('The service could not be reached.');
   await expect(retryButton).toBeVisible();
 });
 
