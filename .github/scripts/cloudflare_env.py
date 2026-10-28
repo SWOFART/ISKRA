@@ -46,10 +46,17 @@ def validate_config(raw, template, environment, target):
             or url.query or url.fragment or url.path not in ("", "/")):
         raise ValueError(f"{url_name} must be an HTTPS origin")
     if target == "application":
-        for name in ("GEMINI_API_KEY", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID",
-                     "FIREBASE_PROJECT_ID", "VITE_FIREBASE_API_KEY", "VITE_MAPTILER_KEY"):
+        required = ["FIREBASE_PROJECT_ID", "VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN",
+                    "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID"]
+        if environment == "production":
+            required += ["GEMINI_API_KEY", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID", "VITE_MAPTILER_KEY"]
+        for name in required:
             if not values.get(name):
                 raise ValueError(f"Required cloud configuration is missing: {name}")
+        if values["VITE_FIREBASE_PROJECT_ID"] != values["FIREBASE_PROJECT_ID"]:
+            raise ValueError("Browser and Worker Firebase projects must match")
+        if values["VITE_FIREBASE_AUTH_DOMAIN"] != values["FIREBASE_PROJECT_ID"] + ".firebaseapp.com":
+            raise ValueError("Firebase auth domain must match the configured project")
         if values.get("APP_ENV") != environment:
             raise ValueError("APP_ENV must match the deployment environment")
         if environment == "production" and values.get("DEMO_DATA") != "false":
@@ -159,6 +166,8 @@ def main():
         ], text=True)
         health = json.loads(result)
         validate_health(health, target, os.environ["GITHUB_SHA"])
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"verified_url={values[url_name]}\n")
         print("Deployment release health check passed")
     else:
         raise ValueError("Unknown configuration operation")

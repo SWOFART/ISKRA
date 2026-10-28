@@ -2,6 +2,8 @@ import './styles.css';
 import { App } from './App';
 import { applyClientDesignTokens } from './applyDesignTokens';
 import { localeFromBrowserLanguages, readStoredLocale } from './i18n';
+import { createFirebaseSession } from './auth';
+import { createClientApi } from './api';
 
 applyClientDesignTokens(document.documentElement.style);
 
@@ -13,4 +15,9 @@ if (!root) {
 
 const locale = readStoredLocale() ?? localeFromBrowserLanguages(navigator.languages ?? [navigator.language]);
 document.documentElement.lang = locale;
-root.replaceChildren(App(undefined, locale));
+const session = createFirebaseSession();
+const api = createClientApi({
+  mode: import.meta.env.DEV && !session ? 'fixture' : 'live',
+  tokenProvider: session,
+});
+root.replaceChildren(App(api, locale, session));

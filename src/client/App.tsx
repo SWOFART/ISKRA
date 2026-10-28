@@ -1,6 +1,8 @@
 import { clientDesign, type SupportedLocale } from './designTokens';
 import { ApiClientError, createClientApi } from './api';
 import { ReportListSchema } from '../shared/contracts';
+import type { FirebaseSession } from './auth';
+import { renderAuthPanel } from './auth-panel';
 import { errorMessageKey, storeLocale, translate, type MessageKey, type MessageValues } from './i18n';
 
 type ClientApi = ReturnType<typeof createClientApi>;
@@ -173,6 +175,7 @@ function renderDeferredPanel(
   message: string,
   actionLabel: string | undefined,
   pendingMessage: string,
+  onSignIn?: () => void,
 ): HTMLElement {
   const page = makeElement('section', 'deferred-page');
   page.setAttribute('aria-labelledby', 'deferred-heading');
@@ -190,6 +193,7 @@ function renderDeferredPanel(
     notice.hidden = true;
     notice.setAttribute('role', 'status');
     action.addEventListener('click', () => {
+      if (onSignIn) { onSignIn(); return; }
       notice.textContent = pendingMessage;
       notice.hidden = false;
     });
@@ -205,9 +209,14 @@ function renderDeferredPanel(
 export function App(
   api: ClientApi = createClientApi({ mode: import.meta.env.DEV ? 'fixture' : 'live' }),
   initialLocale: SupportedLocale = 'en',
+  session?: FirebaseSession,
 ): HTMLElement {
   let locale = initialLocale;
   const t: Translate = (key, values) => translate(locale, key, values);
+  let authOpen = false;
+  let authIntent: 'report' | TabId | null = null;
+  let accountUid: string | null = null;
+  let authPanel: ReturnType<typeof renderAuthPanel> | undefined;
 
   const shell = makeElement('div', 'app-shell');
   const header = makeElement('header', 'app-header');
@@ -235,11 +244,13 @@ export function App(
     tab.setAttribute('aria-label', label);
     tab.id = `tab-${tabId}`;
     tab.setAttribute('aria-controls', 'main-panel');
+    tab.setAttribute('aria-selected', String(tabId === selectedTab));
+    tab.tabIndex = tabId === selectedTab ? 0 : -1;
     appendElements(tab,
       makeElement('span', 'nav-icon', icons[tabId]),
       makeElement('span', 'nav-label', label),
     );
-    tab.addEventListener('click', () => activateTab(tabId, true));
+    tab.addEventListener('click', () => { leaveSignIn(); activateTab(tabId, true); });
     tab.addEventListener('keydown', (event) => {
       const currentIndex = tabOrder.indexOf(tabId);
       let nextIndex: number;
@@ -257,6 +268,7 @@ export function App(
       }
 
       event.preventDefault();
+      leaveSignIn();
       const nextTab = tabs.get(tabOrder[nextIndex]);
       nextTab?.focus();
       activateTab(tabOrder[nextIndex], true);
@@ -273,6 +285,7 @@ export function App(
     localeButtons.clear();
     for (const option of clientDesign.locale.supported) {
       const button = makeButton(localeNames[option], 'locale-button');
+      button.disabled = session?.busy ?? false;
       button.setAttribute('lang', option);
       button.setAttribute('aria-pressed', String(option === locale));
       button.addEventListener('click', () => setLocale(option));
@@ -286,10 +299,27 @@ export function App(
     const brand = makeElement('a', 'brand', 'ISKRA');
     brand.href = tabPaths.map;
     brand.setAttribute('aria-label', t('brand.label'));
+    const controls = makeElement('div', 'header-controls');
+    controls.appendChild(createLocaleSwitch());
+    if (session) {
+      const account = makeButton(t(session.uid ? 'auth.signOut' : 'auth.signIn'), 'header-auth');
+      account.disabled = session.busy;
+      account.addEventListener('click', () => {
+        if (!session.uid) { openSignIn(selectedTab); return; }
+        void session.signOut().then(() => {
+          accountUid = null;
+          authOpen = false;
+          authIntent = null;
+          renderChrome();
+          activateTab(selectedTab, false);
+        }, () => openSignIn(selectedTab));
+      });
+      controls.appendChild(account);
+    }
     header.replaceChildren(
       brand,
       makeElement('span', 'header-caption', t('header.caption')),
-      createLocaleSwitch(),
+      controls,
     );
 
     tabs = new Map(tabOrder.map((tabId) => [tabId, createTab(tabId)]));
@@ -298,7 +328,19 @@ export function App(
   }
 
   let selectedTab = tabFromPath(window.location.pathname);
+  function openSignIn(intent: 'report' | TabId): void {
+    authIntent = intent;
+    authOpen = true;
+    activateTab(selectedTab, false);
+  }
+  function leaveSignIn(): void {
+    if (authOpen && session) void session.signOut().catch(() => undefined);
+    authOpen = false;
+    authIntent = null;
+  }
   function activateTab(tabId: TabId, updateHistory: boolean): void {
+    authPanel?.dispose();
+    authPanel = undefined;
     selectedTab = tabId;
     if (updateHistory && window.location.pathname !== tabPaths[tabId]) {
       window.history.pushState({}, '', tabPaths[tabId]);
@@ -316,8 +358,27 @@ export function App(
     panel.setAttribute('aria-labelledby', `tab-${selectedTab}`);
     panel.tabIndex = 0;
 
-    if (selectedTab === 'map') {
+    if (authOpen && session) {
+      authPanel = renderAuthPanel(session, t, () => {
+        accountUid = session.uid;
+        const intent = authIntent;
+        authOpen = false;
+        authIntent = null;
+        activateTab(intent === 'report' ? 'map' : selectedTab, false);
+        if (intent === 'report') {
+          const notice = main.querySelector<HTMLElement>('.map-notice');
+          if (notice) { notice.textContent = t('map.cameraNotConnected'); notice.hidden = false; }
+        }
+      }, () => {
+        accountUid = null;
+        authOpen = false;
+        authIntent = null;
+        activateTab(selectedTab, false);
+      });
+      panel.appendChild(authPanel.element);
+    } else if (selectedTab === 'map') {
       const map = renderMapPanel(() => {
+        if (session && (!session.uid || session.uid !== accountUid)) { openSignIn('report'); return; }
         const notice = panel.querySelector<HTMLElement>('.map-notice');
         if (notice) {
           notice.textContent = t('map.cameraNotConnected');
@@ -329,23 +390,26 @@ export function App(
       appendElements(panel,
         renderDeferredPanel(
           t('deferred.impact.heading'),
-          t('deferred.impact.message'),
-          t('deferred.signIn'),
+          t(session?.uid && session.uid === accountUid ? 'auth.impactPending' : 'deferred.impact.message'),
+          session?.uid && session.uid === accountUid ? undefined : t('deferred.signIn'),
           t('deferred.signInPending'),
+          session ? () => openSignIn('impact') : undefined,
         ),
       );
     } else {
       appendElements(panel,
         renderDeferredPanel(
           t('deferred.rewards.heading'),
-          t('deferred.rewards.message'),
-          t('deferred.signIn'),
+          t(session?.uid && session.uid === accountUid ? 'auth.rewardsPending' : 'deferred.rewards.message'),
+          session?.uid && session.uid === accountUid ? undefined : t('deferred.signIn'),
           t('deferred.signInPending'),
+          session ? () => openSignIn('rewards') : undefined,
         ),
       );
     }
 
     main.replaceChildren(panel);
+    if (authPanel) panel.querySelector<HTMLElement>('#auth-heading')?.focus();
   }
 
   function setLocale(next: SupportedLocale): void {
@@ -359,11 +423,13 @@ export function App(
   }
 
   window.addEventListener('popstate', () => {
+    leaveSignIn();
     activateTab(tabFromPath(window.location.pathname), false);
   });
 
   appendElements(shell, header, main, tablist);
   renderChrome();
   activateTab(selectedTab, false);
+  session?.subscribe(renderChrome);
   return shell;
 }

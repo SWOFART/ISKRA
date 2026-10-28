@@ -16,6 +16,7 @@
     "build": "npm run build:client && wrangler deploy --dry-run --env=\"\" --outdir dist/worker"
   },
   "dependencies": {
+    "firebase": "13.1.0",
     "hono": "4.13.14",
     "jose": "6.2.13",
     "jpeg-js": "0.4.4",
@@ -34,5 +35,8 @@
   "allowScripts": {
     "esbuild": true,
     "workerd": true
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.6"
   }
 }

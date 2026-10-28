@@ -22,7 +22,6 @@ function createTestApp() {
 
 describe('domain and database facades', () => {
   it.each([
-    ['POST', '/api/me/bootstrap'],
     ['GET', '/api/reports'],
     ['GET', '/api/reports/11111111-1111-4111-8111-000000000001'],
     ['POST', '/api/reports'],

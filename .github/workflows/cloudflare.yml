@@ -57,6 +57,7 @@ jobs:
       cancel-in-progress: false
     environment:
       name: ${{ inputs.environment || 'staging' }}
+      url: ${{ steps.smoke.outputs.verified_url }}
     env:
       DEPLOY_ENV: ${{ inputs.environment || 'staging' }}
       DEPLOY_TARGET: ${{ inputs.target || 'auto' }}
