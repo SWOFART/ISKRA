@@ -78,7 +78,7 @@ async function seedPage(pool: Pool, ownerId: string, count: number) {
   const analysisIds = Array.from({ length: count }, () => crypto.randomUUID());
   await pool.query(
     `INSERT INTO ai_analyses (id, owner_user_id, kind, status, input_hash, result, expires_at)
-     SELECT seed.analysis_id, $1::text, 'REPORT', 'READY', seed.analysis_id::text,
+     SELECT analyses.analysis_id, $1::text, 'REPORT', 'READY', analyses.analysis_id::text,
        '{"decision":"ACCEPT"}'::jsonb, now() + interval '15 minutes'
      FROM unnest($2::uuid[]) WITH ORDINALITY AS seed(report_id, ordinality)
      JOIN unnest($3::uuid[]) WITH ORDINALITY AS analyses(analysis_id, ordinality)
@@ -92,7 +92,7 @@ async function seedPage(pool: Pool, ownerId: string, count: number) {
        existence_verified_at, last_existence_confirmed_at
      )
      SELECT seed.report_id, $1::text, 'GREEN', 'VERIFIED', 'Notification page report',
-       49.14, 9.22, 49.14, 9.22, 10, now(), seed.analysis_id, 3,
+       49.14, 9.22, 49.14, 9.22, 10, now(), analyses.analysis_id, 3,
        now() - interval '2 minutes', now() - interval '1 minute'
      FROM unnest($2::uuid[]) WITH ORDINALITY AS seed(report_id, ordinality)
      JOIN unnest($3::uuid[]) WITH ORDINALITY AS analyses(analysis_id, ordinality)
