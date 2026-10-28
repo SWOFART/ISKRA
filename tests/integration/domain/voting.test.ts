@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import { VoteReceiptSchema } from '../../../src/shared/contracts';
+import { distanceM } from '../../../src/shared/location';
 import { PostgresTransactionDatabase } from '../../../src/worker/db/client';
 import { ApiError } from '../../../src/worker/middleware/errors';
 import type { WorkerEnv } from '../../../src/worker/middleware/context';
@@ -172,11 +173,13 @@ describe('PostgreSQL report voting', () => {
         ['vote-yes-one', 'YES'], ['vote-yes-two', 'YES'], ['vote-no-one', 'NO'],
       ] as const;
 
-      for (const [actor, choice] of actors) {
+      for (let index = 0; index < actors.length; index++) {
+        const [actor, choice] = actors[index];
         const response = await sendVote(app, actor, report.id, 'EXISTENCE', choice, crypto.randomUUID(), location(nowValue));
         expect(response.status).toBe(200);
         expect(VoteReceiptSchema.parse(await response.json())).toMatchObject({
-          replayed: false, rpAwarded: 5, report: { id: report.id, status: 'AWAITING_EXISTENCE' },
+          replayed: false, rpAwarded: 5, balanceVersion: 1,
+          report: { id: report.id, status: 'AWAITING_EXISTENCE', version: index + 1 },
         });
       }
 
@@ -210,6 +213,7 @@ describe('PostgreSQL report voting', () => {
       const receipts = await Promise.all([existence, resolution].map(async (response) => VoteReceiptSchema.parse(await response.json())));
       expect(receipts.map((receipt) => receipt.rpAwarded)).toEqual([5, 5]);
       expect(new Set(receipts.map((receipt) => receipt.voteId)).size).toBe(2);
+      expect(receipts.map((receipt) => [receipt.report.version, receipt.balanceVersion])).toEqual([[1, 1], [2, 2]]);
       const balance = await pool.query<{ rp_balance: number }>('SELECT rp_balance FROM users WHERE id = $1::text', ['vote-both-stages']);
       expect(balance.rows[0].rp_balance).toBe(10);
     }));
@@ -265,7 +269,12 @@ describe('PostgreSQL report voting', () => {
       const report = await createReport(pool);
       const nowValue = Date.now();
       const app = createApp(pool, () => nowValue);
-      const boundaryLocation = location(nowValue - 60_000, 149.99, 50);
+      const latitudeDelta = (150 / 6_371_000) * (180 / Math.PI);
+      const boundaryLocation = {
+        lat: pin.lat + latitudeDelta, lng: pin.lng, accuracyM: 50,
+        observedAt: new Date(nowValue - 60_000).toISOString(),
+      };
+      expect(distanceM(pin, boundaryLocation)).toBeCloseTo(150, 9);
       const boundary = await sendVote(app, 'vote-boundary', report.id, 'EXISTENCE', 'YES', crypto.randomUUID(), boundaryLocation);
       expect(boundary.status).toBe(200);
 
@@ -362,6 +371,129 @@ describe('PostgreSQL report voting', () => {
         [resolutionReport.id],
       );
       expect(finalNotification.rows[0].message).toBe('Your city is cleaner thanks to you!');
+    }));
+
+  it('pays a self-cleaning reporter 60 RP only on resolution with separate role references and canonical versions', () =>
+    withTestDatabase(async (pool) => {
+      const selfCleaner = 'vote-self-cleaner';
+      const voters = ['vote-self-one', 'vote-self-two', 'vote-self-three'];
+      await installSchema(pool);
+      await Promise.all([selfCleaner, ...voters].map((id) => createUser(pool, id)));
+      const report = await createReport(pool, {
+        status: 'AWAITING_RESOLUTION', existenceYesCount: 3,
+        author: selfCleaner, cleaner: selfCleaner,
+      });
+      await seedReportAward(pool, selfCleaner, report.id);
+      let nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+
+      const selfVote = await sendVote(app, selfCleaner, report.id, 'RESOLUTION', 'YES', crypto.randomUUID(), location(nowValue));
+      expect(selfVote.status).toBe(403);
+      expect(await selfVote.json()).toMatchObject({ error: { code: 'SELF_VOTE' } });
+
+      for (let index = 0; index < 2; index++) {
+        nowValue += 1_000;
+        const response = await sendVote(app, voters[index], report.id, 'RESOLUTION', 'YES', crypto.randomUUID(), location(nowValue));
+        expect(response.status).toBe(200);
+        const receipt = VoteReceiptSchema.parse(await response.json());
+        expect(receipt).toMatchObject({
+          rpAwarded: 5, balanceVersion: 1,
+          report: { status: 'AWAITING_RESOLUTION', resolutionYesCount: index + 1, version: index + 1 },
+        });
+      }
+
+      const beforeResolution = await pool.query<{ rp_balance: number; version: number; finalCredits: number }>(
+        'SELECT u.rp_balance, u.version, '
+          + "(SELECT count(*)::int FROM reward_ledger WHERE report_id = $2::uuid AND kind IN ('REPORT_FINAL', 'CLEANUP')) AS \"finalCredits\" "
+          + 'FROM users u WHERE u.id = $1::text',
+        [selfCleaner, report.id],
+      );
+      expect(beforeResolution.rows[0]).toEqual({ rp_balance: 5, version: 1, finalCredits: 0 });
+
+      nowValue += 1_000;
+      const finalVote = await sendVote(app, voters[2], report.id, 'RESOLUTION', 'YES', crypto.randomUUID(), location(nowValue));
+      expect(finalVote.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await finalVote.json())).toMatchObject({
+        replayed: false, rpAwarded: 5, balance: 5, balanceVersion: 1,
+        report: { status: 'RESOLVED', resolutionYesCount: 3, version: 3 },
+      });
+
+      const roleLedger = await pool.query<{ kind: string; delta: number; source_ref: string }>(
+        'SELECT kind, delta, source_ref FROM reward_ledger WHERE user_id = $1::text AND report_id = $2::uuid ORDER BY kind',
+        [selfCleaner, report.id],
+      );
+      expect(roleLedger.rows.map(({ kind, delta }) => [kind, delta])).toEqual([
+        ['CLEANUP', 40], ['REPORT_FINAL', 15], ['REPORT_INITIAL', 5],
+      ]);
+      expect(new Set(roleLedger.rows.map((row) => row.source_ref)).size).toBe(3);
+      const state = await pool.query<{ rp_balance: number; account_version: number; report_version: number; cleanup_status: string; cleanup_version: number }>(
+        'SELECT u.rp_balance, u.version AS account_version, r.version AS report_version, '
+          + 'cleanup.status AS cleanup_status, cleanup.version AS cleanup_version '
+          + 'FROM users u JOIN reports r ON r.author_user_id = u.id '
+          + 'JOIN cleanup_submissions cleanup ON cleanup.report_id = r.id WHERE u.id = $1::text AND r.id = $2::uuid',
+        [selfCleaner, report.id],
+      );
+      expect(state.rows[0]).toEqual({
+        rp_balance: 60, account_version: 2, report_version: 3, cleanup_status: 'VERIFIED', cleanup_version: 1,
+      });
+    }));
+
+  it('allows a reporter to resolve a different cleaner and returns canonical role/account versions', () =>
+    withTestDatabase(async (pool) => {
+      const reporter = 'vote-reporter-verifier';
+      const cleaner = 'vote-another-cleaner';
+      const otherVoters = ['vote-reporter-prior-one', 'vote-reporter-prior-two'];
+      await installSchema(pool);
+      await Promise.all([reporter, cleaner, ...otherVoters].map((id) => createUser(pool, id)));
+      const report = await createReport(pool, {
+        status: 'AWAITING_RESOLUTION', existenceYesCount: 3,
+        author: reporter, cleaner,
+      });
+      await seedReportAward(pool, reporter, report.id);
+      let nowValue = Date.now();
+      const app = createApp(pool, () => nowValue);
+
+      for (const actor of otherVoters) {
+        nowValue += 1_000;
+        const response = await sendVote(app, actor, report.id, 'RESOLUTION', 'YES', crypto.randomUUID(), location(nowValue));
+        expect(response.status).toBe(200);
+      }
+      const key = crypto.randomUUID();
+      nowValue += 1_000;
+      const fix = location(nowValue);
+      const finalVote = await sendVote(app, reporter, report.id, 'RESOLUTION', 'YES', key, fix);
+      expect(finalVote.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await finalVote.json())).toMatchObject({
+        rpAwarded: 5, balance: 25, balanceVersion: 2,
+        report: { status: 'RESOLVED', resolutionYesCount: 3, version: 3 },
+      });
+
+      const reporterLedger = await pool.query<{ kind: string; delta: number; source_ref: string }>(
+        'SELECT kind, delta, source_ref FROM reward_ledger WHERE user_id = $1::text AND report_id = $2::uuid ORDER BY kind',
+        [reporter, report.id],
+      );
+      expect(reporterLedger.rows.map(({ kind, delta }) => [kind, delta])).toEqual([
+        ['REPORT_FINAL', 15], ['REPORT_INITIAL', 5], ['VOTE', 5],
+      ]);
+      expect(new Set(reporterLedger.rows.map((row) => row.source_ref)).size).toBe(3);
+      const accountVersions = await pool.query<{ reporter_balance: number; reporter_version: number; cleaner_balance: number; cleaner_version: number }>(
+        'SELECT (SELECT rp_balance FROM users WHERE id = $1::text) AS reporter_balance, '
+          + '(SELECT version FROM users WHERE id = $1::text) AS reporter_version, '
+          + '(SELECT rp_balance FROM users WHERE id = $2::text) AS cleaner_balance, '
+          + '(SELECT version FROM users WHERE id = $2::text) AS cleaner_version',
+        [reporter, cleaner],
+      );
+      expect(accountVersions.rows[0]).toEqual({
+        reporter_balance: 25, reporter_version: 2, cleaner_balance: 40, cleaner_version: 1,
+      });
+
+      nowValue += 61_000;
+      const replay = await sendVote(app, reporter, report.id, 'RESOLUTION', 'YES', key, fix);
+      expect(replay.status).toBe(200);
+      expect(VoteReceiptSchema.parse(await replay.json())).toMatchObject({
+        replayed: true, rpAwarded: 0, balance: 25, balanceVersion: 2,
+        report: { status: 'RESOLVED', version: 3 },
+      });
     }));
 
   it('serializes competing threshold votes so existence gets count four and resolution closes once', () =>
