@@ -190,3 +190,57 @@ test('keeps the report list available and retries a failed map style request', a
   await expect(page.locator('.map-tile-status')).toBeHidden();
   await expect.poll(() => styleRequests.length).toBeGreaterThanOrEqual(2);
 });
+
+test('preserves map filters, camera selection and expanded cluster when changing language', async ({ page }) => {
+  const report = fixtures.publicReport;
+  const first = {
+    id: report.id,
+    route: report.route,
+    status: report.status,
+    location: report.location,
+    coverPhotoId: report.coverPhotoId,
+    description: 'Litter beside the path.',
+    existenceYesCount: report.existenceYesCount,
+    resolutionYesCount: report.resolutionYesCount,
+    existenceVerifiedAt: report.existenceVerifiedAt,
+    lastExistenceConfirmedAt: report.lastExistenceConfirmedAt,
+    version: report.version,
+    updatedAt: report.updatedAt,
+    isDemo: report.isDemo,
+  };
+  const secondId = '44444444-4444-4444-8444-444444444444';
+  const reports = [first, { ...first, id: secondId, description: 'Waste near the same entrance.' }];
+  const requestUrls: string[] = [];
+  await page.route('**/api/reports**', async (route) => {
+    requestUrls.push(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: reports, nextCursor: null }),
+    });
+  });
+  await page.goto('/map');
+
+  await expect(page.locator('.map-marker--cluster')).toHaveCount(1);
+  const redFilter = page.locator('.route-filter[data-route="RED"]');
+  await redFilter.click();
+  await expect.poll(() => requestUrls.length).toBe(2);
+  await expect(redFilter).toHaveAttribute('aria-pressed', 'false');
+  await page.locator('.map-marker--cluster').click();
+  const clusterDetails = page.getByRole('region', { name: 'Reports in selected map group' });
+  await expect(clusterDetails).toBeVisible();
+  await clusterDetails.locator('.map-cluster-report').nth(1).click();
+  await expect(page.locator(`.report-list-item[data-report-id="${secondId}"]`))
+    .toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Deutsch' }).click();
+
+  await expect(page.locator('html')).toHaveAttribute('lang', 'de');
+  await expect(page.locator('.route-filter[data-route="RED"]')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('region', { name: 'Meldungen in der ausgewählten Kartengruppe' }))
+    .toBeVisible();
+  await expect(page.locator(`.report-list-item[data-report-id="${secondId}"]`))
+    .toHaveAttribute('aria-pressed', 'true');
+  const languageReload = new URL(requestUrls[2]).searchParams;
+  expect(languageReload.get('routes')).toBe('GREEN,YELLOW');
+});

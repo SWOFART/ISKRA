@@ -19,8 +19,31 @@ const defaultMapStyleUrl = 'https://api.maptiler.com/maps/streets-v4/style.json'
 
 export interface MapPageView {
   element: HTMLElement;
+  state: MapPageState;
   mount(): void;
   dispose(): void;
+}
+
+export interface MapPageState {
+  routes: Route[];
+  needsVerification: boolean;
+  includeResolved: boolean;
+  selectedReportId: string | null;
+  expandedClusterReportIds: string[] | null;
+  center: { latitude: number; longitude: number };
+  zoom: number;
+}
+
+function createMapPageState(): MapPageState {
+  return {
+    routes: [...routeOrder],
+    needsVerification: false,
+    includeResolved: false,
+    selectedReportId: null,
+    expandedClusterReportIds: null,
+    center: { ...clientDesign.map.center },
+    zoom: clientDesign.map.zoom,
+  };
 }
 
 function mapStyleUrl(): string | null {
@@ -30,6 +53,7 @@ function mapStyleUrl(): string | null {
   try {
     const url = new URL(import.meta.env.VITE_MAP_STYLE_URL?.trim() || defaultMapStyleUrl);
     if (url.protocol !== 'https:' || url.hostname !== 'api.maptiler.com'
+      || url.username || url.password || url.hash
       || !/^\/maps\/[a-zA-Z0-9_-]+\/style\.json$/.test(url.pathname)) return null;
     url.search = '';
     url.searchParams.set('key', key);
@@ -140,7 +164,9 @@ export function renderMapPage(
   api: ClientApi,
   t: Translate,
   locale: SupportedLocale,
+  initialState?: MapPageState,
 ): MapPageView {
+  const pageState = initialState ?? createMapPageState();
   const page = makeElement('section', 'map-page');
   page.setAttribute('aria-label', t('map.region'));
 
@@ -188,29 +214,36 @@ export function renderMapPage(
   const routeFilters = makeElement('div', 'route-filters');
   routeFilters.setAttribute('role', 'group');
   routeFilters.setAttribute('aria-label', t('map.routesLabel'));
-  const selectedRoutes = new Set<Route>(routeOrder);
+  const selectedRoutes = new Set<Route>(pageState.routes);
+  let needsVerification = pageState.needsVerification;
+  let includeResolved = pageState.includeResolved;
+  let selectedReportId = pageState.selectedReportId;
+  let expandedClusterReportIds = pageState.expandedClusterReportIds;
   const needsVerificationButton = makeButton(t('map.filter.needsVerification'), 'map-filter-button');
-  needsVerificationButton.setAttribute('aria-pressed', 'false');
+  needsVerificationButton.setAttribute('aria-pressed', String(needsVerification));
   needsVerificationButton.addEventListener('click', () => {
     needsVerification = !needsVerification;
+    pageState.needsVerification = needsVerification;
     needsVerificationButton.setAttribute('aria-pressed', String(needsVerification));
     void loadReports();
   });
   const resolvedButton = makeButton(t('map.filter.resolved'), 'map-filter-button');
-  resolvedButton.setAttribute('aria-pressed', 'false');
+  resolvedButton.setAttribute('aria-pressed', String(includeResolved));
   resolvedButton.addEventListener('click', () => {
     includeResolved = !includeResolved;
+    pageState.includeResolved = includeResolved;
     resolvedButton.setAttribute('aria-pressed', String(includeResolved));
     void loadReports();
   });
 
   for (const route of routeOrder) {
     const button = makeButton(routeLabel(route, t), `route-filter route-filter--${route.toLowerCase()}`);
-    button.setAttribute('aria-pressed', 'true');
+    button.setAttribute('aria-pressed', String(selectedRoutes.has(route)));
     button.setAttribute('data-route', route);
     button.addEventListener('click', () => {
       if (selectedRoutes.has(route)) selectedRoutes.delete(route);
       else selectedRoutes.add(route);
+      pageState.routes = routeOrder.filter((selected) => selectedRoutes.has(selected));
       button.setAttribute('aria-pressed', String(selectedRoutes.has(route)));
       void loadReports();
     });
@@ -272,10 +305,6 @@ export function renderMapPage(
   let tileFailureSeen = false;
   let resizeObserver: ResizeObserver | undefined;
   let mapGeneration = 0;
-  let needsVerification = false;
-  let includeResolved = false;
-  let selectedReportId: string | null = null;
-  let expandedClusterReportIds: string[] | null = null;
   let reportLoadBusy = true;
   let reportLoadFailed = false;
   let loadGeneration = 0;
@@ -323,6 +352,13 @@ export function renderMapPage(
     });
   }
 
+  function rememberMapCamera(): void {
+    if (!mapInstance) return;
+    const center = mapInstance.getCenter();
+    pageState.center = { latitude: center.lat, longitude: center.lng };
+    pageState.zoom = mapInstance.getZoom();
+  }
+
   function renderReports(): void {
     const visibleReports = reports.filter((report) => selectedRoutes.has(report.route)
       && (includeResolved || report.status !== 'RESOLVED'));
@@ -367,8 +403,10 @@ export function renderMapPage(
         expandedClusterReportIds = cluster.reports.length > 1
           ? cluster.reports.map(({ id }) => id)
           : null;
+        pageState.expandedClusterReportIds = expandedClusterReportIds;
         if (cluster.reports.length > 1) fitMapToReports(cluster.reports);
         selectedReportId = cluster.reports[0].id;
+        pageState.selectedReportId = selectedReportId;
         renderReports();
         reportList.querySelector<HTMLButtonElement>(`[data-report-id="${selectedReportId}"]`)?.focus();
       });
@@ -399,6 +437,7 @@ export function renderMapPage(
         makeElement('span', 'report-description', report.description));
       select.addEventListener('click', () => {
         selectedReportId = report.id;
+        pageState.selectedReportId = selectedReportId;
         fitMapToReports([report]);
         renderReports();
         reportList.querySelector<HTMLButtonElement>(`[data-report-id="${report.id}"]`)?.focus();
@@ -423,6 +462,7 @@ export function renderMapPage(
       appendElements(select, route, status, description, progress);
       select.addEventListener('click', () => {
         selectedReportId = report.id;
+        pageState.selectedReportId = selectedReportId;
         fitMapToReports([report]);
         renderReports();
       });
@@ -445,7 +485,7 @@ export function renderMapPage(
     fitButton.disabled = visibleReports.length === 0;
   }
 
-  async function loadReports(): Promise<void> {
+  async function loadReports(preserveSelection = false): Promise<void> {
     clearRetryTimer();
     const generation = ++loadGeneration;
     retryButton.disabled = false;
@@ -455,8 +495,12 @@ export function renderMapPage(
     reportLoadBusy = true;
     reportLoadFailed = false;
     reports = [];
-    selectedReportId = null;
-    expandedClusterReportIds = null;
+    if (!preserveSelection) {
+      selectedReportId = null;
+      expandedClusterReportIds = null;
+      pageState.selectedReportId = null;
+      pageState.expandedClusterReportIds = null;
+    }
     fixtureBanner.hidden = true;
     renderReports();
 
@@ -496,7 +540,12 @@ export function renderMapPage(
 
       if (generation !== loadGeneration) return;
       reports = [...nextReports.values()];
-      if (!reports.some(({ id }) => id === selectedReportId)) selectedReportId = null;
+      if (!reports.some(({ id }) => id === selectedReportId)) {
+        selectedReportId = null;
+        pageState.selectedReportId = null;
+      }
+      expandedClusterReportIds = expandedClusterReportIds?.filter((id) => reports.some(({ id: reportId }) => reportId === id)) ?? null;
+      pageState.expandedClusterReportIds = expandedClusterReportIds;
       reportLoadBusy = false;
       fixtureBanner.hidden = !fixture;
       renderReports();
@@ -509,7 +558,12 @@ export function renderMapPage(
       if (generation !== loadGeneration) return;
       fixtureBanner.hidden = true;
       reports = [];
-      selectedReportId = null;
+      if (!preserveSelection) {
+        selectedReportId = null;
+        expandedClusterReportIds = null;
+        pageState.selectedReportId = null;
+        pageState.expandedClusterReportIds = null;
+      }
       reportLoadBusy = false;
       reportLoadFailed = true;
       mapStatusText.textContent = error instanceof ApiClientError
@@ -567,8 +621,8 @@ export function renderMapPage(
       const instance = new MapLibreMapConstructor({
         container: mapCanvas,
         style,
-        center: [clientDesign.map.center.longitude, clientDesign.map.center.latitude],
-        zoom: clientDesign.map.zoom,
+        center: [pageState.center.longitude, pageState.center.latitude],
+        zoom: pageState.zoom,
         minZoom: 11,
         maxZoom: 18,
         maxBounds: [[cityBounds.west, cityBounds.south], [cityBounds.east, cityBounds.north]],
@@ -594,7 +648,10 @@ export function renderMapPage(
         }
         renderReports();
       });
-      instance.on('moveend', renderReports);
+      instance.on('moveend', () => {
+        rememberMapCamera();
+        renderReports();
+      });
       resizeObserver = new ResizeObserver(() => instance.resize());
       resizeObserver.observe(mapViewport);
     } catch {
@@ -620,11 +677,12 @@ export function renderMapPage(
     clearRetryTimer();
     resizeObserver?.disconnect();
     resizeObserver = undefined;
+    rememberMapCamera();
     mapInstance?.remove();
     mapInstance = null;
     mapReady = false;
   }
 
-  void loadReports();
-  return { element: page, mount: () => { void initializeMap(); }, dispose: disposeMap };
+  void loadReports(initialState !== undefined);
+  return { element: page, state: pageState, mount: () => { void initializeMap(); }, dispose: disposeMap };
 }

@@ -3,7 +3,7 @@ import { createClientApi } from './api';
 import type { FirebaseSession } from './auth';
 import { renderAuthPanel } from './auth-panel';
 import { errorMessageKey, storeLocale, translate, type MessageKey, type MessageValues } from './i18n';
-import { renderMapPage, type MapPageView } from './MapPage';
+import { renderMapPage, type MapPageState, type MapPageView } from './MapPage';
 
 type ClientApi = ReturnType<typeof createClientApi>;
 type Translate = (key: MessageKey, values?: MessageValues) => string;
@@ -115,6 +115,7 @@ export function App(
   };
   let tabs = new Map<TabId, HTMLButtonElement>();
   let currentMapPage: MapPageView | undefined;
+  let mapPageState: MapPageState | undefined;
 
   function createTab(tabId: TabId): HTMLButtonElement {
     const label = t(tabLabelKeys[tabId]);
@@ -265,7 +266,8 @@ export function App(
           notice.textContent = t('map.cameraNotConnected');
           notice.hidden = false;
         }
-      }, api, t, locale);
+      }, api, t, locale, mapPageState);
+      mapPageState = currentMapPage.state;
       appendElements(panel, currentMapPage.element);
     } else if (selectedTab === 'impact') {
       appendElements(panel,
