@@ -1,6 +1,6 @@
 import { array, boolean, enumeration, literal, nullable, number, object, string, union, type Infer } from './schema';
 
-export const CONTRACT_REVISION = 'v1-candidate.2' as const;
+export const CONTRACT_REVISION = 'v1-candidate.3' as const;
 export const POLICY = Object.freeze({
   voteRadiusM: 150, cleanupRadiusM: 150, maxAccuracyM: 50, maxLocationAgeSeconds: 60,
   maxPinDisplacementM: 3, reporterTotalRp: 20, reporterInitialRp: 5,
@@ -38,7 +38,7 @@ export const ErrorCodeSchema = enumeration([
   'CLEANUP_ALREADY_SUBMITTED', 'INSUFFICIENT_RP', 'PRICE_CHANGED', 'EXPIRED', 'PHOTO_TOO_LARGE',
   'UNSUPPORTED_MEDIA', 'LOCATION_INACCURATE', 'LOCATION_STALE', 'PIN_TOO_FAR', 'AI_UNCERTAIN',
   'AI_REJECTED', 'RATE_LIMITED', 'AI_INVALID_OUTPUT', 'AI_UNAVAILABLE', 'DATABASE_UNAVAILABLE',
-  'AI_TIMEOUT', 'UNAVAILABLE', 'INTERNAL_ERROR',
+  'AI_TIMEOUT', 'MISSION_ALREADY_EXISTS', 'MISSION_NOT_OPEN', 'UNAVAILABLE', 'INTERNAL_ERROR',
 ]);
 export type ErrorCode = Infer<typeof ErrorCodeSchema>;
 export type ApiErrorHttpStatus = 400 | 401 | 403 | 404 | 409 | 410 | 413 | 415 | 422 | 429 | 500 | 502 | 503 | 504;
@@ -55,6 +55,8 @@ const apiErrorPolicy = {
   IDEMPOTENCY_CONFLICT: { httpStatus: 409, retryable: false },
   ANALYSIS_CONSUMED: { httpStatus: 409, retryable: false },
   CLEANUP_ALREADY_SUBMITTED: { httpStatus: 409, retryable: false },
+  MISSION_ALREADY_EXISTS: { httpStatus: 409, retryable: false },
+  MISSION_NOT_OPEN: { httpStatus: 409, retryable: false },
   INSUFFICIENT_RP: { httpStatus: 409, retryable: false },
   PRICE_CHANGED: { httpStatus: 409, retryable: false },
   EXPIRED: { httpStatus: 410, retryable: true },
@@ -150,6 +152,25 @@ export const ViewerReportDetailSchema = object({ ...detailFields, viewer: Viewer
   'Permission requires an open operation');
 export const ReportDetailSchema = union(PublicReportDetailSchema, ViewerReportDetailSchema);
 export const ReportListSchema = object({ items: array(ReportSummarySchema, 0, 100), nextCursor: nullable(string(1, 512)) });
+export const MissionStatusSchema = literal('OPEN');
+export const MissionMeetingPointSchema = object({
+  lat: number(-90, 90), lng: number(-180, 180),
+  label: string(1, 160).refine((value) => value.trim().length > 0 && !value.includes('\0'), 'Invalid meeting point label'),
+});
+export const MissionSchema = object({
+  id: UuidSchema, reportId: UuidSchema, organizer: PublicIdentitySchema,
+  status: MissionStatusSchema, startsAt: TimestampSchema, meetingPoint: MissionMeetingPointSchema,
+  participantCount: count, announcement: string(0, 500), createdAt: TimestampSchema, updatedAt: TimestampSchema,
+});
+export const MissionEnvelopeSchema = object({ mission: MissionSchema });
+export const CreateMissionRequestSchema = object({
+  startsAt: TimestampSchema, meetingPoint: MissionMeetingPointSchema,
+});
+export const MissionAnnouncementRequestSchema = object({
+  announcement: string(0, 500).refine((value) => !value.includes('\0'), 'Invalid announcement'),
+});
+export type Mission = Infer<typeof MissionSchema>;
+export type CreateMissionRequest = Infer<typeof CreateMissionRequestSchema>;
 export const ReportListQuerySchema = object({
   cityId: string(1, 64).refine((v) => v === 'heilbronn', 'Unsupported city'),
   bbox: nullable(string(1, 64).refine((v) => {

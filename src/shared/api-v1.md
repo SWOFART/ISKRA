@@ -1,6 +1,6 @@
 # API v1 candidate handoff
 
-OpenSpec `build-iskra-hackathon-mvp`, task 1.3 / issue #7. Contract revision: `v1-candidate.2`.
+OpenSpec `build-iskra-hackathon-mvp`, task 1.3 / issue #7, extended by task 9.2 / issue #56. Contract revision: `v1-candidate.3`.
 
 This is the review candidate for A/B/C. It consolidates the already selected D01–D08 policies and the P0 DTOs in [contracts.ts](contracts.ts). G0 remains **PENDING** until A and C acknowledge the endpoint, error, media, location and internal-interface boundaries and the required independent review is complete. No product policy is reopened here. Changes after acknowledgment require a new candidate revision and consumer notes.
 
@@ -9,7 +9,7 @@ This is the review candidate for A/B/C. It consolidates the already selected D01
 - API base is `/api`; JSON uses UTF-8, UUID resource/operation IDs and canonical UTC timestamps. Requests reject unknown fields and client-supplied authority such as `userId`, route, status, tally, reward or balance.
 - Protected endpoints use `Authorization: Bearer <Firebase ID token>`. `GET /reports` and `GET /reports/:id` allow a guest or authenticated viewer. `GET /photos/:id/content` uses a scoped expiring capability; unattached media also requires its owner identity.
 - Every error uses `{error:{code,message,requestId,retryable}}`. Messages are safe for display; never include SQL, JWTs, capability values, provider payloads or private identity. Public/private responses use `Cache-Control: no-store`; no auth-aware response is shared-cacheable.
-- `Idempotency-Key` is a UUID required for report/cleanup AI analysis, publication, votes and cleanup submission. Reuse the same key and body after an ambiguous transport failure. A changed body conflicts. When a resident changes inputs or starts a fresh analysis after failure/expiry, use a new operation key. Semantic database uniqueness remains authoritative if a client loses its key.
+- `Idempotency-Key` is a UUID required for report/cleanup AI analysis, publication, votes, cleanup submission and Yellow mission creation. Reuse the same key and body after an ambiguous transport failure. A changed body conflicts. When a resident changes inputs or starts a fresh analysis after failure/expiry, use a new operation key. Semantic database uniqueness remains authoritative if a client loses its key.
 - `retryable:true` means the UI has a defined recovery path while retaining the resident's intent or evidence. It never authorizes blind retries. Reuse the original key for an uncertain outcome; create a new key only for an explicitly changed request or a fresh analysis attempt. Rate-limit responses may include `Retry-After`; clients honor it and keep automatic retries bounded.
 
 ## P0 endpoint inventory
@@ -50,7 +50,7 @@ Conditional Yellow, Red and rewards routes are outside this P0 API candidate. Th
 | 401 | `UNAUTHENTICATED` | false | Complete or refresh sign-in, then start the protected action. |
 | 403 | `SELF_VOTE` (false), `NOT_ELIGIBLE` (false), `TOO_FAR` (true), `FORBIDDEN` (false) | See each code | `TOO_FAR` is retryable after obtaining a fresh eligible fix; the others are not. No vote/award is made. |
 | 404 | `NOT_FOUND` | false | Resource is absent or not visible to this caller. |
-| 409 | `ALREADY_VOTED`, `STAGE_CLOSED`, `IDEMPOTENCY_CONFLICT`, `ANALYSIS_CONSUMED`, `CLEANUP_ALREADY_SUBMITTED`, `INSUFFICIENT_RP`, `PRICE_CHANGED` | false | Resolve the state conflict; do not mint a new operation to repeat the rejected effect. An identical accepted operation still replays before new-action checks. |
+| 409 | `ALREADY_VOTED`, `STAGE_CLOSED`, `IDEMPOTENCY_CONFLICT`, `ANALYSIS_CONSUMED`, `CLEANUP_ALREADY_SUBMITTED`, `MISSION_ALREADY_EXISTS`, `MISSION_NOT_OPEN`, `INSUFFICIENT_RP`, `PRICE_CHANGED` | false | Resolve the state conflict; do not mint a new operation to repeat the rejected effect. An identical accepted operation still replays before new-action checks. |
 | 410 | `EXPIRED` | true | Refresh an expired read/upload capability or explicitly start a fresh analysis; never publish/submit with an expired result. |
 | 413 | `PHOTO_TOO_LARGE` | false | Capture/prepare evidence within the byte limit. |
 | 415 | `UNSUPPORTED_MEDIA` | false | Capture supported JPEG evidence. |
@@ -117,3 +117,17 @@ The first receipt projects the report state captured in the publication transact
 Role earnings are separate from signed spendable balance and pending RP. `Impact.totals.earnedRp` is the sum of positive category credits; `Impact.totals.balanceRp` is the current ledger balance and may differ (including a future negative balance); pending reporter/cleaner amounts are not earned or credited. A reporter who also cleans keeps both role credits and one de-duplicated report-history item. A replay pays zero and returns the current balance/version, not the historical response balance.
 
 The validating examples in [p0.json](../../tests/fixtures/contracts/p0.json) include independent requests for both vote stages, READY/ACCEPT versus READY/RETAKE versus RUNNING/FAILED analysis states, and separate earned, pending and balance values. They are synthetic `DEMO` fixtures only.
+
+## Conditional Yellow missions (task 9.2 / issue #56)
+
+The user-authorized serialized B implementation lane is recorded in the active OpenSpec design. It permits implementation while real Green M3 remains unverified; it does not claim M3 acceptance, release readiness, deployment or P2 behavior. These endpoints are bounded to mission creation, open joining and organizer announcements:
+
+| Owner | Method and path | Access / request | Success |
+|---|---|---|---|
+| B | `GET /reports/:id/mission` | Public; report UUID | `200 {mission}` or `404 NOT_FOUND` |
+| B | `GET /missions/:id` | Public; mission UUID | `200 {mission}` |
+| B | `POST /reports/:id/missions` | Auth; UUID `Idempotency-Key`; `{startsAt,meetingPoint:{lat,lng,label}}` | `201 {mission}`; same-key retry returns canonical current mission |
+| B | `POST /missions/:id/participants` | Auth; `{}` | `200 {mission}`; repeated join is safe |
+| B | `PATCH /missions/:id/announcement` | Auth; `{announcement}` plain text up to 500 characters | `200 {mission}`; organizer only |
+
+Mission creation locks the report and requires a non-demo VERIFIED YELLOW report; a unique report constraint prevents a second mission. Creation and the organizer's participant row commit together. The meeting point is stored separately from the report pin. Public mission DTOs include the organizer's allowlisted identity and participant count, never a roster or email. There are no mission attendance, completion, verification or award endpoints or columns; Green cleanup still explicitly rejects non-GREEN reports.
