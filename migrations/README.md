@@ -8,6 +8,7 @@
 |---|---|
 | `0001_p0_core.sql` | `bae5a68906a6e4ba971d06a7cae1e02a3b989e81dba0d00551a3d6fb945aeaa8` |
 | `0002_yellow_missions.sql` | `46cf4facaae417e4b0d1cbae7a19fc1a9a398f851a8a51d4d63109bf1769b334` |
+| `0003_red_assistance_drafts.sql` | `0a6f043f37f758f791cc721c80765739598d4a5bc0316558fdc0b9cf261b5663` |
 
 Verify a migration's checksum against this reviewed inventory before applying it. PowerShell: `Get-FileHash migrations/0001_p0_core.sql -Algorithm SHA256`. Linux/macOS: `sha256sum migrations/0001_p0_core.sql`. After review, record the verified checksum with the migration run and backup identity. Never edit an applied migration to make its checksum match; create a new migration instead.
 
@@ -28,5 +29,6 @@ These names describe the required separation; this migration does not provision 
 - Cross-row lifecycle and voter-role rules (such as requiring a GREEN report before cleanup, or preventing self-votes) are checked in transaction services; SQL `CHECK` constraints only use columns from their own row.
 - Cleanup coordinates are private audit fields. Public report DTOs expose only the report point.
 - Migration `0002_yellow_missions.sql` adds the bounded Yellow mission and participant tables; it intentionally adds no attendance, completion, vote, payout or award path. The migration's verified-YELLOW rule is reinforced by a composite FK from mission report ID/route to the report's ID/route, while VERIFIED status is serialized and enforced by the transaction service.
+- Migration `0003_red_assistance_drafts.sql` stores one private Red draft per report owner and an empty-by-default verified contact allowlist. No authority contact is seeded; manually verify source provenance before adding any active contact. The sent declaration stores a resident-reported timestamp only and never changes report lifecycle, votes or rewards. Integration tests apply it only to a disposable schema; no cloud database was migrated.
 
 The migration contains no data backfill or destructive operation. The integration suite applies it only inside a generated disposable schema; no cloud database was migrated by this task.

@@ -9,6 +9,7 @@ import { createReportRoutes } from './reports';
 import { createVoteRoutes } from './votes';
 import { createCleanupRoutes } from './cleanups';
 import { createMissionRoutes } from './missions';
+import { createRedRoutes } from './red';
 import type { ReportMediaResolver } from '../services/report-context';
 
 const unavailable = () => {
@@ -32,6 +33,7 @@ export function createDomainRoutes({ database, reportMedia, verify, now }: Domai
     routes.route('/', createVoteRoutes({ database, media: reportMedia, verify, now }));
     routes.route('/', createCleanupRoutes({ database, media: reportMedia, verify, now }));
     routes.route('/', createMissionRoutes({ database, verify, now }));
+    routes.route('/', createRedRoutes({ database, verify }));
   }
   else routes.post('/me/bootstrap', requireAuth(verify), unavailable);
 
@@ -44,6 +46,10 @@ export function createDomainRoutes({ database, reportMedia, verify, now }: Domai
     .get('/reports/:id/mission', unavailable)
     .get('/missions/:id', unavailable)
     .post('/reports/:id/missions', unavailable)
+    .get('/reports/:id/red-draft', unavailable)
+    .post('/reports/:id/red-draft', unavailable)
+    .patch('/reports/:id/red-draft', unavailable)
+    .post('/reports/:id/red-draft/sent', unavailable)
     .post('/missions/:id/participants', unavailable)
     .patch('/missions/:id/announcement', unavailable)
     .get('/me/impact', unavailable)
