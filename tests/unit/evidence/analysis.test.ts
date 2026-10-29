@@ -22,6 +22,17 @@ function setup() {
 }
 
 describe('analysis request boundary', () => {
+  it('pauses analysis when AI_RATE_PER_MINUTE is 0 before any database call', async () => {
+    const { app, env, query } = setup();
+    const response = await app.request('https://iskra.test/api/ai/analyze-report', {
+      method: 'POST', headers: { Authorization: 'Bearer resident', 'Content-Type': 'application/json',
+        'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(input),
+    }, { ...env, AI_RATE_PER_MINUTE: '0' });
+    expect(response.status).toBe(503);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('requires verified authentication for report, cleanup and polling', async () => {
     const { app, env, query } = setup();
     for (const path of ['/ai/analyze-report', '/ai/analyze-cleanup', '/ai/analyses/' + crypto.randomUUID()]) {
@@ -63,12 +74,13 @@ describe('analysis request boundary', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
-  it('keeps cleanup unavailable pending durable target binding', async () => {
+  it('rejects a cleanup analysis with no operation key before SQL', async () => {
     const { app, env, query } = setup();
     const response = await app.request('https://iskra.test/api/ai/analyze-cleanup', {
-      method: 'POST', headers: { Authorization: 'Bearer resident' },
+      method: 'POST', headers: { Authorization: 'Bearer resident', 'Content-Type': 'application/json' },
+      body: '{}',
     }, env);
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(400);
     expect(query).not.toHaveBeenCalled();
   });
 });

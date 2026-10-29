@@ -89,6 +89,28 @@ def write_private_json(path, values):
         json.dump(values, output)
 
 
+def assert_public_assets(directory, values):
+    """Reject known server credentials in the public build without printing them."""
+    if not directory.is_dir() or not (directory / "index.html").is_file():
+        raise ValueError("Build the application assets before deployment")
+    secrets = {values[name] for name in PRIVATE_KEYS
+               if not name.startswith("VITE_") and values.get(name)}
+    if values.get("VERTEX_AUTH_JSON"):
+        identity = json.loads(values["VERTEX_AUTH_JSON"])
+        if identity.get("privateKey"):
+            secrets.add(identity["privateKey"])
+    patterns = {value.encode() for secret in secrets
+                for value in (secret, json.dumps(secret)[1:-1])}
+    for path in directory.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("Public build must not contain symbolic links")
+        if path.is_file():
+            content = path.read_bytes()
+            if (any(pattern in content for pattern in patterns)
+                    or re.search(rb"-----BEGIN (?:RSA |EC |ENCRYPTED )?PRIVATE KEY-----", content)):
+                raise ValueError("Public build contains a server credential; deployment refused")
+
+
 def write_hyperdrive_config(path, environment, configuration_id):
     root = Path.cwd().resolve()
     config = json.loads((root / "wrangler.jsonc").read_text())
@@ -188,6 +210,8 @@ def main():
             process_env.update({key: value for key, value in values.items() if key.startswith("VITE_")})
             command = ["npm", "run", "build"]
         else:
+            if target == "application":
+                assert_public_assets(Path("dist/client"), values)
             process_env.update({key: values[key] for key in ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID")})
             command = ["npm", "exec", "--no", "--", "wrangler", "deploy", "--env", environment,
                        "--var", "RELEASE_SHA:" + os.environ["GITHUB_SHA"]]

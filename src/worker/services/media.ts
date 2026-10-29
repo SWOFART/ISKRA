@@ -3,7 +3,7 @@ import { PhotoSchema, UidSchema, UuidSchema } from '../../shared/contracts';
 import { literal, object, union } from '../../shared/schema';
 import type { AttachedPhotoReference, ReportMediaResolver } from './report-context';
 import type { TransactionDatabase } from '../db/client';
-import { readPhoto } from '../db/evidence-store';
+import { readOwnerPreview, readPhoto } from '../db/evidence-store';
 import { decode, encode } from 'jpeg-js';
 import { POLICY } from '../../shared/contracts';
 import { ApiError } from '../middleware/errors';
@@ -183,6 +183,14 @@ export function createReportMediaResolver(origin: string, secret: string | undef
     resolveAttachedPhotos: (photos) => Promise.all(photos.map((photo) =>
       createPhotoReadCapability(photo, origin, secret))),
   };
+}
+
+export async function createOwnerPhotoPreview(
+  database: TransactionDatabase, photoId: string, uid: string, origin: string, secret: string | undefined,
+) {
+  const photo = await readOwnerPreview(database, photoId, uid);
+  if (!photo) throw new ApiError(404, 'NOT_FOUND', 'Photo not found.');
+  return createPhotoReadCapability(photo, origin, secret, uid);
 }
 
 export async function authorizePhotoRead(

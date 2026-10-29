@@ -110,3 +110,159 @@ test('shows role-specific Impact, opens a report map sheet and restores history 
   await expect(page.getByRole('heading', { name: 'Your impact' })).toBeVisible();
   await expect.poll(() => impactPage.evaluate((element) => element.scrollTop)).toBe(previousScrollTop);
 });
+
+test('shows quiet localized resolution notifications once, marks them read and returns to current Impact', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const token = await stubAuthenticatedClient(page);
+  const report = fixtures.impact.items[0].report;
+  const existenceId = '11111111-1111-4111-8111-000000000031';
+  const resolutionId = '11111111-1111-4111-8111-000000000032';
+  const notifications = [{
+    id: existenceId,
+    kind: 'EXISTENCE_VERIFIED',
+    message: 'Residents confirmed your report.',
+    reportId: report.id,
+    readAt: null as string | null,
+  }];
+  let notificationReads = 0;
+  let failNotificationRequests = false;
+  let impactBalance = 20;
+  let impactReads = 0;
+  const notificationLocales: string[] = [];
+
+  await page.route('**/api/me/impact**', async (route) => {
+    impactReads += 1;
+    expect(route.request().headers().authorization).toBe(`Bearer ${token}`);
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      ...fixtures.impact,
+      totals: { ...fixtures.impact.totals, balanceRp: impactBalance },
+      balanceVersion: impactReads,
+    }) });
+  });
+  await page.route('**/api/me/notifications**', async (route) => {
+    expect(route.request().headers().authorization).toBe(`Bearer ${token}`);
+    if (route.request().method() === 'PATCH') {
+      const notificationId = new URL(route.request().url()).pathname.split('/').at(-1)!;
+      const notification = notifications.find((item) => item.id === notificationId);
+      if (notification) notification.readAt ??= '2026-10-28T20:00:00.000Z';
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        id: notificationId,
+        readAt: notification?.readAt ?? '2026-10-28T20:00:00.000Z',
+      }) });
+      return;
+    }
+    notificationReads += 1;
+    if (failNotificationRequests) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: {
+        code: 'UNAVAILABLE',
+        message: 'Notifications are temporarily unavailable.',
+        requestId: '11111111-1111-4111-8111-000000000033',
+        retryable: true,
+      } }) });
+      return;
+    }
+    const locale = new URL(route.request().url()).searchParams.get('locale') ?? 'en';
+    notificationLocales.push(locale);
+    const items = notifications.map((item) => ({
+      ...item,
+      message: item.kind === 'REPORT_RESOLVED'
+        ? locale === 'de' ? 'Dank dir ist deine Stadt sauberer!' : 'Your city is cleaner thanks to you!'
+        : locale === 'de' ? 'Die Bewohner haben deinen Bericht bestätigt.' : 'Residents confirmed your report.',
+    }));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items, nextCursor: null }) });
+  });
+  await page.route('**/api/reports**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/reports')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        items: [report],
+        nextCursor: null,
+      }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      ...fixtures.publicReport,
+      id: report.id,
+    }) });
+  });
+
+  await page.goto('/impact');
+  await page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByLabel('Email', { exact: true }).fill(email);
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
+
+  const existenceCard = page.locator(`.impact-notification-item[data-notification-id="${existenceId}"]`);
+  await expect(existenceCard).toContainText('Residents confirmed your report.');
+  const markRead = existenceCard.getByRole('button', { name: 'Mark as read' });
+  await markRead.focus();
+  const readsBeforeFocusRefresh = notificationReads;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => notificationReads).toBe(readsBeforeFocusRefresh + 1);
+  await expect(markRead).toBeFocused();
+  await markRead.click();
+  await expect(existenceCard).toContainText('Read');
+  await expect(existenceCard.getByRole('button', { name: 'Open report' })).toBeFocused();
+
+  failNotificationRequests = true;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const notificationStatus = page.locator('.impact-notifications-status');
+  await expect(notificationStatus).toHaveText('Notifications are temporarily unavailable.');
+  const refreshNotifications = page.getByRole('button', { name: 'Refresh notifications' });
+  await refreshNotifications.focus();
+  const readsBeforeRetry = notificationReads;
+  failNotificationRequests = false;
+  await refreshNotifications.click();
+  await expect.poll(() => notificationReads).toBe(readsBeforeRetry + 1);
+  await expect(notificationStatus).toBeFocused();
+
+  notifications.unshift({
+    id: resolutionId,
+    kind: 'REPORT_RESOLVED',
+    message: 'Your city is cleaner thanks to you!',
+    reportId: report.id,
+    readAt: null,
+  });
+  impactBalance = 35;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const toast = page.locator('.app-notification-toast');
+  await expect(toast).toBeVisible();
+  await expect(toast).toContainText('Your city is cleaner thanks to you!');
+
+  const callsBeforeHidden = notificationReads;
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.waitForTimeout(100);
+  expect(notificationReads).toBe(callsBeforeHidden);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => notificationReads).toBe(callsBeforeHidden + 1);
+  await expect(toast).toContainText('Your city is cleaner thanks to you!');
+
+  await page.getByRole('button', { name: 'Deutsch', exact: true }).click();
+  await expect(toast).toContainText('Dank dir ist deine Stadt sauberer!');
+  expect(notificationLocales).toContain('en');
+  expect(notificationLocales).toContain('de');
+  await toast.getByRole('button', { name: 'Benachrichtigung schließen' }).click();
+  await expect(page.locator('.bottom-nav [role="tab"][aria-selected="true"]')).toBeFocused();
+  const callsBeforeReplay = notificationReads;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => notificationReads).toBe(callsBeforeReplay + 1);
+  await expect(toast).toHaveJSProperty('hidden', true);
+
+  const resolutionCard = page.locator(`.impact-notification-item[data-notification-id="${resolutionId}"]`);
+  await expect(resolutionCard).toContainText('Dank dir ist deine Stadt sauberer!');
+  await resolutionCard.getByRole('button', { name: 'Meldung öffnen' }).click();
+  await expect(page).toHaveURL(/\/map$/);
+  await expect(page.locator('.report-sheet')).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/impact$/);
+  await expect(page.locator('.impact-metric-grid--totals .impact-metric-value').nth(1)).toHaveText('35 RP');
+  await expect(page.locator(`.impact-notification-item[data-notification-id="${resolutionId}"]`)).toContainText('Gelesen');
+  expect(impactReads).toBeGreaterThanOrEqual(3);
+});
