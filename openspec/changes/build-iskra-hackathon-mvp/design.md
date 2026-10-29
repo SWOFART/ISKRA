@@ -222,6 +222,20 @@ Status reflects the user's confirmed follow-up on 2026-10-27 and delegated engin
 | **D11 — C/B, H4–H6** | SELECTED engineering defaults under delegation: JPEG ≤1MiB/1600px, 5min upload/read tickets, 30min accepted analysis, orphan cleanup after 24h; provisional 20s call/45s total, AI 5/min, paging 100, polling 5s, generic receipts 24h | Verify limits/model/runtime and multi-instance rate enforcement; preserve semantic financial uniqueness permanently; document incompatible settings before change |
 | **D12 — Product, before relevant extension** | OPEN: published-photo retention before uncontrolled pilot, Yellow award before P2, Impact Score formula before real scoring | Public pilot and those P2/scoring extensions only; do not block controlled P0 demo by inventing policies |
 
+## Conditional P1 capacity and admission record — 2026-10-29
+
+**M3 prerequisite:** GitHub issue [#49](https://github.com/SWOFART/ISKRA/issues/49) is closed as completed, and the user confirmed that closure on 2026-10-29. The earlier comment saying #49 remained open predates that closure and is historical. This record accepts the current issue state as the M3 completion signal; it does not invent or restate runtime evidence.
+
+**Capacity basis:** The user explicitly directed Codex to finish the assigned B issues first, then take the listed Vspaceman11 issues. Work is admitted as one serialized Codex lane, with no parallel A/B/C capacity assumed and no assignee changes. The existing estimates total 7.5 focused hours for the seven admitted implementation issues, or 8 hours including this 0.5-hour planning checkpoint. These are issue estimates, not measured completed hours. A/C have not stated remaining person-hours; their existing non-P1 work remains in their streams.
+
+| Stream | Admitted conditional P1 issues | Order and gate |
+|---|---|---|
+| B | #56 (9.2), #58 (9.4), #60 (9.6) | One at a time after this 9.1 admission is integrated; #60 also requires #15, already closed. |
+| A | #57 (9.3), #59 (9.5), #61 (9.7), #62 (9.8) | Begin only after the user's B issue set is closed and after 05:00 Europe/Berlin; preserve each issue's dependencies, including #56→#57, #58→#59, #60→#61, and #47→#62. |
+| C | None in conditional tasks 9.2–9.8 | Existing C release tasks remain unchanged; no C capacity is presumed or admitted here. |
+
+No conditional P1 implementation had started before the completed #49/M3 gate and this admission record. All seven existing 9.x implementation issues are admitted in the user-requested order; no 9.x item is deferred. P2 remains deferred, P0 safety and release gates remain intact, and all H18/H28/H36 cut rules continue to apply if their triggering conditions recur. The user-authorized sequence is the capacity commitment for this Codex work; it is not represented as A/C approval or available A/C hours.
+
 ## Acceptance Traceability
 
 | Plan requirement | Spec / owner | Evidence to attach at gate |
