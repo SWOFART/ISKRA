@@ -49,6 +49,7 @@ interface VoucherCursor {
 interface RedemptionResult {
   readonly voucher: DemoRewardVoucher;
   readonly balance: number;
+  readonly balanceVersion: number;
   readonly rpDebited: number;
 }
 
@@ -138,12 +139,15 @@ async function readVoucher(client: CheckedOutClient, voucherId: string, actorId:
   return row ? voucher(row) : null;
 }
 
-async function readBalance(client: CheckedOutClient, actorId: string): Promise<number> {
-  const result = await client.query<{ rp_balance: number | string }>(
-    'SELECT rp_balance FROM users WHERE id = $1::text', [actorId],
+async function readBalance(client: CheckedOutClient, actorId: string): Promise<{ balance: number; balanceVersion: number }> {
+  const result = await client.query<{ rp_balance: number | string; version: number | string }>(
+    'SELECT rp_balance, version FROM users WHERE id = $1::text', [actorId],
   );
   if (!result.rows[0]) notFound();
-  return integer(result.rows[0].rp_balance);
+  return {
+    balance: integer(result.rows[0].rp_balance),
+    balanceVersion: integer(result.rows[0].version),
+  };
 }
 
 async function requestHash(value: unknown): Promise<string> {
@@ -209,7 +213,7 @@ export class PostgresDemoRewardService {
             throw new ApiError(409, 'PRICE_CHANGED', 'The demo reward price changed. Review the current price and confirm again.');
           }
 
-          const balanceBefore = await readBalance(client, actorId);
+          const balanceBefore = (await readBalance(client, actorId)).balance;
           if (balanceBefore < costRp) {
             throw new ApiError(409, 'INSUFFICIENT_RP', 'There is not enough RP for this demo reward.');
           }
@@ -227,11 +231,11 @@ export class PostgresDemoRewardService {
              VALUES ($1::text, 'REDEMPTION'::ledger_kind, $2::integer, $3::varchar, $4::uuid, true)`,
             [actorId, -costRp, `voucher:${voucherId}:debit`, voucherId],
           );
-          const updated = await client.query<{ rp_balance: number | string }>(
+          const updated = await client.query<{ rp_balance: number | string; version: number | string }>(
             `UPDATE users SET rp_balance = rp_balance - $2::integer,
                version = version + 1, updated_at = clock_timestamp()
              WHERE id = $1::text AND rp_balance >= $2::integer
-             RETURNING rp_balance`,
+             RETURNING rp_balance, version`,
             [actorId, costRp],
           );
           if (!updated.rows[0]) {
@@ -244,6 +248,7 @@ export class PostgresDemoRewardService {
             value: {
               voucher: createdVoucher,
               balance: integer(updated.rows[0].rp_balance),
+              balanceVersion: integer(updated.rows[0].version),
               rpDebited: costRp,
             },
             receipt: { resourceId: voucherId, responseStatus: 201 },
@@ -252,10 +257,11 @@ export class PostgresDemoRewardService {
         async (client, receipt) => {
           const existingVoucher = await readVoucher(client, receipt.resourceId.toLowerCase(), actorId);
           if (!existingVoucher) notFound();
-          const balance = await readBalance(client, actorId);
+          const { balance, balanceVersion } = await readBalance(client, actorId);
           return {
             voucher: existingVoucher,
             balance,
+            balanceVersion,
             rpDebited: existingVoucher.costRpSnapshot,
           };
         },

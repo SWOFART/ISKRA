@@ -1,6 +1,6 @@
 import { array, boolean, enumeration, literal, nullable, number, object, string, union, type Infer } from './schema';
 
-export const CONTRACT_REVISION = 'v1-candidate.5' as const;
+export const CONTRACT_REVISION = 'v1-candidate.6' as const;
 export const POLICY = Object.freeze({
   voteRadiusM: 150, cleanupRadiusM: 150, maxAccuracyM: 50, maxLocationAgeSeconds: 60,
   maxPinDisplacementM: 3, reporterTotalRp: 20, reporterInitialRp: 5,
@@ -331,6 +331,7 @@ export const DemoRewardRedemptionRequestSchema = object({ confirmedCostRp: numbe
 export const DemoRewardRedemptionReceiptSchema = object({
   voucher: DemoRewardVoucherSchema,
   balance: BalanceSchema,
+  balanceVersion: VersionSchema,
   rpDebited: number(1, 2_147_483_647, true),
 }).refine((value) => value.rpDebited === value.voucher.costRpSnapshot,
   'The receipt debit must match the voucher cost snapshot');

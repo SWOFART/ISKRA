@@ -144,7 +144,7 @@ describe('atomic demo reward redemption', () => {
       const created = await redeem(app, actor, itemId, key, 20);
       expect(created.status).toBe(201);
       const receipt = DemoRewardRedemptionReceiptSchema.parse(await created.json());
-      expect(receipt).toMatchObject({ balance: 30, rpDebited: 20 });
+      expect(receipt).toMatchObject({ balance: 30, balanceVersion: 1, rpDebited: 20 });
       expect(receipt.voucher).toMatchObject({
         catalogId: itemId,
         costRpSnapshot: 20,
@@ -161,11 +161,11 @@ describe('atomic demo reward redemption', () => {
       );
       expect(debit.rows[0]).toEqual({ delta: -20, is_demo: true, voucher_id: receipt.voucher.id });
 
-      await pool.query('UPDATE users SET rp_balance = 25 WHERE id = $1', [actor]);
+      await pool.query('UPDATE users SET rp_balance = 25, version = version + 1 WHERE id = $1', [actor]);
       const replay = await redeem(app, actor, itemId, key, 20);
       expect(replay.status).toBe(201);
       expect(DemoRewardRedemptionReceiptSchema.parse(await replay.json())).toMatchObject({
-        voucher: { id: receipt.voucher.id }, balance: 25, rpDebited: 20,
+        voucher: { id: receipt.voucher.id }, balance: 25, balanceVersion: 2, rpDebited: 20,
       });
       expect(await counts(pool, actor)).toEqual({ vouchers: 1, debits: 1, claims: 1, balance: 25 });
 

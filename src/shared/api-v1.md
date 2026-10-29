@@ -1,6 +1,6 @@
 # API v1 candidate handoff
 
-OpenSpec `build-iskra-hackathon-mvp`, task 1.3 / issue #7, extended by tasks 9.2 / issue #56, 9.4 / issue #58 and 9.6 / issue #60. Contract revision: `v1-candidate.5`.
+OpenSpec `build-iskra-hackathon-mvp`, task 1.3 / issue #7, extended by tasks 9.2 / issue #56, 9.4 / issue #58 and 9.6 / issue #60. Contract revision: `v1-candidate.6`.
 
 This is the review candidate for A/B/C. It consolidates the already selected D01–D08 policies and the P0 DTOs in [contracts.ts](contracts.ts). G0 remains **PENDING** until A and C acknowledge the endpoint, error, media, location and internal-interface boundaries and the required independent review is complete. No product policy is reopened here. Changes after acknowledgment require a new candidate revision and consumer notes.
 
@@ -64,12 +64,12 @@ The serialized, user-authorized B implementation lane may implement this backend
 | Owner | Method and path | Access / request | Success |
 |---|---|---|---|
 | B | `GET /rewards/catalog` | Public; no query parameters | `200 {items:[{id,title,description,costRp,isDemo:true,demoTerms}]}`; all active demo items only |
-| B | `POST /rewards/:id/redeem` | Auth + UUID `Idempotency-Key`; `{confirmedCostRp}` | `201 {voucher,balance,rpDebited}`; same-key replay returns the canonical voucher and current balance |
+| B | `POST /rewards/:id/redeem` | Auth + UUID `Idempotency-Key`; `{confirmedCostRp}` | `201 {voucher,balance,balanceVersion,rpDebited}`; same-key replay returns the canonical voucher and current balance/version |
 | B | `GET /me/vouchers` | Auth; optional opaque `cursor` | `200 {items:[voucher],nextCursor}`; authenticated owner only, at most 100 per page |
 
 The initial catalog contains only three fictional entries with 5, 15 and 40 RP prices, reusing the already selected earning amounts. Their descriptions explicitly say that no goods or services are provided; no real product, partner or price has been introduced. The voucher response is `{id,catalogId,title,description,costRpSnapshot,displayCode,status:"RECEIVED",createdAt,isDemo:true,demoTerms}`. The display code is prefixed `DEMO-` and is not a merchant credential or redemption capability. Catalog image keys are never exposed. No real partner, QR, expiry, payout, or fulfillment fields exist. Catalog rows are demo-only by database constraint and redemption ignores inactive items.
 
-On redemption, the PostgreSQL transaction claims the authenticated actor's idempotency key, locks the account and active catalog item, compares `confirmedCostRp` with the current server price, checks the signed spendable balance, then inserts the voucher, appends one negative `REDEMPTION` ledger entry and debits/version-increments the account. A price mismatch returns `409 PRICE_CHANGED`; the transaction rolls back without retaining the key, so the resident can review the refreshed price and retry. Insufficient or negative balance returns `409 INSUFFICIENT_RP` without a voucher or debit. The same accepted key and payload replays the same voucher without a second debit and reads the balance afresh; a different payload conflicts. Distinct-key purchases serialize on the account row. Lifetime reporter, cleaner and verifier earnings continue to sum only their original positive ledger categories, so redemption changes spendable balance, not earned-by-category history.
+On redemption, the PostgreSQL transaction claims the authenticated actor's idempotency key, locks the account and active catalog item, compares `confirmedCostRp` with the current server price, checks the signed spendable balance, then inserts the voucher, appends one negative `REDEMPTION` ledger entry and debits/version-increments the account. The receipt returns the account `balanceVersion` together with the balance so clients can ignore stale, out-of-order mutation responses. A price mismatch returns `409 PRICE_CHANGED`; the transaction rolls back without retaining the key, so the resident can review the refreshed price and retry. Insufficient or negative balance returns `409 INSUFFICIENT_RP` without a voucher or debit. The same accepted key and payload replays the same voucher without a second debit and reads the current balance and version afresh; a different payload conflicts. Distinct-key purchases serialize on the account row. Lifetime reporter, cleaner and verifier earnings continue to sum only their original positive ledger categories, so redemption changes spendable balance, not earned-by-category history.
 
 ## Error status and recovery map
 

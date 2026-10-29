@@ -49,9 +49,10 @@ describe('demo Rewards contracts', () => {
   });
 
   it('keeps the debit equal to the immutable voucher cost snapshot', () => {
-    const receipt = { voucher, balance: -3, rpDebited: 20 };
+    const receipt = { voucher, balance: -3, balanceVersion: 7, rpDebited: 20 };
     expect(DemoRewardRedemptionReceiptSchema.parse(receipt)).toEqual(receipt);
     expect(DemoRewardRedemptionReceiptSchema.safeParse({ ...receipt, rpDebited: 19 }).success).toBe(false);
+    expect(DemoRewardRedemptionReceiptSchema.safeParse({ voucher, balance: -3, rpDebited: 20 }).success).toBe(false);
     expect(DemoRewardVoucherListSchema.parse({ items: [voucher], nextCursor: null }).items).toHaveLength(1);
   });
 });
