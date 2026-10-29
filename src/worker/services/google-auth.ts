@@ -95,4 +95,3 @@ export async function googleAccessToken(identity: GoogleIdentity, fetcher: typeo
     || Date.parse(token.expireTime) > Date.now() + 930_000) unavailable();
   return token.accessToken;
 }
-
