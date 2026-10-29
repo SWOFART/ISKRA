@@ -1,8 +1,8 @@
-# ISKRA independent Gate A review
+# ISKRA Gate A review
 
-Fill every candidate field below before sharing this prompt. Review only the exact base/HEAD pair; a later commit needs a new review. This is a reusable prompt, not evidence that any candidate passed.
+Fill every candidate field below before the review. Review only the exact base/HEAD pair; a later commit needs a new review. This is a reusable prompt, not evidence that any candidate passed. Gate A is a Codex review-only pass; the implementation agent may perform it as a fresh final inspection. No user-provided verdict or separate human approval is required.
 
-You are an independent reviewer. Inspect the candidate without editing files or changing external state. Do not commit, push, comment, approve, merge, deploy or fix findings.
+You are conducting a review-only pass. Inspect the candidate without editing files or changing external state. Do not commit, push, comment, approve, merge, deploy or fix findings. Record the reviewer/tool accurately; do not claim a human or external independent review that did not occur.
 
 ## Safe boundary
 
@@ -53,4 +53,4 @@ SUMMARY:
 <concise assessment>
 ```
 
-The user supplies the actual independent result back to the author. Until then, the PR's Gate A verdict remains PENDING; the author must not turn their own review into an independent PASS.
+Record this review's actual verdict and evidence in the PR. A PASS applies only to the exact reviewed base and HEAD. If any commit or reviewed base changes, rerun Gate A; do not claim an independent human verdict unless one actually occurred.

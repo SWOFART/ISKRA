@@ -7,24 +7,24 @@ Use [plan.md](plan.md) and the [active OpenSpec change](openspec/changes/build-i
 1. Open one issue per actionable bug or task, with acceptance criteria. Check existing issues first and assign the issue to the person doing the work.
 2. Branch from the latest `develop`. Keep the change focused on that issue.
 3. Run the relevant checks and open a **draft pull request targeting `develop`**. Include `Closes #<number>` when merging should complete the issue.
-4. Complete the required PR checklist and independent Gate A below before marking ready for review. A human reviews and merges after the remaining gates pass.
+4. Complete the required PR checklist, Codex Gate A review and CI below before marking ready. No human review or approval is required; Codex may merge after all required gates pass.
 5. Release through a separate PR from `develop` to `main`. Production deployment remains a manual action; merging a PR does not deploy production.
 
-Do not push feature work directly to `develop` or `main`. Do not force-push shared branches without explicit authorization. These are contribution rules; server-side branch protection is not configured by this change.
+Do not push feature work directly to `develop` or `main`. Do not force-push shared branches without explicit authorization. These are contribution rules; this change does not modify GitHub branch protection or repository rulesets. Never bypass an active GitHub merge restriction or required check.
 
 ## Required PR gates
 
 Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) for every PR, including PRs opened through a CLI. Templates do not retroactively populate existing PRs, and a custom `--body-file` must retain the checklist. Keep incomplete gates unchecked and the PR draft; do not mark them satisfied merely because follow-up work is documented.
 
-GitHub prefills templates only after they reach the [default branch](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository). ISKRA's default is `main`; merging a template change into `develop` alone does not activate prefill. Release the reviewed change through `develop` → `main`; until then, paste the template into new PRs explicitly. Do not change the default branch or bypass human merges to activate it.
+GitHub prefills templates only after they reach the [default branch](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository). ISKRA's default is `main`; merging a template change into `develop` alone does not activate prefill. Release the change through `develop` → `main`; until then, paste the template into new PRs explicitly. Do not change the default branch solely to activate template prefill.
 
 1. **Scope and acceptance:** link existing task issues, record criteria and verify only what the change claims. Use `Related #N` for partial work and `Closes #N` only after the whole task is complete. B alone updates the canonical OpenSpec checklist after integrated evidence; A/C hand off through PRs.
 2. **Architecture/security/configuration:** verify the template's required checks, including OpenSpec ownership/contracts, safe data handling and Google-sourced configuration. Explain non-applicable guarantees explicitly; do not copy another project's build stack.
-3. **Independent Gate A:** fill the [review prompt](.github/prompts/gate-a-review.md) with the issue/criteria, exact base and HEAD SHAs, validation results and known omissions. Provide the filled prompt to the user for independent review. Record the actual user-provided reviewer/verdict/evidence. Author self-review or an invented PASS does not qualify. Until evidence arrives, use PENDING and stay draft. Resolve blocking findings; any new commit or changed reviewed base requires a new verdict for that candidate.
+3. **Gate A review:** fill the [review prompt](.github/prompts/gate-a-review.md) with the issue/criteria, exact base and HEAD SHAs, validation results and known omissions. Codex performs a separate, read-only review pass and records the actual reviewer/tool, verdict and evidence in the PR. The implementation agent may perform this final review pass; it must be a fresh inspection without editing files, and it must be labeled honestly. No user-provided reviewer verdict is required. Until Gate A passes, use PENDING and stay draft. Resolve blocking findings; any new commit or changed reviewed base requires a new verdict for that candidate.
 4. **CI and OpenSpec acceptance:** CI must pass for the current HEAD; applicable G0–G5/H48 gates must have real evidence. Document N/A only when the task does not require that milestone. A dry-run, fixtures or health endpoint cannot pass a live runtime/Green gate.
-5. **Human review and merge:** an independent human reviews the PR and a human owner merges it. Agents do not approve their own changes or merge automatically.
+5. **Merge after gates:** once Gate A is PASS for the exact base/HEAD, required CI passes for the current HEAD, and applicable OpenSpec acceptance gates have evidence, Codex may mark the PR ready and merge it. No separate human review or approval is required. Do not bypass an active GitHub protection rule, required check, or merge restriction; report the blocker if GitHub prevents the merge.
 
-These are mandatory review-process gates, matching Open Circuit's manual review pattern. Markdown checkboxes do not technically block GitHub merging. No new body validator or branch-protection rule is installed here; current develop is unprotected, so maintainers must enforce this process until repository protection is configured separately.
+These are mandatory review-process gates. Markdown checkboxes do not technically block GitHub merging. This change updates the repository's contributor and agent instructions; it does not install a PR-body validator or modify GitHub branch protection or repository rulesets. Codex must verify every gate against current evidence before merging.
 
 ## Branch names
 
@@ -71,4 +71,4 @@ Once the application exists, run its required `typecheck`, `test:unit` and `buil
 
 ## Template provenance
 
-The review topics, required checklists and independent Gate A pattern were adapted from [SWOFART/open-circuit](https://github.com/SWOFART/open-circuit), as requested by the user. ISKRA's template and reusable prompt are independently worded for OpenSpec, Workers and Google-sourced configuration. Open Circuit's desktop build pipeline is not imported. The existing ISKRA MIT license is unchanged.
+The review topics, required checklists and original Gate A approach were adapted from [SWOFART/open-circuit](https://github.com/SWOFART/open-circuit), as requested by the user. The current Codex review-only Gate A and merge policy reflect the user's later direction. ISKRA's template and reusable prompt are independently worded for OpenSpec, Workers and Google-sourced configuration. Open Circuit's desktop build pipeline is not imported. The existing ISKRA MIT license is unchanged.
