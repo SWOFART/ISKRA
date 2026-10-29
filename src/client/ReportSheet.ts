@@ -3,6 +3,7 @@ import type { Infer } from '../shared/schema';
 import type { SupportedLocale } from './designTokens';
 import { formatDateTime, type MessageKey, type MessageValues } from './i18n';
 import { renderPhotoGallery, type PhotoGalleryView } from './PhotoGallery';
+import { isStaleReportSnapshot, selectNewerReport } from './reportFreshness';
 
 type Translate = (key: MessageKey, values?: MessageValues) => string;
 type ReportDetail = Infer<typeof ReportDetailSchema>;
@@ -44,6 +45,11 @@ export interface ReportSheetView {
   setError(): void;
   dismiss(): void;
   dispose(): void;
+}
+
+/** Compares the rendered report detail, ignoring object identity. */
+function sameReportDetail(current: ReportDetail, next: ReportDetail): boolean {
+  return JSON.stringify(current) === JSON.stringify(next);
 }
 
 function makeElement<K extends keyof HTMLElementTagNameMap>(
@@ -326,8 +332,8 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
       result = { kind: 'error', message: options.t('error.generic') };
     }
     if (!summary || !detail || detail.id !== summary.id) return;
-    if (result.detail && result.detail.id === detail.id && result.detail.version >= detail.version) {
-      detail = result.detail;
+    if (result.detail && result.detail.id === detail.id) {
+      detail = selectNewerReport(detail, result.detail);
     }
     voteFeedback.set(stage, {
       choice,
@@ -407,7 +413,10 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     open,
     setDetail(nextDetail) {
       if (!summary || nextDetail.id !== summary.id) return;
-      if (detail && nextDetail.version < detail.version) return;
+      if (detail && isStaleReportSnapshot(detail, nextDetail)) return;
+      // Background refresh must not rebuild galleries (and drop a full-screen
+      // photo or the focused control) while the payload stays unchanged.
+      if (detail && sameReportDetail(detail, nextDetail)) return;
       detail = nextDetail;
       renderDetail();
     },

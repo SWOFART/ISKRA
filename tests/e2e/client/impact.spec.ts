@@ -277,9 +277,11 @@ test('keeps a newer balance and cleanup stage when an older impact page arrives'
   };
   const staleReport = {
     ...fixtures.impact.items[0].report,
-    status: 'VERIFIED',
+    status: 'AWAITING_EXISTENCE',
+    existenceYesCount: 2,
+    existenceVerifiedAt: null,
     resolutionYesCount: 0,
-    version: 4,
+    version: fixtures.impact.items[0].report.version,
   };
   const stale = {
     ...fixtures.impact,
