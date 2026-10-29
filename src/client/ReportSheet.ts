@@ -9,12 +9,29 @@ type ReportDetail = Infer<typeof ReportDetailSchema>;
 type GalleryStage = 'before' | 'after';
 type SheetState = 'closed' | 'partial' | 'full';
 
+export interface VoteSubmissionResult {
+  kind: 'accepted' | 'retry' | 'error';
+  message: string;
+  detail?: ReportDetail;
+  retryMode?: 'same' | 'fresh';
+}
+
+export type VoteChoice = 'YES' | 'NO';
+interface VoteFeedback {
+  choice: VoteChoice;
+  kind: 'pending' | VoteSubmissionResult['kind'];
+  message: string;
+  retryMode?: 'same' | 'fresh';
+}
+
 export interface ReportSheetOptions {
   t: Translate;
   locale: SupportedLocale;
   onLocaleChange(locale: SupportedLocale): void;
   onClose(reportId: string): void;
   onRetry(reportId: string): void;
+  onVote(reportId: string, stage: Stage, choice: VoteChoice, reportPin: ReportSummary['location']): Promise<VoteSubmissionResult>;
+  onSignIn?(): void;
   refreshPhotos(reportId: string, stage: GalleryStage): Promise<readonly Photo[]>;
   onVisibilityChange(open: boolean): void;
 }
@@ -77,6 +94,7 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
   let detail: ReportDetail | null = null;
   let pointerStart: number | null = null;
   let galleries: PhotoGalleryView[] = [];
+  const voteFeedback = new Map<Stage, VoteFeedback>();
 
   const root = makeElement('div', 'report-sheet-layer');
   root.hidden = true;
@@ -184,6 +202,86 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
       progress.appendChild(stages);
     }
 
+    const voteStages = [...detail.openVoteStages].sort((left, right) =>
+      Number(right === detail!.currentStage) - Number(left === detail!.currentStage));
+    const voteSection = makeElement('section', 'report-voting');
+    voteSection.setAttribute('aria-label', options.t('report.vote.heading'));
+    voteSection.appendChild(makeElement('h3', 'report-voting-heading', options.t('report.vote.heading')));
+    const viewer = 'viewer' in detail ? detail.viewer : null;
+    for (const stage of voteStages) {
+      const stageCard = makeElement('section', 'report-vote-stage');
+      stageCard.setAttribute('aria-label', options.t(stageKey(stage)));
+      const stageHeading = makeElement('h4', 'report-vote-stage-heading', options.t(stageKey(stage)));
+      stageCard.appendChild(stageHeading);
+
+      const feedback = voteFeedback.get(stage);
+      if (feedback) {
+        const message = makeElement('p', 'report-vote-feedback', feedback.message);
+        message.setAttribute('role', 'status');
+        message.setAttribute('aria-live', 'polite');
+        stageCard.appendChild(message);
+      }
+
+      const permission = viewer?.stages[stage];
+      if (!permission) {
+        stageCard.appendChild(makeElement('p', 'report-vote-permission', options.t('report.vote.signInRequired')));
+        if (options.onSignIn) {
+          const signIn = makeButton(options.t('report.vote.signIn'), 'report-vote-sign-in');
+          signIn.addEventListener('click', () => options.onSignIn?.());
+          stageCard.appendChild(signIn);
+        }
+        voteSection.appendChild(stageCard);
+        continue;
+      }
+
+      if (!permission.canVote) {
+        stageCard.appendChild(makeElement('p', 'report-vote-permission', options.t(
+          permission.reason === 'UNAUTHENTICATED' ? 'report.vote.signInRequired'
+            : permission.reason === 'SELF_VOTE' ? 'report.vote.self'
+              : permission.reason === 'ALREADY_VOTED' ? 'report.vote.already'
+                : permission.reason === 'STAGE_CLOSED' ? 'report.vote.closed'
+                  : 'report.vote.notEligible',
+        )));
+        if (permission.reason === 'UNAUTHENTICATED' && options.onSignIn) {
+          const signIn = makeButton(options.t('report.vote.signIn'), 'report-vote-sign-in');
+          signIn.addEventListener('click', () => options.onSignIn?.());
+          stageCard.appendChild(signIn);
+        }
+        voteSection.appendChild(stageCard);
+        continue;
+      }
+
+      const choiceGroup = makeElement('div', 'report-vote-choices');
+      choiceGroup.setAttribute('role', 'group');
+      choiceGroup.setAttribute('aria-label', options.t('report.vote.choose', { stage: options.t(stageKey(stage)) }));
+      for (const choice of ['YES', 'NO'] as const) {
+        const retryingThisChoice = feedback?.kind === 'retry' && feedback.choice === choice;
+        const retryPending = feedback?.kind === 'retry';
+        const label = retryingThisChoice
+          ? options.t(feedback.retryMode === 'same' ? 'report.vote.retrySame' : 'report.vote.retryFresh')
+          : options.t(choice === 'YES' ? 'report.vote.yes' : 'report.vote.no');
+        const button = makeButton(label, `report-vote-choice report-vote-choice--${choice.toLowerCase()}`);
+        button.disabled = feedback?.kind === 'pending' || (retryPending && !retryingThisChoice);
+        button.setAttribute('data-stage', stage);
+        button.setAttribute('data-choice', choice);
+        button.addEventListener('click', () => { void submitVote(stage, choice); });
+        choiceGroup.appendChild(button);
+      }
+      stageCard.appendChild(choiceGroup);
+      voteSection.appendChild(stageCard);
+    }
+    for (const [stage, feedback] of voteFeedback) {
+      if (detail.openVoteStages.includes(stage)) continue;
+      const stageCard = makeElement('section', 'report-vote-stage');
+      stageCard.setAttribute('aria-label', options.t(stageKey(stage)));
+      stageCard.appendChild(makeElement('h4', 'report-vote-stage-heading', options.t(stageKey(stage))));
+      const message = makeElement('p', 'report-vote-feedback', feedback.message);
+      message.setAttribute('role', 'status');
+      message.setAttribute('aria-live', 'polite');
+      stageCard.appendChild(message);
+      voteSection.appendChild(stageCard);
+    }
+
     const beforeGallery = renderPhotoGallery({
       title: options.t('report.beforePhotos'),
       photos: detail.beforePhotos,
@@ -199,12 +297,38 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     });
     galleries.push(afterGallery);
 
-    content.replaceChildren(overview, progress, beforeGallery.element, afterGallery.element);
+    content.replaceChildren(overview, progress,
+      ...(voteStages.length > 0 || voteFeedback.size > 0 ? [voteSection] : []),
+      beforeGallery.element, afterGallery.element);
+  }
+
+  async function submitVote(stage: Stage, choice: VoteChoice): Promise<void> {
+    if (!summary || !detail) return;
+    voteFeedback.set(stage, { choice, kind: 'pending', message: options.t('report.vote.working') });
+    renderDetail();
+    let result: VoteSubmissionResult;
+    try {
+      result = await options.onVote(summary.id, stage, choice, summary.location);
+    } catch {
+      result = { kind: 'error', message: options.t('error.generic') };
+    }
+    if (!summary || !detail || detail.id !== summary.id) return;
+    if (result.detail && result.detail.id === detail.id && result.detail.version >= detail.version) {
+      detail = result.detail;
+    }
+    voteFeedback.set(stage, {
+      choice,
+      kind: result.kind,
+      message: result.message,
+      retryMode: result.retryMode,
+    });
+    renderDetail();
   }
 
   function open(report: ReportSummary): void {
     summary = report;
     detail = null;
+    voteFeedback.clear();
     root.hidden = false;
     options.onVisibilityChange(true);
     setState('partial');
@@ -270,6 +394,7 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     open,
     setDetail(nextDetail) {
       if (!summary || nextDetail.id !== summary.id) return;
+      if (detail && nextDetail.version < detail.version) return;
       detail = nextDetail;
       renderDetail();
     },

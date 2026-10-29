@@ -1,5 +1,5 @@
 import { POLICY, ReportDetailSchema, ReportListSchema, ReportSummarySchema,
-  type ErrorCode, type Photo, type Point, type ReportSummary, type Route } from '../shared/contracts';
+  VoteReceiptSchema, VoteRequestSchema, type ErrorCode, type Photo, type Point, type ReportSummary, type Route, type Stage } from '../shared/contracts';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { ApiClientError, createClientApi } from './api';
@@ -8,10 +8,12 @@ import { errorMessageKey, formatDateTime, formatNumber, type MessageKey, type Me
 import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from './mapModel';
 import { renderPhotoCapture, type CapturedPhoto, type CaptureStage } from './PhotoCapture';
 import { renderReportSubmission, type ReportSubmissionView } from './ReportSubmission';
-import { renderReportSheet } from './ReportSheet';
+import { renderReportSheet, type VoteChoice, type VoteSubmissionResult } from './ReportSheet';
+import { createOperationKeyScope, type OperationKeyScope } from './operationKey';
 import {
   captureFreshCleanupLocation,
   captureFreshReportLocation,
+  captureFreshVoteLocation,
   isLocationRecoveryError,
   LocationCaptureError,
   type AnalysisLocationBinding,
@@ -155,6 +157,28 @@ function countMessage(count: number, fixture: boolean, t: Translate): string {
     });
 }
 
+function summaryFromDetail(detail: ReturnType<typeof ReportDetailSchema.parse>): ReportSummary {
+  return ReportSummarySchema.parse({
+    id: detail.id,
+    route: detail.route,
+    status: detail.status,
+    location: detail.location,
+    coverPhotoId: detail.coverPhotoId,
+    description: detail.description,
+    existenceYesCount: detail.existenceYesCount,
+    resolutionYesCount: detail.resolutionYesCount,
+    existenceVerifiedAt: detail.existenceVerifiedAt,
+    lastExistenceConfirmedAt: detail.lastExistenceConfirmedAt,
+    version: detail.version,
+    updatedAt: detail.updatedAt,
+    isDemo: detail.isDemo,
+  });
+}
+
+function voteAttemptKey(reportId: string, stage: Stage, choice: VoteChoice): string {
+  return JSON.stringify([reportId, stage, choice]);
+}
+
 function queryForFilters(
   routes: ReadonlySet<Route>,
   needsVerification: boolean,
@@ -181,6 +205,7 @@ export function renderMapPage(
   initialState?: MapPageState,
   setChromeInert?: (inert: boolean) => void,
   onLocaleChange?: (locale: SupportedLocale) => void,
+  onSignIn?: () => void,
 ): MapPageView {
   const pageState = initialState ?? createMapPageState();
   const page = makeElement('section', 'map-page');
@@ -321,6 +346,103 @@ export function renderMapPage(
   let highlightedReport: ReportSummary | null = null;
   let externallyOpenedReport: ReportSummary | null = null;
   let detailLoadGeneration = 0;
+  let disposed = false;
+  type ReportDetail = ReturnType<typeof ReportDetailSchema.parse>;
+  interface VoteAttempt { operation: OperationKeyScope; body: ReturnType<typeof VoteRequestSchema.parse>; }
+  const reportDetails = new Map<string, ReportDetail>();
+  const voteAttempts = new Map<string, VoteAttempt>();
+
+  function mergeReportDetail(incoming: ReportDetail): ReportDetail {
+    const cached = reportDetails.get(incoming.id);
+    const listed = reports.find(({ id }) => id === incoming.id);
+    const floor = Math.max(cached?.version ?? -1, listed?.version ?? -1);
+    const detail = incoming.version < floor && cached && cached.version >= floor ? cached : incoming;
+    if (detail.version >= (cached?.version ?? -1)) reportDetails.set(detail.id, detail);
+    const nextSummary = summaryFromDetail(detail);
+    if (!listed || nextSummary.version >= listed.version) {
+      reports = reports.map((report) => report.id === detail.id ? nextSummary : report);
+      if (highlightedReport?.id === detail.id) highlightedReport = nextSummary;
+      if (externallyOpenedReport?.id === detail.id) externallyOpenedReport = nextSummary;
+      renderReports();
+    }
+    return detail;
+  }
+
+  function voteLocationMessage(code: ErrorCode): MessageKey | null {
+    switch (code) {
+      case 'TOO_FAR': return 'capture.locationTooFar';
+      case 'LOCATION_INACCURATE': return 'capture.locationInaccurate';
+      case 'LOCATION_STALE': return 'capture.locationStale';
+      case 'PIN_TOO_FAR': return 'capture.locationPinRejected';
+      default: return null;
+    }
+  }
+
+  async function castVote(
+    reportId: string,
+    stage: Stage,
+    choice: VoteChoice,
+    reportPin: Point,
+  ): Promise<VoteSubmissionResult> {
+    const key = voteAttemptKey(reportId, stage, choice);
+    let attempt = voteAttempts.get(key);
+    if (!attempt) {
+      try {
+        const location = (await captureFreshVoteLocation(reportPin)).location;
+        const body = VoteRequestSchema.parse({ stage, choice, location });
+        attempt = { operation: createOperationKeyScope(), body };
+        voteAttempts.set(key, attempt);
+      } catch (error) {
+        const messageKey = error instanceof LocationCaptureError
+          ? locationFailureKey(error.reason)
+          : 'error.generic';
+        return { kind: 'retry', retryMode: 'fresh', message: t(messageKey) };
+      }
+    }
+
+    try {
+      const receipt = (await api.request({
+        path: `/reports/${reportId}/votes`,
+        method: 'POST',
+        body: attempt.body,
+        bodySchema: VoteRequestSchema,
+        responseSchema: VoteReceiptSchema,
+        operation: attempt.operation,
+      })).data;
+      voteAttempts.delete(key);
+      attempt.operation.complete();
+      const canonical = disposed ? receipt.report : mergeReportDetail(receipt.report);
+      if (!disposed && selectedReportId === reportId) reportSheet.setDetail(canonical);
+      return {
+        kind: 'accepted',
+        detail: canonical,
+        message: receipt.replayed
+          ? t('report.vote.acceptedReplay')
+          : t('report.vote.acceptedNew', { points: receipt.rpAwarded }),
+      };
+    } catch (error) {
+      if (error instanceof ApiClientError && error.code !== 'INVALID_RESPONSE' && isLocationRecoveryError(error.code)) {
+        voteAttempts.delete(key);
+        attempt.operation.complete();
+        const messageKey = voteLocationMessage(error.code);
+        return {
+          kind: 'retry', retryMode: 'fresh',
+          message: t(messageKey ?? 'error.generic'),
+        };
+      }
+      if (error instanceof ApiClientError && error.retryable) {
+        return { kind: 'retry', retryMode: 'same', message: errorText(error) };
+      }
+      voteAttempts.delete(key);
+      attempt.operation.complete();
+      if (!disposed) void loadReportDetail(reportId);
+      return {
+        kind: 'error',
+        message: error instanceof ApiClientError ? errorText(error) : t('error.generic'),
+      };
+    }
+  }
+
   const reportSheet = renderReportSheet({
     t,
     locale,
@@ -337,6 +459,8 @@ export function renderMapPage(
       reportList.querySelector<HTMLButtonElement>(`.report-list-item[data-report-id="${reportId}"]`)?.focus();
     },
     onRetry: (reportId) => { void loadReportDetail(reportId); },
+    onVote: castVote,
+    onSignIn,
     refreshPhotos: async (reportId, stage): Promise<readonly Photo[]> => {
       const response = await api.request({
         path: `/reports/${reportId}`,
@@ -633,7 +757,7 @@ export function renderMapPage(
         responseSchema: ReportDetailSchema,
       });
       if (generation !== detailLoadGeneration || selectedReportId !== reportId) return;
-      reportSheet.setDetail(response.data);
+      reportSheet.setDetail(mergeReportDetail(response.data));
     } catch {
       if (generation === detailLoadGeneration && selectedReportId === reportId) reportSheet.setError();
     }
@@ -984,6 +1108,9 @@ export function renderMapPage(
   });
 
   function disposeMap(): void {
+    disposed = true;
+    for (const { operation } of voteAttempts.values()) operation.complete();
+    voteAttempts.clear();
     loadGeneration += 1;
     mapGeneration += 1;
     detailLoadGeneration += 1;

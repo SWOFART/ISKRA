@@ -556,6 +556,18 @@ button {
 .report-stage-progress { margin: 12px 0; padding: 12px; border: 1px solid var(--client-color-border); border-radius: var(--client-radius-control); }
 .report-stage-progress h3 { margin: 0 0 7px; font-size: 0.9rem; }
 .report-stage-count { font-weight: 700; }
+.report-voting { display: grid; gap: 10px; margin: 14px 0; }
+.report-voting-heading { margin: 0; font-size: 0.95rem; }
+.report-vote-stage { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--client-color-border); border-radius: var(--client-radius-control); background: var(--client-color-surface-muted); }
+.report-vote-stage-heading { margin: 0; font-size: 0.9rem; }
+.report-vote-permission,
+.report-vote-feedback { min-height: 1.35em; margin: 0; color: var(--client-color-text-muted); line-height: 1.45; }
+.report-vote-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.report-vote-choice,
+.report-vote-sign-in { min-height: 44px; padding: 8px 12px; border: 1px solid var(--client-color-border); border-radius: var(--client-radius-control); background: var(--client-color-surface); color: var(--client-color-text); font: inherit; cursor: pointer; }
+.report-vote-choice--yes { border-color: var(--client-color-focus); font-weight: 700; }
+.report-vote-choice:disabled,
+.report-vote-sign-in:disabled { opacity: 0.55; cursor: default; }
 .photo-gallery { margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--client-color-border); }
 .photo-gallery-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .photo-gallery-heading { margin: 0; font-size: 0.92rem; }
