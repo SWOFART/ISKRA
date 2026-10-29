@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BootstrapReceiptSchema,
+  DemoRewardCatalogSchema,
   EmptyBodySchema,
   PublicationReceiptSchema,
   PublishRequestSchema,
@@ -58,6 +59,29 @@ describe('client API transport', () => {
     expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('Authorization'))
       .toBe('Bearer firebase-id-token');
     expect(tokenProvider.getIdToken).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it('keeps the rewards catalog public and protects redemption with an idempotency key', async () => {
+    const tokenProvider: FirebaseTokenProvider = { getIdToken: vi.fn(async () => 'firebase-id-token') };
+    const fetcher = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
+      String(input).includes('/rewards/catalog')
+        ? successResponse({ items: [] })
+        : successResponse({ user: { id: 'fixture-user', nickname: 'Sample Resident', avatar: 'leaf' },
+          balance: 0, balanceVersion: 0 }));
+    const api = createClientApi({ mode: 'live', tokenProvider, fetcher });
+    await api.request({ path: '/rewards/catalog', responseSchema: DemoRewardCatalogSchema });
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).has('Authorization')).toBe(false);
+
+    await expect(api.request({ path: '/rewards/11111111-1111-4111-8111-111111111111/redeem',
+      method: 'POST', responseSchema: BootstrapReceiptSchema }))
+      .rejects.toThrow('in-memory operation key scope');
+    expect(fetcher).toHaveBeenCalledOnce();
+
+    const operation = createOperationKeyScope(() => '22222222-2222-4222-8222-222222222222');
+    await api.request({ path: '/rewards/11111111-1111-4111-8111-111111111111/redeem',
+      method: 'POST', operation, responseSchema: BootstrapReceiptSchema });
+    expect(new Headers(fetcher.mock.calls[1][1]?.headers).get('Authorization')).toBe('Bearer firebase-id-token');
+    expect(new Headers(fetcher.mock.calls[1][1]?.headers).get('Idempotency-Key')).toBe(operation.key);
   });
 
   it('uploads JPEG bytes through the same-origin authenticated API path from a signed ticket', async () => {

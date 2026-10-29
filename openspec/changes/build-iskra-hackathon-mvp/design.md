@@ -233,10 +233,12 @@ Status reflects the user's confirmed follow-up on 2026-10-27 and delegated engin
 | Stream | P1 issue set / authorization | Order and gate |
 |---|---|---|
 | B | #56 (9.2), #58 (9.4), #60 (9.6) | User-authorized one-at-a-time implementation lane, in dependency order; #60 also requires #15, already closed. Keep real-M3 evidence unverified and do not imply release readiness. |
-| A | #57 (9.3), #59 (9.5), #61 (9.7), #62 (9.8) | Begin only after genuine M3 and admission, the user's B issue set is closed, and local time is after 05:00 Europe/Berlin; preserve each issue's dependencies, including #56→#57, #58→#59, #60→#61, and #47→#62. |
+| A | #57 (9.3), #59 (9.5) | Retain genuine M3, admission and timing prerequisites. Issues #61 and #62 are authorized only by the narrow dated UI exception below. |
 | C | None in conditional tasks 9.2–9.8 | Existing C release tasks remain unchanged; no C capacity is presumed or admitted here. |
 
 On 2026-10-29, the user explicitly authorized serial implementation of the B-owned issues #56, #58 and #60 despite missing M3 evidence, and directed that merge decisions use exact-candidate Gate A and required CI. This overrides the earlier start/admission prerequisite only for that serialized B lane. It does not mark 8.1 or genuine M3 complete, authorize deployment/public release, assert A/C capacity or begin A-owned issues. P2 remains deferred, P0 safety requirements remain intact, and D10/D11/D12 gates continue to apply to affected live actions.
+
+On 2026-10-29, after PR #143 was merged, the user explicitly ordered issues #61 and #62 to be combined and implemented on one A-owned UI branch. This authorizes only these two serially implemented client tasks despite missing genuine M3 evidence and the full 9.1 admission checkpoint; they depend on #60, #55 and #47, which are integrated. It does not mark 8.1, genuine M3 or 9.1 complete, establish A/C capacity, admit #57/#59 or any other P1 work, authorize deployment/public release, or unfreeze shared contracts. Keep the canonical task checkboxes pending until the integrated outcomes are verified and B updates `tasks.md`.
 
 ## Acceptance Traceability
 
