@@ -637,6 +637,7 @@ button {
 
 @media (max-width: 480px) {
   .map-page { grid-template-rows: minmax(250px, 58%) minmax(140px, 42%); }
+  .map-page.map-page--list-collapsed { grid-template-rows: minmax(250px, 1fr) auto; }
   .map-filter-bar { top: 68px; right: 10px; left: 10px; gap: 5px; }
   .route-filter, .map-filter-button { min-height: 36px; padding: 0 8px; font-size: 0.67rem; }
   .map-status { max-width: calc(100% - 174px); font-size: 0.66rem; }
@@ -644,6 +645,53 @@ button {
   .report-button { right: 10px; bottom: 52px; min-height: 44px; padding: 0 14px; font-size: 0.8rem; }
   .map-tile-status { right: 10px; bottom: 104px; }
   .report-list-fallback { padding-right: 10px; padding-left: 10px; }
+}
+
+.map-page.map-page--list-collapsed {
+  grid-template-rows: minmax(230px, 1fr) auto;
+}
+
+.report-list-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-list-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--client-color-border);
+  border-radius: var(--client-radius-pill);
+  background: var(--client-color-surface);
+  color: var(--client-color-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.report-list-toggle-chevron {
+  display: inline-block;
+  color: var(--client-color-text-muted);
+  font-size: 0.62rem;
+  transition: transform 160ms ease;
+}
+
+.report-list-toggle--collapsed .report-list-toggle-chevron {
+  transform: rotate(180deg);
+}
+
+.report-list-toggle:focus-visible {
+  outline: 3px solid var(--client-color-focus);
+  outline-offset: 2px;
+}
+
+.report-list-fallback--collapsed .fixture-banner,
+.report-list-fallback--collapsed .map-cluster-details,
+.report-list-fallback--collapsed .map-report-list {
+  display: none;
 }
 
 .map-canvas {
