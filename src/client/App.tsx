@@ -613,20 +613,8 @@ export function App(
         );
       }
     } else {
-      if (session?.uid && session.uid === accountUid) {
-        currentRewardsPage = renderRewardsPage(api, t, locale);
-        panel.appendChild(currentRewardsPage.element);
-      } else {
-        appendElements(panel,
-          renderDeferredPanel(
-            t('deferred.rewards.heading'),
-            t('deferred.rewards.message'),
-            t('deferred.signIn'),
-            t('deferred.signInPending'),
-            session ? () => openSignIn('rewards') : undefined,
-          ),
-        );
-      }
+      currentRewardsPage = renderRewardsPage(t, locale);
+      panel.appendChild(currentRewardsPage.element);
     }
 
     main.replaceChildren(panel);

@@ -410,17 +410,28 @@ describe('client shell', () => {
       .toBe('GREEN,YELLOW');
   });
 
-  it.each([
-    ['/impact', 'My Impact', 'Sign in to see your reports and community contributions.'],
-    ['/rewards', 'Rewards', 'Sign in to see your reward balance and available rewards.'],
-  ])('opens the protected %s deep link with a sign-in option', (path, label, message) => {
-    const { root, location } = createHarness(path);
+  it('opens the protected /impact deep link with a sign-in option', () => {
+    const { root, location } = createHarness('/impact');
     const panel = root.querySelector('.tab-panel');
 
-    expect(location.pathname).toBe(path);
-    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe(label);
-    expect(panel?.textContent).toContain(message);
+    expect(location.pathname).toBe('/impact');
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('My Impact');
+    expect(panel?.textContent).toContain('Sign in to see your reports and community contributions.');
     expect(panel?.querySelector('button')?.textContent).toBe('Sign in');
+  });
+
+  it('renders the browser-local Rewards catalog for a guest without calling the API', () => {
+    const fixtureResolver = vi.fn(() => ({ status: 500, body: {} }));
+    const { root, storage } = createHarness('/rewards', createClientApi({ mode: 'fixture', fixtureResolver }));
+    const panel = root.querySelector('.tab-panel');
+
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Rewards');
+    expect(panel?.textContent).toContain('Browser-only demo');
+    expect(panel?.querySelector('.rewards-balance-value')?.textContent).toBe('45 RP');
+    expect(panel?.querySelectorAll('.rewards-card')).toHaveLength(3);
+    expect(panel?.querySelector('.deferred-card')).toBeNull();
+    expect(fixtureResolver).not.toHaveBeenCalled();
+    expect(storage.has('iskra:rewards:demo:v1')).toBe(false);
   });
 
   it('renders bilingual role-specific Impact and restores it after opening a report', async () => {
@@ -520,15 +531,14 @@ describe('client shell', () => {
     expect(accessAttempts).not.toContain('mediaDevices');
   });
 
-  it('restores the selected tab on browser back/forward navigation', () => {
+  it('restores the local Rewards tab on browser back/forward navigation', () => {
     const { root, location, dispatchWindowEvent } = createHarness('/impact');
     location.pathname = '/rewards';
     dispatchWindowEvent('popstate');
 
     expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Rewards');
-    expect(root.querySelector('.tab-panel')?.textContent).toContain(
-      'Sign in to see your reward balance and available rewards.',
-    );
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Browser-only demo');
+    expect(root.querySelectorAll('.rewards-card')).toHaveLength(3);
   });
 
   it('applies a stored language before rendering the active view', () => {
@@ -572,8 +582,8 @@ describe('client shell', () => {
     expect(root.querySelector('.map-notice')).toBeNull();
   });
 
-  it.each(['/impact', '/rewards'])('keeps deferred %s actions honest', (path) => {
-    const { root } = createHarness(path);
+  it('keeps deferred /impact actions honest', () => {
+    const { root } = createHarness('/impact');
     const panel = root.querySelector('.tab-panel');
     const signIn = panel?.querySelector('button');
 

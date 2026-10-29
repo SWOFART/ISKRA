@@ -1,21 +1,48 @@
 import {
-  DemoRewardCatalogSchema,
-  DemoRewardRedemptionReceiptSchema,
-  DemoRewardRedemptionRequestSchema,
   DemoRewardVoucherListSchema,
-  ImpactSchema,
   type DemoRewardCatalogItem,
   type DemoRewardVoucher,
 } from '../shared/contracts';
-import { ApiClientError, createClientApi } from './api';
-import { errorMessageKey, formatNumber, type MessageKey, type MessageValues } from './i18n';
+import { formatNumber, type MessageKey, type MessageValues } from './i18n';
 import type { SupportedLocale } from './designTokens';
-import { createOperationKeyScope, type OperationKeyScope } from './operationKey';
 
-type ClientApi = ReturnType<typeof createClientApi>;
 type Translate = (key: MessageKey, values?: MessageValues) => string;
-type LoadState = 'loading' | 'ready' | 'error';
-const pendingRedemptionOperations = new Map<string, OperationKeyScope>();
+
+const LOCAL_REWARDS_STORAGE_KEY = 'iskra:rewards:demo:v1';
+const STARTING_DEMO_BALANCE_RP = 45;
+const DEMO_TERMS = 'Demo only. No real-world value, partner, QR code, expiry, payout, or fulfillment.';
+
+const DEMO_CATALOG: readonly DemoRewardCatalogItem[] = [
+  {
+    id: '11111111-1111-4111-8111-000000000005',
+    title: 'Demo reward · 5 RP',
+    description: 'Illustrative demo voucher; no goods or services are provided.',
+    costRp: 5,
+    isDemo: true,
+    demoTerms: DEMO_TERMS,
+  },
+  {
+    id: '11111111-1111-4111-8111-000000000015',
+    title: 'Demo reward · 15 RP',
+    description: 'Illustrative demo voucher; no goods or services are provided.',
+    costRp: 15,
+    isDemo: true,
+    demoTerms: DEMO_TERMS,
+  },
+  {
+    id: '11111111-1111-4111-8111-000000000040',
+    title: 'Demo reward · 40 RP',
+    description: 'Illustrative demo voucher; no goods or services are provided.',
+    costRp: 40,
+    isDemo: true,
+    demoTerms: DEMO_TERMS,
+  },
+];
+
+interface LocalRewardsState {
+  balance: number;
+  vouchers: DemoRewardVoucher[];
+}
 
 function makeElement<K extends keyof HTMLElementTagNameMap>(
   tagName: K,
@@ -42,53 +69,76 @@ function formatRp(locale: SupportedLocale, value: number): string {
   return `${formatNumber(locale, value)} RP`;
 }
 
+function readLocalRewards(): LocalRewardsState {
+  try {
+    const stored = window.localStorage.getItem(LOCAL_REWARDS_STORAGE_KEY);
+    if (!stored) return { balance: STARTING_DEMO_BALANCE_RP, vouchers: [] };
+
+    const value: unknown = JSON.parse(stored);
+    if (!value || typeof value !== 'object') return { balance: STARTING_DEMO_BALANCE_RP, vouchers: [] };
+    const record = value as Record<string, unknown>;
+    if (!Number.isSafeInteger(record.balance) || (record.balance as number) < 0 || !Array.isArray(record.vouchers)) {
+      return { balance: STARTING_DEMO_BALANCE_RP, vouchers: [] };
+    }
+
+    const parsedVouchers = DemoRewardVoucherListSchema.safeParse({
+      items: record.vouchers.slice(0, 100),
+      nextCursor: null,
+    });
+    if (!parsedVouchers.success) return { balance: STARTING_DEMO_BALANCE_RP, vouchers: [] };
+
+    return { balance: record.balance as number, vouchers: parsedVouchers.data.items };
+  } catch {
+    return { balance: STARTING_DEMO_BALANCE_RP, vouchers: [] };
+  }
+}
+
+function writeLocalRewards(state: LocalRewardsState): void {
+  try {
+    window.localStorage.setItem(LOCAL_REWARDS_STORAGE_KEY, JSON.stringify({
+      balance: state.balance,
+      vouchers: state.vouchers.slice(0, 100),
+    }));
+  } catch {
+    // Keep the demo usable for this page session when browser storage is unavailable.
+  }
+}
+
 export interface RewardsPageView {
   element: HTMLElement;
   dispose(): void;
 }
 
-export function renderRewardsPage(api: ClientApi, t: Translate, locale: SupportedLocale): RewardsPageView {
+export function renderRewardsPage(t: Translate, locale: SupportedLocale): RewardsPageView {
   const page = makeElement('section', 'rewards-page');
   page.setAttribute('aria-labelledby', 'rewards-heading');
   const heading = makeElement('h1', undefined, t('rewards.title'));
   heading.id = 'rewards-heading';
+  const localNotice = makeElement('p', 'rewards-demo-notice', t('rewards.localOnly'));
+
+  const localState = readLocalRewards();
+  let balance = localState.balance;
+  let vouchers = localState.vouchers;
+  let selectedReward: DemoRewardCatalogItem | undefined;
 
   const balanceSection = makeElement('section', 'rewards-balance-section');
   balanceSection.appendChild(makeElement('h2', undefined, t('rewards.balance')));
-  const balanceValue = makeElement('strong', 'rewards-balance-value', '—');
-  const balanceStatus = makeElement('p', 'rewards-balance-status', t('impact.loading'));
-  balanceStatus.setAttribute('role', 'status');
-  balanceStatus.setAttribute('aria-live', 'polite');
-  const balanceRetry = makeButton(t('rewards.retry'), 'rewards-retry rewards-balance-retry');
-  balanceRetry.hidden = true;
-  appendChildren(balanceSection, balanceValue, balanceStatus, balanceRetry);
+  const balanceValue = makeElement('strong', 'rewards-balance-value', formatRp(locale, balance));
+  balanceSection.appendChild(balanceValue);
 
   const catalogSection = makeElement('section', 'rewards-catalog-section');
   catalogSection.appendChild(makeElement('h2', undefined, t('rewards.catalog')));
-  const catalogStatus = makeElement('p', 'rewards-catalog-status', t('rewards.catalogLoading'));
-  catalogStatus.setAttribute('role', 'status');
-  catalogStatus.setAttribute('aria-live', 'polite');
-  const catalogRetry = makeButton(t('rewards.retry'), 'rewards-retry');
-  catalogRetry.hidden = true;
   const catalogGrid = makeElement('div', 'rewards-catalog-grid');
   catalogGrid.setAttribute('aria-label', t('rewards.catalog'));
   const catalogEmpty = makeElement('p', 'rewards-empty', t('rewards.catalogEmpty'));
   catalogEmpty.hidden = true;
-  appendChildren(catalogSection, catalogStatus, catalogRetry, catalogGrid, catalogEmpty);
+  appendChildren(catalogSection, catalogGrid, catalogEmpty);
 
   const voucherSection = makeElement('section', 'rewards-vouchers-section');
   voucherSection.appendChild(makeElement('h2', undefined, t('rewards.vouchers')));
-  const voucherStatus = makeElement('p', 'rewards-vouchers-status', t('rewards.vouchersLoading'));
-  voucherStatus.setAttribute('role', 'status');
-  voucherStatus.setAttribute('aria-live', 'polite');
-  const voucherRetry = makeButton(t('rewards.retry'), 'rewards-retry');
-  voucherRetry.hidden = true;
   const voucherList = makeElement('ul', 'rewards-voucher-list');
   const voucherEmpty = makeElement('p', 'rewards-empty', t('rewards.vouchersEmpty'));
-  voucherEmpty.hidden = true;
-  const voucherMore = makeButton(t('rewards.loadMore'), 'rewards-load-more');
-  voucherMore.hidden = true;
-  appendChildren(voucherSection, voucherStatus, voucherRetry, voucherList, voucherEmpty, voucherMore);
+  appendChildren(voucherSection, voucherList, voucherEmpty);
 
   const announcement = makeElement('p', 'rewards-announcement');
   announcement.setAttribute('role', 'status');
@@ -107,59 +157,38 @@ export function renderRewardsPage(api: ClientApi, t: Translate, locale: Supporte
   const confirmationTermsLabel = makeElement('h3', undefined, t('rewards.terms'));
   const confirmationTerms = makeElement('p', 'rewards-confirmation-terms');
   const confirmationDemo = makeElement('p', 'rewards-demo-notice', t('rewards.demoNotice'));
-  const redemptionStatus = makeElement('p', 'rewards-redemption-status');
-  redemptionStatus.setAttribute('role', 'status');
-  redemptionStatus.setAttribute('aria-live', 'polite');
   const confirmationActions = makeElement('div', 'rewards-confirmation-actions');
   const confirmButton = makeButton(t('rewards.confirm'), 'rewards-confirm');
   const cancelButton = makeButton(t('rewards.cancel'), 'rewards-cancel');
   appendChildren(confirmationActions, confirmButton, cancelButton);
   appendChildren(confirmation, confirmationHeading, confirmationMessage, confirmationTitle,
     confirmationCurrent, confirmationCost, confirmationRemaining, confirmationTermsLabel,
-    confirmationTerms, confirmationDemo, redemptionStatus, confirmationActions);
+    confirmationTerms, confirmationDemo, confirmationActions);
 
-  appendChildren(page, heading, balanceSection, catalogSection, voucherSection, announcement, confirmation);
-
-  let active = true;
-  let balance: number | undefined;
-  let balanceVersion = -1;
-  let catalog: DemoRewardCatalogItem[] = [];
-  let catalogState: LoadState = 'loading';
-  let vouchers: DemoRewardVoucher[] = [];
-  let voucherState: LoadState = 'loading';
-  let voucherCursor: string | null = null;
-  let selectedReward: DemoRewardCatalogItem | undefined;
-  let loadGeneration = 0;
-  const controller = new AbortController();
+  appendChildren(page, heading, localNotice, balanceSection, catalogSection, voucherSection,
+    announcement, confirmation);
 
   function renderCatalog(): void {
     catalogGrid.replaceChildren();
-    catalogStatus.textContent = catalogState === 'loading'
-      ? t('rewards.catalogLoading')
-      : catalogState === 'error' ? t('error.UNAVAILABLE') : '';
-    catalogRetry.hidden = catalogState !== 'error';
-    catalogEmpty.hidden = catalogState !== 'ready' || catalog.length > 0;
-    for (const reward of catalog) {
+    catalogEmpty.hidden = DEMO_CATALOG.length > 0;
+    for (const reward of DEMO_CATALOG) {
       const card = makeElement('article', 'rewards-card');
-      const currentBalance = balance ?? 0;
-      const remaining = balance !== undefined && currentBalance >= reward.costRp
-        ? formatRp(locale, currentBalance - reward.costRp) : '—';
+      const remaining = balance >= reward.costRp ? formatRp(locale, balance - reward.costRp) : '—';
       const progress = document.createElement('progress');
       progress.className = 'rewards-progress';
       progress.max = reward.costRp;
-      progress.value = Math.min(currentBalance, reward.costRp);
-      progress.hidden = balance === undefined;
+      progress.value = Math.min(balance, reward.costRp);
       progress.setAttribute('aria-label', t('rewards.availableProgress', {
-        current: formatNumber(locale, currentBalance), cost: formatNumber(locale, reward.costRp),
+        current: formatNumber(locale, balance), cost: formatNumber(locale, reward.costRp),
       }));
       const redeemButton = makeButton(t('rewards.get'), 'rewards-get');
-      redeemButton.disabled = balance === undefined || currentBalance < reward.costRp;
+      redeemButton.disabled = balance < reward.costRp;
       redeemButton.addEventListener('click', () => openConfirmation(reward));
       appendChildren(card,
         makeElement('h3', 'rewards-card-title', reward.title),
         makeElement('p', 'rewards-card-description', reward.description),
         makeElement('span', 'rewards-demo-label', t('rewards.demoLabel')),
-        makeElement('p', 'rewards-current', `${t('rewards.current')}: ${balance === undefined ? '—' : formatRp(locale, currentBalance)}`),
+        makeElement('p', 'rewards-current', `${t('rewards.current')}: ${formatRp(locale, balance)}`),
         makeElement('p', 'rewards-cost', `${t('rewards.cost')}: ${formatRp(locale, reward.costRp)}`),
         makeElement('p', 'rewards-remaining', `${t('rewards.remaining')}: ${remaining}`),
         progress,
@@ -171,13 +200,7 @@ export function renderRewardsPage(api: ClientApi, t: Translate, locale: Supporte
 
   function renderVouchers(): void {
     voucherList.replaceChildren();
-    voucherStatus.textContent = voucherState === 'loading'
-      ? t('rewards.vouchersLoading')
-      : voucherState === 'error' ? t('error.UNAVAILABLE') : '';
-    voucherRetry.hidden = voucherState !== 'error';
-    voucherMore.hidden = voucherState !== 'ready' || voucherCursor === null;
-    voucherMore.disabled = false;
-    voucherEmpty.hidden = voucherState !== 'ready' || vouchers.length > 0;
+    voucherEmpty.hidden = vouchers.length > 0;
     for (const voucher of vouchers) {
       const item = makeElement('li', 'rewards-voucher');
       appendChildren(item,
@@ -196,7 +219,6 @@ export function renderRewardsPage(api: ClientApi, t: Translate, locale: Supporte
 
   function openConfirmation(reward: DemoRewardCatalogItem): void {
     selectedReward = reward;
-    redemptionStatus.textContent = '';
     renderConfirmation();
     if (!confirmation.open) confirmation.showModal();
     confirmButton.focus();
@@ -205,180 +227,58 @@ export function renderRewardsPage(api: ClientApi, t: Translate, locale: Supporte
   function renderConfirmation(): void {
     const reward = selectedReward;
     if (!reward) return;
-    const currentBalance = balance ?? 0;
     confirmationTitle.textContent = reward.title;
-    confirmationCurrent.textContent = `${t('rewards.current')}: ${formatRp(locale, currentBalance)}`;
+    confirmationCurrent.textContent = `${t('rewards.current')}: ${formatRp(locale, balance)}`;
     confirmationCost.textContent = `${t('rewards.cost')}: ${formatRp(locale, reward.costRp)}`;
-    const remaining = balance !== undefined && currentBalance >= reward.costRp
-      ? formatRp(locale, currentBalance - reward.costRp) : '—';
+    const remaining = balance >= reward.costRp ? formatRp(locale, balance - reward.costRp) : '—';
     confirmationRemaining.textContent = `${t('rewards.remaining')}: ${remaining}`;
     confirmationTerms.textContent = reward.demoTerms;
-    confirmButton.disabled = balance === undefined || currentBalance < reward.costRp;
+    confirmButton.disabled = balance < reward.costRp;
   }
 
-  async function loadCatalog(): Promise<void> {
-    catalogState = 'loading';
-    renderCatalog();
-    try {
-      const result = await api.request({
-        path: '/rewards/catalog', auth: 'none', responseSchema: DemoRewardCatalogSchema,
-        signal: controller.signal,
-      });
-      if (!active) return;
-      catalog = result.data.items;
-      catalogState = 'ready';
-      renderCatalog();
-    } catch {
-      if (!active || controller.signal.aborted) return;
-      catalogState = 'error';
-      renderCatalog();
-    }
-  }
-
-  async function loadBalance(showRetryOnError = false): Promise<void> {
-    try {
-      const result = await api.request({
-        path: '/me/impact', auth: 'required', responseSchema: ImpactSchema, signal: controller.signal,
-      });
-      if (!active) return;
-      if (result.data.balanceVersion >= balanceVersion) {
-        balance = result.data.totals.balanceRp;
-        balanceVersion = result.data.balanceVersion;
-        balanceValue.textContent = formatRp(locale, balance);
-        renderCatalog();
-        if (confirmation.open) renderConfirmation();
-      }
-      balanceStatus.textContent = '';
-      balanceRetry.hidden = true;
-    } catch (error) {
-      if (!active || controller.signal.aborted) return;
-      if (balance === undefined || showRetryOnError) {
-        balanceStatus.textContent = t(error instanceof ApiClientError ? errorMessageKey(error.code) : 'error.generic');
-        balanceRetry.hidden = false;
-      }
-    }
-  }
-
-  async function loadVouchers(cursor: string | null = null): Promise<void> {
-    const generation = ++loadGeneration;
-    voucherState = 'loading';
-    voucherMore.disabled = true;
-    renderVouchers();
-    try {
-      const path = cursor ? `/me/vouchers?cursor=${encodeURIComponent(cursor)}` : '/me/vouchers';
-      const result = await api.request({
-        path, auth: 'required', responseSchema: DemoRewardVoucherListSchema, signal: controller.signal,
-      });
-      if (!active || generation !== loadGeneration) return;
-      const incoming = result.data.items;
-      const merged = cursor ? [...vouchers, ...incoming] : [...incoming, ...vouchers];
-      vouchers = [...new Map(merged.map((voucher) => [voucher.id, voucher])).values()]
-        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)
-          || left.id.localeCompare(right.id));
-      voucherCursor = result.data.nextCursor;
-      voucherState = 'ready';
-      renderVouchers();
-    } catch {
-      if (!active || controller.signal.aborted || generation !== loadGeneration) return;
-      voucherState = 'error';
-      renderVouchers();
-    }
-  }
-
-  async function redeem(): Promise<void> {
+  function redeemLocally(): void {
     const reward = selectedReward;
-    if (!reward || balance === undefined || balance < reward.costRp) return;
+    if (!reward || balance < reward.costRp) return;
+
     confirmButton.disabled = true;
-    redemptionStatus.textContent = t('rewards.catalogLoading');
-    let operation = pendingRedemptionOperations.get(reward.id);
-    if (!operation) {
-      operation = createOperationKeyScope();
-      pendingRedemptionOperations.set(reward.id, operation);
-    }
-    try {
-      const result = await api.request({
-        path: `/rewards/${reward.id}/redeem`,
-        method: 'POST',
-        auth: 'required',
-        body: { confirmedCostRp: reward.costRp },
-        bodySchema: DemoRewardRedemptionRequestSchema,
-        responseSchema: DemoRewardRedemptionReceiptSchema,
-        operation,
-        signal: controller.signal,
-      });
-      if (!active) return;
-      operation.complete();
-      pendingRedemptionOperations.delete(reward.id);
-      if (result.data.balanceVersion >= balanceVersion) {
-        balance = result.data.balance;
-        balanceVersion = result.data.balanceVersion;
-      }
-      balanceValue.textContent = balance === undefined ? '—' : formatRp(locale, balance);
-      balanceStatus.textContent = '';
-      balanceRetry.hidden = true;
-      vouchers = [result.data.voucher, ...vouchers.filter((voucher) => voucher.id !== result.data.voucher.id)];
-      voucherState = 'ready';
-      renderVouchers();
-      renderCatalog();
-      announcement.textContent = t('rewards.received', {
-        points: result.data.rpDebited, balance: formatNumber(locale, balance ?? result.data.balance),
-      });
-      confirmation.close();
-    } catch (error) {
-      if (!active || controller.signal.aborted) return;
-      const apiError = error instanceof ApiClientError ? error : undefined;
-      redemptionStatus.textContent = t(apiError ? errorMessageKey(apiError.code) : 'error.generic');
-      if (apiError?.code === 'PRICE_CHANGED') {
-        pendingRedemptionOperations.get(reward.id)?.complete();
-        pendingRedemptionOperations.delete(reward.id);
-        await loadCatalog();
-        if (!active) return;
-        const refreshed = catalog.find((item) => item.id === reward.id);
-        if (refreshed) {
-          selectedReward = refreshed;
-          redemptionStatus.textContent = t('rewards.priceChanged');
-          renderConfirmation();
-        }
-      } else if (apiError?.code === 'INSUFFICIENT_RP') {
-        pendingRedemptionOperations.get(reward.id)?.complete();
-        pendingRedemptionOperations.delete(reward.id);
-        await loadBalance(true);
-        if (active) {
-          redemptionStatus.textContent = t('rewards.insufficient');
-          renderConfirmation();
-        }
-      } else if (!apiError?.retryable) {
-        pendingRedemptionOperations.get(reward.id)?.complete();
-        pendingRedemptionOperations.delete(reward.id);
-      }
-      confirmButton.disabled = balance === undefined || !selectedReward || balance < selectedReward.costRp;
-    }
+    const voucherId = crypto.randomUUID().toLowerCase();
+    const voucher: DemoRewardVoucher = {
+      id: voucherId,
+      catalogId: reward.id,
+      title: reward.title,
+      description: reward.description,
+      costRpSnapshot: reward.costRp,
+      displayCode: `DEMO-${voucherId.toUpperCase()}`,
+      status: 'RECEIVED',
+      createdAt: new Date().toISOString(),
+      isDemo: true,
+      demoTerms: reward.demoTerms,
+    };
+
+    balance -= reward.costRp;
+    vouchers = [voucher, ...vouchers.filter((item) => item.id !== voucher.id)].slice(0, 100);
+    writeLocalRewards({ balance, vouchers });
+    balanceValue.textContent = formatRp(locale, balance);
+    renderVouchers();
+    renderCatalog();
+    announcement.textContent = t('rewards.received', {
+      points: reward.costRp,
+      balance: formatNumber(locale, balance),
+    });
+    confirmation.close();
   }
 
-  catalogRetry.addEventListener('click', () => { void loadCatalog(); });
-  balanceRetry.addEventListener('click', () => { void loadBalance(true); });
-  voucherRetry.addEventListener('click', () => { void loadVouchers(); });
-  voucherMore.addEventListener('click', () => { if (voucherCursor) void loadVouchers(voucherCursor); });
-  confirmButton.addEventListener('click', () => { void redeem(); });
+  confirmButton.addEventListener('click', redeemLocally);
   cancelButton.addEventListener('click', () => confirmation.close());
   confirmation.addEventListener('cancel', (event) => { event.preventDefault(); confirmation.close(); });
-  confirmation.addEventListener('close', () => {
-    selectedReward = undefined;
-    redemptionStatus.textContent = '';
-  });
+  confirmation.addEventListener('close', () => { selectedReward = undefined; });
 
   renderCatalog();
   renderVouchers();
-  void loadCatalog();
-  void loadBalance();
-  void loadVouchers();
 
   return {
     element: page,
     dispose() {
-      active = false;
-      loadGeneration += 1;
-      controller.abort();
       if (confirmation.open) confirmation.close();
     },
   };

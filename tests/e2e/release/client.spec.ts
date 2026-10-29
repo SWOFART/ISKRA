@@ -46,7 +46,14 @@ for (const [path, selected] of [
     await expect(page.getByRole('tab', { name: selected, exact: true })).toHaveAttribute('aria-selected', 'true');
     expect(new URL(page.url()).pathname).toBe(path);
     await expect(page.locator('.app-shell')).toHaveCSS('display', 'grid');
-    if (selected !== 'Map') await expect(page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    if (selected === 'My Impact') {
+      await expect(page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    }
+    if (selected === 'Rewards') {
+      await expect(page.locator('.rewards-demo-notice').first()).toContainText('Browser-only demo');
+      await expect(page.locator('.rewards-card')).toHaveCount(3);
+      await expect(page.locator('.deferred-card')).toHaveCount(0);
+    }
     expect(errors).toEqual([]);
   });
 }
