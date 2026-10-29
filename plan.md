@@ -353,9 +353,10 @@ The two keys above illustrate separate reusable shapes, not a combined request. 
 | `POST /missions/:id/join` | Auth | `{}` | `200 {joined:true,participantCount}` | Composite PK makes repeat safe; OPEN only; no approval |
 | `GET /missions/:id` | Public | path UUID | `200 {mission,organizer,participantCount,announcement}` | Viewer membership only in private response; no email/roster leakage |
 | `PATCH /missions/:id` | Organizer | `{announcement}` | `200 {mission}` | Bounded plain text; no chat; dates immutable for small MVP |
-| `POST /reports/:id/red-draft` | Auth | `{}` | `200 {draftText,verifiedContact:null|{name,channel,sourceUrl,verifiedAt},sentDeclaredAt}` | RED only; no existence verification prerequisite for urgent guidance; cached per user; AI optional |
-| `PATCH /reports/:id/red-draft` | Auth/owner | `{draftText}` | `200 {draftText}` | Text only, no executable HTML; avoid AI overwriting edits |
-| `POST /reports/:id/red-sent` | Auth | `{declaredSent:true}` | `200 {sentDeclaredAt,meaning:"USER_REPORTED"}` | Idempotent personal timestamp; no report resolution or authority confirmation |
+| `GET /reports/:id/red-draft` | Auth/owner | none | `200 {draft:{reportId,locale,text,sentAt,contacts:[{id,label,channel,value,sourceLabel,sourceUrl,verifiedAt}],createdAt,updatedAt}}` | Personal draft only; non-demo RED report; same 404 for missing or foreign owner; contacts are active records with HTTPS source provenance |
+| `POST /reports/:id/red-draft` | Auth/owner | `{locale:"en"|"de"}` | First create: `201 {draft}`; retry: `200 {draft}` | Create-if-absent; a retry preserves existing edited text; factual template uses only report description/map pin; contacts are not invented |
+| `PATCH /reports/:id/red-draft` | Auth/owner | `{text}` | `200 {draft}` | Plain-text update only; no executable HTML; user edits are never overwritten by generation |
+| `POST /reports/:id/red-draft/sent` | Auth/owner | `{sent:true}` | `200 {reportId,sentAt}` | Idempotently preserves first user-reported timestamp; no external send, report lifecycle change or authority confirmation |
 | `GET /rewards/catalog` | Public | none | `200 {items:[{id,title,costRp,isDemo:true}]}` | All active items irrespective of balance |
 | `POST /rewards/:id/redeem` | Auth + key | `{confirmedCostRp}` | `201 {voucher:{id,status:"RECEIVED",isDemo:true},balance,rpDebited}` | Server price match or 409 PRICE_CHANGED; insufficient balance 409; atomic debit |
 | `GET /me/vouchers` | Auth | cursor | `200 {items:[voucher],nextCursor}` | Owner only, demo marking |

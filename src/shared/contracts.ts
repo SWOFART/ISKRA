@@ -1,6 +1,6 @@
 import { array, boolean, enumeration, literal, nullable, number, object, string, union, type Infer } from './schema';
 
-export const CONTRACT_REVISION = 'v1-candidate.3' as const;
+export const CONTRACT_REVISION = 'v1-candidate.4' as const;
 export const POLICY = Object.freeze({
   voteRadiusM: 150, cleanupRadiusM: 150, maxAccuracyM: 50, maxLocationAgeSeconds: 60,
   maxPinDisplacementM: 3, reporterTotalRp: 20, reporterInitialRp: 5,
@@ -275,9 +275,37 @@ export const NotificationSchema = object({
 export const NotificationListSchema = object({ items: array(NotificationSchema, 0, 100), nextCursor: nullable(string(1, 512)) });
 export const NotificationReadRequestSchema = object({ read: literal(true) });
 export const NotificationReadReceiptSchema = object({ id: UuidSchema, readAt: TimestampSchema });
+export const RedContactChannelSchema = enumeration(['EMAIL', 'PHONE', 'WEBSITE', 'POSTAL_ADDRESS']);
+export const VerifiedRedContactSchema = object({
+  id: UuidSchema,
+  label: string(1, 120).refine((v) => v.trim().length > 0, 'Empty contact label'),
+  channel: RedContactChannelSchema,
+  value: string(1, 500).refine((v) => v.trim().length > 0, 'Empty contact value'),
+  sourceLabel: string(1, 200).refine((v) => v.trim().length > 0, 'Empty verification source'),
+  sourceUrl: string(9, 2048, /^https:\/\/\S+$/i),
+  verifiedAt: TimestampSchema,
+});
+export const RedDraftSchema = object({
+  reportId: UuidSchema,
+  locale: LocaleSchema,
+  text: string(1, 4000).refine((v) => v.trim().length > 0, 'Empty draft text'),
+  sentAt: nullable(TimestampSchema),
+  contacts: array(VerifiedRedContactSchema, 0, 20),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+export const RedDraftEnvelopeSchema = object({ draft: RedDraftSchema });
+export const RedDraftCreateRequestSchema = object({ locale: LocaleSchema });
+export const RedDraftUpdateRequestSchema = object({
+  text: string(1, 4000).refine((v) => v.trim().length > 0, 'Empty draft text'),
+});
+export const RedSentDeclarationRequestSchema = object({ sent: literal(true) });
+export const RedSentDeclarationSchema = object({ reportId: UuidSchema, sentAt: TimestampSchema });
 
 export type ReportDetail = Infer<typeof ReportDetailSchema>;
 export type ViewerReportDetail = Infer<typeof ViewerReportDetailSchema>;
 export type ReportAnalysis = Infer<typeof ReportAnalysisSchema>;
 export type CleanupAnalysis = Infer<typeof CleanupAnalysisSchema>;
 export type Impact = Infer<typeof ImpactSchema>;
+export type RedDraft = Infer<typeof RedDraftSchema>;
+export type RedDraftLocale = Infer<typeof LocaleSchema>;

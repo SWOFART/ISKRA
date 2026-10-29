@@ -244,3 +244,47 @@ describe('new-action location admission (not replay freshness)', () => {
     expect(reportPinAdmission(zero, at(3.001), now)).toBe('PIN_TOO_FAR');
   });
 });
+
+describe('conditional Red assistance contracts', () => {
+  it('accepts a private editable draft with only source-provenanced contacts', () => {
+    const draft = {
+      reportId: id,
+      locale: 'en',
+      text: 'Report of a potential hazard.',
+      sentAt: null,
+      contacts: [{
+        id,
+        label: 'City contact',
+        channel: 'WEBSITE',
+        value: 'https://city.example/contact',
+        sourceLabel: 'Official city directory',
+        sourceUrl: 'https://city.example/contact',
+        verifiedAt: '2026-10-27T12:00:00.000Z',
+      }],
+      createdAt: '2026-10-27T12:00:00.000Z',
+      updatedAt: '2026-10-27T12:00:00.000Z',
+    };
+    expect(c.RedDraftSchema.safeParse(draft).success).toBe(true);
+    expect(c.RedDraftSchema.safeParse({
+      ...draft,
+      contacts: [{ ...draft.contacts[0], sourceUrl: 'http://unverified.example/contact' }],
+    }).success).toBe(false);
+    expect(c.RedDraftSchema.safeParse({ ...draft, userId: 'another-resident' }).success).toBe(false);
+  });
+
+  it('keeps Red mutations strict and makes the sent receipt a timestamp-only declaration', () => {
+    expect(c.CONTRACT_REVISION).toBe('v1-candidate.4');
+    expect(c.RedDraftCreateRequestSchema.safeParse({ locale: 'de' }).success).toBe(true);
+    expect(c.RedDraftCreateRequestSchema.safeParse({ locale: 'fr' }).success).toBe(false);
+    expect(c.RedDraftUpdateRequestSchema.safeParse({ text: 'Resident-edited plain text' }).success).toBe(true);
+    expect(c.RedDraftUpdateRequestSchema.safeParse({ text: ' ' }).success).toBe(false);
+    expect(c.RedDraftUpdateRequestSchema.safeParse({ text: 'Draft', sendNow: true }).success).toBe(false);
+    expect(c.RedSentDeclarationRequestSchema.safeParse({ sent: true }).success).toBe(true);
+    expect(c.RedSentDeclarationRequestSchema.safeParse({ sent: true, userId: 'forged' }).success).toBe(false);
+    expect(c.RedSentDeclarationSchema.safeParse({
+      reportId: id,
+      sentAt: '2026-10-27T12:00:00.000Z',
+      receivedAt: '2026-10-27T12:00:00.000Z',
+    }).success).toBe(false);
+  });
+});

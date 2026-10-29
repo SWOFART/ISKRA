@@ -1,6 +1,6 @@
 # API v1 candidate handoff
 
-OpenSpec `build-iskra-hackathon-mvp`, task 1.3 / issue #7, extended by task 9.2 / issue #56. Contract revision: `v1-candidate.3`.
+OpenSpec `build-iskra-hackathon-mvp`, task 1.3 / issue #7, extended by tasks 9.2 / issue #56 and 9.4 / issue #58. Contract revision: `v1-candidate.4`.
 
 This is the review candidate for A/B/C. It consolidates the already selected D01–D08 policies and the P0 DTOs in [contracts.ts](contracts.ts). G0 remains **PENDING** until A and C acknowledge the endpoint, error, media, location and internal-interface boundaries and the required independent review is complete. No product policy is reopened here. Changes after acknowledgment require a new candidate revision and consumer notes.
 
@@ -38,7 +38,24 @@ All shapes below use the exported schemas in [contracts.ts](contracts.ts). The o
 
 Notification text is projected from its stored kind in the requested interface locale; the database message is not rewritten when the resident switches languages. The cursor orders by immutable creation time and UUID, and a read acknowledgment only updates the authenticated resident's notification. Missing and other residents' notification IDs return the same `404 NOT_FOUND` response.
 
-Conditional Yellow, Red and rewards routes are outside this P0 API candidate. They must not use the Green cleanup route to bypass their own verification rules.
+## Conditional Red personal assistance
+
+The user-authorized serialized B implementation lane may implement task 9.4 while genuine real Green M3 remains unverified; this does not claim release readiness or authorize deployment. Every route below requires Firebase authentication and the report author. Missing, foreign, non-RED and demo report IDs do not expose draft or contact data. Responses use `Cache-Control: no-store`.
+
+| Owner | Method and path | Request | Success |
+|---|---|---|---|
+| B | `POST /reports/:id/red-draft` | `{locale:"en"|"de"}` | `201 RedDraftEnvelope`; repeated create returns the existing draft with `200` |
+| B | `GET /reports/:id/red-draft` | No query or body | `200 RedDraftEnvelope` |
+| B | `PATCH /reports/:id/red-draft` | `{text}`; 1–4000 characters after trimming | `200 RedDraftEnvelope` |
+| B | `POST /reports/:id/red-draft/sent` | `{sent:true}` | `200 RedSentDeclaration` |
+
+Create is insert-if-absent for the unique report/owner pair. Retrying it returns the saved draft and never replaces resident edits. Its initial text is a factual English or German template assembled only from the resident report description, its map pin and Heilbronn; it makes no claim of official confirmation. Draft `text` is plain text for the client copy action and must be rendered as text, never HTML. Manual edits are preserved until the resident explicitly changes them.
+
+`contacts` contains only active records from the manually verified `red_verified_contacts` allowlist, including label, channel, value, source label, HTTPS source URL and verification time. No contact is seeded because no source has been verified for this task; until one is explicitly verified and added, the response contains `contacts:[]`. The endpoint never generates or guesses an authority contact.
+
+Declaring sent sets the first server timestamp and returns that same timestamp on every retry. It records only the resident's claim: the app does not send email, SMS or another external message, and the operation never changes report status, votes, verification or rewards.
+
+Conditional Yellow and rewards routes remain separate and must not use the Green cleanup route to bypass their own verification rules.
 
 ## Error status and recovery map
 
