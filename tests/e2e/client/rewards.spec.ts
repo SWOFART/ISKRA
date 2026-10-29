@@ -52,6 +52,7 @@ test('shows browser-only demo rewards and redeems a local voucher without Reward
   await expect(voucherImage).toHaveAttribute('alt', 'Cappuccino with leaf latte art and a croissant by a café window.');
   await expect.poll(() => voucherImage.evaluate((image) =>
     (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  await expect(voucher.locator('img')).toHaveCount(1);
   await expect(voucher.locator('canvas, svg')).toHaveCount(0);
   await expect(voucher).not.toContainText(/expires|expiration|giltig bis/i);
   expect(apiRequests).toEqual([]);
