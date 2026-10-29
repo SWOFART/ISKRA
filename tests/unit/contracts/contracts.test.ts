@@ -72,6 +72,25 @@ describe('strict JSON boundaries', () => {
     expect(c.PublishRequestSchema.safeParse({ ...request, description: '   ' }).success).toBe(false);
     expect(c.PublishRequestSchema.safeParse({ ...request, route: 'GREEN' }).success).toBe(false);
   });
+  it('validates the public Yellow mission projection without accepting private roster or award data', () => {
+    const mission = {
+      id, reportId: id,
+      organizer: { id: 'resident-1', nickname: 'Resident', avatar: 'avatar-default' },
+      status: 'OPEN', startsAt: '2026-10-27T13:00:00.000Z',
+      meetingPoint: { lat: 49.14, lng: 9.22, label: 'North entrance' },
+      participantCount: 1, announcement: '',
+      createdAt: '2026-10-27T12:00:00.000Z', updatedAt: '2026-10-27T12:00:00.000Z',
+    };
+    expect(c.MissionSchema.safeParse(mission).success).toBe(true);
+    expect(c.MissionSchema.safeParse({ ...mission, roster: ['resident-1'] }).success).toBe(false);
+    expect(c.MissionSchema.safeParse({ ...mission, attendeeRewardRp: 50 }).success).toBe(false);
+    expect(c.CreateMissionRequestSchema.safeParse({
+      startsAt: mission.startsAt, meetingPoint: mission.meetingPoint,
+    }).success).toBe(true);
+    expect(c.CreateMissionRequestSchema.safeParse({
+      startsAt: mission.startsAt, meetingPoint: { ...mission.meetingPoint, label: '  ' },
+    }).success).toBe(false);
+  });
   it('keeps report analysis context strict and separate from its ordered photo IDs', () => {
     const context = {
       comment: '', measuredLocation: location, pin: { lat: 49.14, lng: 9.22 },

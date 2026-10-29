@@ -5,7 +5,7 @@ Define a bounded optional group-cleanup entry flow without implying that attenda
 ## ADDED Requirements
 
 ### Requirement: Conditional verified mission creation
-If admitted after real Green M3, P1 SHALL let an authenticated resident create one OPEN mission for a VERIFIED YELLOW report, with start time and independent meeting point. Its creator SHALL be organizer and participant.
+For the user-authorized serialized B implementation lane recorded in `design.md`, P1 SHALL let an authenticated resident create one OPEN mission for a VERIFIED YELLOW report, with start time and independent meeting point, even while real Green M3 remains unverified. This implementation exception does not claim M3 acceptance, authorize deployment/public release, or enable P2 actions. Its creator SHALL be organizer and participant.
 
 #### Scenario: Mission eligibility
 - **WHEN** mission creation is attempted for an unverified report, a different route or a report with an existing mission
