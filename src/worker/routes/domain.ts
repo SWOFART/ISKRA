@@ -10,6 +10,7 @@ import { createVoteRoutes } from './votes';
 import { createCleanupRoutes } from './cleanups';
 import { createMissionRoutes } from './missions';
 import { createRedRoutes } from './red';
+import { createRewardRoutes } from './rewards';
 import type { ReportMediaResolver } from '../services/report-context';
 
 const unavailable = () => {
@@ -34,6 +35,7 @@ export function createDomainRoutes({ database, reportMedia, verify, now }: Domai
     routes.route('/', createCleanupRoutes({ database, media: reportMedia, verify, now }));
     routes.route('/', createMissionRoutes({ database, verify, now }));
     routes.route('/', createRedRoutes({ database, verify }));
+    routes.route('/', createRewardRoutes({ database, verify }));
   }
   else routes.post('/me/bootstrap', requireAuth(verify), unavailable);
 
@@ -50,9 +52,12 @@ export function createDomainRoutes({ database, reportMedia, verify, now }: Domai
     .post('/reports/:id/red-draft', unavailable)
     .patch('/reports/:id/red-draft', unavailable)
     .post('/reports/:id/red-draft/sent', unavailable)
+    .get('/rewards/catalog', unavailable)
+    .post('/rewards/:id/redeem', requireAuth(verify), unavailable)
     .post('/missions/:id/participants', unavailable)
     .patch('/missions/:id/announcement', unavailable)
     .get('/me/impact', unavailable)
     .get('/me/notifications', unavailable)
-    .patch('/me/notifications/:id', unavailable);
+    .patch('/me/notifications/:id', unavailable)
+    .get('/me/vouchers', requireAuth(verify), unavailable);
 }

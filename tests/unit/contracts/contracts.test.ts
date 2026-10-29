@@ -273,7 +273,7 @@ describe('conditional Red assistance contracts', () => {
   });
 
   it('keeps Red mutations strict and makes the sent receipt a timestamp-only declaration', () => {
-    expect(c.CONTRACT_REVISION).toBe('v1-candidate.4');
+    expect(c.CONTRACT_REVISION).toBe('v1-candidate.6');
     expect(c.RedDraftCreateRequestSchema.safeParse({ locale: 'de' }).success).toBe(true);
     expect(c.RedDraftCreateRequestSchema.safeParse({ locale: 'fr' }).success).toBe(false);
     expect(c.RedDraftUpdateRequestSchema.safeParse({ text: 'Resident-edited plain text' }).success).toBe(true);
