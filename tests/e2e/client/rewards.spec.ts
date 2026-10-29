@@ -47,13 +47,19 @@ test('shows browser-only demo rewards and redeems a local voucher without Reward
   await expect(voucher).toHaveCount(1);
   await expect(voucher).toContainText('Received · demo only');
   await expect(voucher.locator('.rewards-voucher-code')).toHaveText(/^DEMO-[0-9A-F-]+$/);
-  await expect(voucher.locator('canvas, img, svg')).toHaveCount(0);
+  const voucherImage = voucher.locator('.rewards-voucher-image');
+  await expect(voucherImage).toHaveCount(1);
+  await expect(voucherImage).toHaveAttribute('alt', 'Cappuccino with leaf latte art and a croissant by a café window.');
+  await expect.poll(() => voucherImage.evaluate((image) =>
+    (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  await expect(voucher.locator('canvas, svg')).toHaveCount(0);
   await expect(voucher).not.toContainText(/expires|expiration|giltig bis/i);
   expect(apiRequests).toEqual([]);
 
   await page.reload();
   await expect(page.locator('.rewards-balance-value')).toHaveText('40 RP');
   await expect(page.locator('.rewards-voucher')).toHaveCount(1);
+  await expect(page.locator('.rewards-voucher-image')).toHaveCount(1);
   expect(apiRequests).toEqual([]);
 });
 

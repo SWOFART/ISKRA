@@ -221,6 +221,16 @@ export function renderRewardsPage(t: Translate, locale: SupportedLocale): Reward
     voucherEmpty.hidden = vouchers.length > 0;
     for (const voucher of vouchers) {
       const item = makeElement('li', 'rewards-voucher');
+      const reward = DEMO_CATALOG.find((candidate) => candidate.id === voucher.catalogId);
+      if (reward) {
+        const image = makeElement('img', 'rewards-voucher-image');
+        image.src = reward.imageUrl;
+        image.alt = t(reward.imageAltKey);
+        image.width = 640;
+        image.height = 640;
+        image.decoding = 'async';
+        item.appendChild(image);
+      }
       appendChildren(item,
         makeElement('h3', 'rewards-voucher-title', voucher.title),
         makeElement('p', 'rewards-voucher-description', voucher.description),

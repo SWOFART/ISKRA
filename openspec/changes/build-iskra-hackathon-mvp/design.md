@@ -244,6 +244,8 @@ On 2026-10-29, after staging Rewards returned HTTP 500, the user directed the #6
 
 On 2026-10-29, the user approved local mock offer examples and generated photos before implementation: 10% off an imaginary café drink (5 RP), coffee with apple cake (15 RP), and 15% off an imaginary reusable cup (40 RP). English and German catalog labels and image alternatives are required. These offers and photos are illustrative only; they create no real merchant relationship, discount, product entitlement, voucher fulfillment, or release evidence.
 
+On 2026-10-29, the user directed that each newly received local mock voucher also display the photo for its matching catalog offer. This association stays in the browser and uses the catalog ID; older unrelated local receipts remain unchanged.
+
 ## Acceptance Traceability
 
 | Plan requirement | Spec / owner | Evidence to attach at gate |
