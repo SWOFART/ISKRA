@@ -80,6 +80,18 @@ function append(parent: HTMLElement, ...children: HTMLElement[]): void {
   for (const child of children) parent.appendChild(child);
 }
 
+function mergeImpact(current: Impact, incoming: Impact, append: boolean): Impact {
+  const newerAccount = incoming.balanceVersion >= current.balanceVersion;
+  const baseItems = append || !newerAccount ? current.items : incoming.items;
+  const extraItems = append || !newerAccount ? incoming.items : current.items;
+  const items = new Map(baseItems.map((item) => [item.report.id, item]));
+  for (const item of extraItems) {
+    const existing = items.get(item.report.id);
+    if (!existing || item.report.version > existing.report.version) items.set(item.report.id, item);
+  }
+  return { ...(newerAccount ? incoming : current), items: [...items.values()], nextCursor: incoming.nextCursor };
+}
+
 function metric(label: string, value: number | string, locale: SupportedLocale, suffix = ''): HTMLElement {
   const item = makeElement('div', 'impact-metric');
   item.appendChild(makeElement('span', 'impact-metric-label', label));
@@ -367,13 +379,7 @@ export function renderImpactPage(
         signal: controller.signal,
       });
       if (!active || currentGeneration !== generation) return;
-      if (cursor && currentData) {
-        const byReportId = new Map(currentData.items.map((item) => [item.report.id, item]));
-        for (const item of result.data.items) byReportId.set(item.report.id, item);
-        currentData = { ...result.data, items: [...byReportId.values()] };
-      } else {
-        currentData = result.data;
-      }
+      currentData = currentData ? mergeImpact(currentData, result.data, cursor !== null) : result.data;
       nextCursor = result.data.nextCursor;
       fixtureBanner.hidden = result.provenance.mode !== 'fixture';
       totals.hidden = false;
