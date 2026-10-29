@@ -128,6 +128,11 @@ class CloudConfigurationTests(unittest.TestCase):
                 "serviceAccountEmail": "test-account", "privateKey": "test-only-key", "keyId": "test-only-id"}),
         }
         self.assertEqual(validate_config(json.dumps(values), self.template, "staging", "application"), values)
+        prefixed = values | {
+            "GCS_PHOTOS_BUCKET": "iskra-512914-staging-photos",
+            "VERTEX_AUTH_JSON": json.dumps(json.loads(values["VERTEX_AUTH_JSON"]) | {"projectId": "iskra-512914"}),
+        }
+        self.assertEqual(validate_config(json.dumps(prefixed), self.template, "staging", "application"), prefixed)
         for change in ({"GCS_PHOTOS_BUCKET": "sample-project-production-photos"},
                        {"GCS_PHOTOS_BUCKET": "foreign-bucket"}, {"MEDIA_SIGNING_SECRET": "short"},
                        {"VERTEX_AUTH_JSON": ""}, {"HYPERDRIVE_ID": ""}):
