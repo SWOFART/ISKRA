@@ -1,41 +1,52 @@
 import {
   DemoRewardVoucherListSchema,
-  type DemoRewardCatalogItem,
   type DemoRewardVoucher,
 } from '../shared/contracts';
 import { formatNumber, type MessageKey, type MessageValues } from './i18n';
 import type { SupportedLocale } from './designTokens';
+import cafeDrinkImage from './assets/rewards/cafe-drink.webp';
+import cafePastryImage from './assets/rewards/cafe-pastry.webp';
+import reusableCupImage from './assets/rewards/reusable-cup.webp';
 
 type Translate = (key: MessageKey, values?: MessageValues) => string;
+type OfferMessageKey = Extract<MessageKey, `rewards.offer.${string}`>;
 
 const LOCAL_REWARDS_STORAGE_KEY = 'iskra:rewards:demo:v1';
 const STARTING_DEMO_BALANCE_RP = 45;
-const DEMO_TERMS = 'Demo only. No real-world value, partner, QR code, expiry, payout, or fulfillment.';
 
-const DEMO_CATALOG: readonly DemoRewardCatalogItem[] = [
+interface LocalDemoReward {
+  id: string;
+  titleKey: OfferMessageKey;
+  descriptionKey: OfferMessageKey;
+  imageUrl: string;
+  imageAltKey: OfferMessageKey;
+  costRp: number;
+}
+
+const DEMO_CATALOG: readonly LocalDemoReward[] = [
   {
-    id: '11111111-1111-4111-8111-000000000005',
-    title: 'Demo reward · 5 RP',
-    description: 'Illustrative demo voucher; no goods or services are provided.',
+    id: '22222222-2222-4222-8222-000000000005',
+    titleKey: 'rewards.offer.cafeDrink.title',
+    descriptionKey: 'rewards.offer.cafeDrink.description',
+    imageUrl: cafeDrinkImage,
+    imageAltKey: 'rewards.offer.cafeDrink.imageAlt',
     costRp: 5,
-    isDemo: true,
-    demoTerms: DEMO_TERMS,
   },
   {
-    id: '11111111-1111-4111-8111-000000000015',
-    title: 'Demo reward · 15 RP',
-    description: 'Illustrative demo voucher; no goods or services are provided.',
+    id: '22222222-2222-4222-8222-000000000015',
+    titleKey: 'rewards.offer.cafeCombo.title',
+    descriptionKey: 'rewards.offer.cafeCombo.description',
+    imageUrl: cafePastryImage,
+    imageAltKey: 'rewards.offer.cafeCombo.imageAlt',
     costRp: 15,
-    isDemo: true,
-    demoTerms: DEMO_TERMS,
   },
   {
-    id: '11111111-1111-4111-8111-000000000040',
-    title: 'Demo reward · 40 RP',
-    description: 'Illustrative demo voucher; no goods or services are provided.',
+    id: '22222222-2222-4222-8222-000000000040',
+    titleKey: 'rewards.offer.reusableCup.title',
+    descriptionKey: 'rewards.offer.reusableCup.description',
+    imageUrl: reusableCupImage,
+    imageAltKey: 'rewards.offer.reusableCup.imageAlt',
     costRp: 40,
-    isDemo: true,
-    demoTerms: DEMO_TERMS,
   },
 ];
 
@@ -119,7 +130,7 @@ export function renderRewardsPage(t: Translate, locale: SupportedLocale): Reward
   const localState = readLocalRewards();
   let balance = localState.balance;
   let vouchers = localState.vouchers;
-  let selectedReward: DemoRewardCatalogItem | undefined;
+  let selectedReward: LocalDemoReward | undefined;
 
   const balanceSection = makeElement('section', 'rewards-balance-section');
   balanceSection.appendChild(makeElement('h2', undefined, t('rewards.balance')));
@@ -173,6 +184,12 @@ export function renderRewardsPage(t: Translate, locale: SupportedLocale): Reward
     catalogEmpty.hidden = DEMO_CATALOG.length > 0;
     for (const reward of DEMO_CATALOG) {
       const card = makeElement('article', 'rewards-card');
+      const image = makeElement('img', 'rewards-card-image');
+      image.src = reward.imageUrl;
+      image.alt = t(reward.imageAltKey);
+      image.width = 640;
+      image.height = 640;
+      image.decoding = 'async';
       const remaining = balance >= reward.costRp ? formatRp(locale, balance - reward.costRp) : '—';
       const progress = document.createElement('progress');
       progress.className = 'rewards-progress';
@@ -185,8 +202,9 @@ export function renderRewardsPage(t: Translate, locale: SupportedLocale): Reward
       redeemButton.disabled = balance < reward.costRp;
       redeemButton.addEventListener('click', () => openConfirmation(reward));
       appendChildren(card,
-        makeElement('h3', 'rewards-card-title', reward.title),
-        makeElement('p', 'rewards-card-description', reward.description),
+        image,
+        makeElement('h3', 'rewards-card-title', t(reward.titleKey)),
+        makeElement('p', 'rewards-card-description', t(reward.descriptionKey)),
         makeElement('span', 'rewards-demo-label', t('rewards.demoLabel')),
         makeElement('p', 'rewards-current', `${t('rewards.current')}: ${formatRp(locale, balance)}`),
         makeElement('p', 'rewards-cost', `${t('rewards.cost')}: ${formatRp(locale, reward.costRp)}`),
@@ -203,6 +221,16 @@ export function renderRewardsPage(t: Translate, locale: SupportedLocale): Reward
     voucherEmpty.hidden = vouchers.length > 0;
     for (const voucher of vouchers) {
       const item = makeElement('li', 'rewards-voucher');
+      const reward = DEMO_CATALOG.find((candidate) => candidate.id === voucher.catalogId);
+      if (reward) {
+        const image = makeElement('img', 'rewards-voucher-image');
+        image.src = reward.imageUrl;
+        image.alt = t(reward.imageAltKey);
+        image.width = 640;
+        image.height = 640;
+        image.decoding = 'async';
+        item.appendChild(image);
+      }
       appendChildren(item,
         makeElement('h3', 'rewards-voucher-title', voucher.title),
         makeElement('p', 'rewards-voucher-description', voucher.description),
@@ -217,7 +245,7 @@ export function renderRewardsPage(t: Translate, locale: SupportedLocale): Reward
     }
   }
 
-  function openConfirmation(reward: DemoRewardCatalogItem): void {
+  function openConfirmation(reward: LocalDemoReward): void {
     selectedReward = reward;
     renderConfirmation();
     if (!confirmation.open) confirmation.showModal();
@@ -227,12 +255,12 @@ export function renderRewardsPage(t: Translate, locale: SupportedLocale): Reward
   function renderConfirmation(): void {
     const reward = selectedReward;
     if (!reward) return;
-    confirmationTitle.textContent = reward.title;
+    confirmationTitle.textContent = t(reward.titleKey);
     confirmationCurrent.textContent = `${t('rewards.current')}: ${formatRp(locale, balance)}`;
     confirmationCost.textContent = `${t('rewards.cost')}: ${formatRp(locale, reward.costRp)}`;
     const remaining = balance >= reward.costRp ? formatRp(locale, balance - reward.costRp) : '—';
     confirmationRemaining.textContent = `${t('rewards.remaining')}: ${remaining}`;
-    confirmationTerms.textContent = reward.demoTerms;
+    confirmationTerms.textContent = t('rewards.demoTerms');
     confirmButton.disabled = balance < reward.costRp;
   }
 
@@ -245,14 +273,14 @@ export function renderRewardsPage(t: Translate, locale: SupportedLocale): Reward
     const voucher: DemoRewardVoucher = {
       id: voucherId,
       catalogId: reward.id,
-      title: reward.title,
-      description: reward.description,
+      title: t(reward.titleKey),
+      description: t(reward.descriptionKey),
       costRpSnapshot: reward.costRp,
       displayCode: `DEMO-${voucherId.toUpperCase()}`,
       status: 'RECEIVED',
       createdAt: new Date().toISOString(),
       isDemo: true,
-      demoTerms: reward.demoTerms,
+      demoTerms: t('rewards.demoTerms'),
     };
 
     balance -= reward.costRp;
