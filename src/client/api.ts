@@ -127,6 +127,7 @@ function defaultAuth(method: ApiMethod, path: string): ApiAuth {
   if (method === 'GET' && pathname === '/health') return 'none';
   if (method === 'GET' && (/^\/reports\/[0-9a-f-]{36}\/mission$/i.test(pathname)
     || /^\/missions\/[0-9a-f-]{36}$/i.test(pathname))) return 'none';
+  if (method === 'GET' && pathname === '/rewards/catalog') return 'none';
   if (method === 'GET' && (pathname === '/reports' || /^\/reports\/[0-9a-f-]{36}$/i.test(pathname))) {
     return 'optional';
   }
@@ -145,6 +146,7 @@ function requiresIdempotencyKey(method: ApiMethod, path: string): boolean {
     || pathname === '/ai/analyze-report'
     || pathname === '/ai/analyze-cleanup'
     || /^\/reports\/[0-9a-f-]{36}\/(?:votes|cleanups)$/i.test(pathname)
+    || /^\/rewards\/[0-9a-f-]{36}\/redeem$/i.test(pathname)
   );
 }
 

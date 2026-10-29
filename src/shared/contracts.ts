@@ -1,6 +1,6 @@
 import { array, boolean, enumeration, literal, nullable, number, object, string, union, type Infer } from './schema';
 
-export const CONTRACT_REVISION = 'v1-candidate.4' as const;
+export const CONTRACT_REVISION = 'v1-candidate.6' as const;
 export const POLICY = Object.freeze({
   voteRadiusM: 150, cleanupRadiusM: 150, maxAccuracyM: 50, maxLocationAgeSeconds: 60,
   maxPinDisplacementM: 3, reporterTotalRp: 20, reporterInitialRp: 5,
@@ -302,6 +302,44 @@ export const RedDraftUpdateRequestSchema = object({
 export const RedSentDeclarationRequestSchema = object({ sent: literal(true) });
 export const RedSentDeclarationSchema = object({ reportId: UuidSchema, sentAt: TimestampSchema });
 
+export const DemoRewardCatalogItemSchema = object({
+  id: UuidSchema,
+  title: string(1, 120).refine((value) => value.trim().length > 0, 'Empty reward title'),
+  description: string(1, 500).refine((value) => value.trim().length > 0, 'Empty reward description'),
+  costRp: number(1, 2_147_483_647, true),
+  isDemo: literal(true),
+  demoTerms: string(1, 500).refine((value) => value.trim().length > 0, 'Missing demo terms'),
+});
+export const DemoRewardCatalogSchema = object({
+  items: array(DemoRewardCatalogItemSchema, 0, Number.MAX_SAFE_INTEGER),
+});
+export const DemoRewardVoucherSchema = object({
+  id: UuidSchema,
+  catalogId: UuidSchema,
+  title: string(1, 120).refine((value) => value.trim().length > 0, 'Empty reward title'),
+  description: string(1, 500).refine((value) => value.trim().length > 0, 'Empty reward description'),
+  costRpSnapshot: number(1, 2_147_483_647, true),
+  displayCode: string(41, 41,
+    /^DEMO-[0-9A-F]{8}-[0-9A-F]{4}-[1-8][0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/),
+  status: literal('RECEIVED'),
+  createdAt: TimestampSchema,
+  isDemo: literal(true),
+  demoTerms: string(1, 500).refine((value) => value.trim().length > 0, 'Missing demo terms'),
+});
+export const DemoRewardVoucherEnvelopeSchema = object({ voucher: DemoRewardVoucherSchema });
+export const DemoRewardRedemptionRequestSchema = object({ confirmedCostRp: number(1, 2_147_483_647, true) });
+export const DemoRewardRedemptionReceiptSchema = object({
+  voucher: DemoRewardVoucherSchema,
+  balance: BalanceSchema,
+  balanceVersion: VersionSchema,
+  rpDebited: number(1, 2_147_483_647, true),
+}).refine((value) => value.rpDebited === value.voucher.costRpSnapshot,
+  'The receipt debit must match the voucher cost snapshot');
+export const DemoRewardVoucherListSchema = object({
+  items: array(DemoRewardVoucherSchema, 0, 100),
+  nextCursor: nullable(string(1, 128)),
+});
+
 export type ReportDetail = Infer<typeof ReportDetailSchema>;
 export type ViewerReportDetail = Infer<typeof ViewerReportDetailSchema>;
 export type ReportAnalysis = Infer<typeof ReportAnalysisSchema>;
@@ -309,3 +347,5 @@ export type CleanupAnalysis = Infer<typeof CleanupAnalysisSchema>;
 export type Impact = Infer<typeof ImpactSchema>;
 export type RedDraft = Infer<typeof RedDraftSchema>;
 export type RedDraftLocale = Infer<typeof LocaleSchema>;
+export type DemoRewardCatalogItem = Infer<typeof DemoRewardCatalogItemSchema>;
+export type DemoRewardVoucher = Infer<typeof DemoRewardVoucherSchema>;

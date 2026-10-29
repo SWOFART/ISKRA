@@ -60,7 +60,9 @@ test('shows role-specific Impact, opens a report map sheet and restores history 
   const impact = {
     ...fixtures.impact,
     items: reports.map((report, index) => ({
-      report,
+      report: index < 3
+        ? { ...report, status: 'RESOLVED' as const, resolutionYesCount: 3 }
+        : report,
       roles: ['REPORTER', 'CLEANER', 'VERIFIER'],
       lastUpdatedAt: new Date(Date.UTC(2026, 9, 16 + index)).toISOString(),
     })),
@@ -95,20 +97,95 @@ test('shows role-specific Impact, opens a report map sheet and restores history 
   await expect(page.getByRole('heading', { name: 'Your impact' })).toBeVisible();
   await expect(page.getByText('Impact Score')).toBeVisible();
   await expect(page.getByText('Not configured')).toBeVisible();
-  await expect(page.locator('.impact-history-link')).toHaveCount(12);
+  await expect(page.locator('.impact-history-link')).toHaveCount(9);
+  await expect(page.locator('.impact-history-description').first())
+    .toHaveText('Fixture report 12: litter remains near the path.');
+  await expect(page.locator('.impact-history-roles .impact-role-pill')).toHaveCount(27);
+  await expect(page.getByText('Earned in this role')).toHaveCount(3);
   await expect(page.locator('.impact-demo-label').first()).toHaveText('Demo activity');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
   const impactPage = page.locator('.impact-page');
-  await impactPage.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  const bottomNav = page.locator('.bottom-nav');
+  await expect(bottomNav).toBeVisible();
+  await expect(bottomNav).toBeInViewport();
+  const impactScroll = await impactPage.evaluate((element) => ({
+    overflowY: getComputedStyle(element).overflowY,
+    touchAction: getComputedStyle(element).touchAction,
+    canScroll: element.scrollHeight > element.clientHeight,
+  }));
+  expect(impactScroll.overflowY).toBe('auto');
+  expect(impactScroll.touchAction).toBe('pan-y');
+  expect(impactScroll.canScroll).toBe(true);
+
+  const completedTab = page.getByRole('tab', { name: 'Completed' });
+  await completedTab.click();
+  await expect(completedTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.impact-history-link')).toHaveCount(3);
+  await expect(page.locator('.impact-history-description').first())
+    .toHaveText('Fixture report 3: litter remains near the path.');
+  await expect(page.getByText('Earned in this role').first()).toBeVisible();
+  const inProgressTab = page.getByRole('tab', { name: 'In progress' });
+  await inProgressTab.click();
+  await expect(page.locator('.impact-history-link')).toHaveCount(9);
+  await completedTab.click();
+  await expect(page.locator('.impact-history-link')).toHaveCount(3);
+
+  const touch = await page.context().newCDPSession(page);
+  await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const touchPoint = await impactPage.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { id: 0, x: bounds.left + bounds.width / 2, y: bounds.bottom - 50 };
+  });
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touchPoint] });
+  await touch.send('Input.dispatchTouchEvent', {
+    type: 'touchMove', touchPoints: [{ ...touchPoint, y: touchPoint.y - 220 }],
+  });
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect.poll(() => impactPage.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(bottomNav).toBeInViewport();
+  await touch.detach();
+
+  const targetHistoryLink = page.locator('.impact-history-link').first();
+  await targetHistoryLink.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await targetHistoryLink.focus();
   const previousScrollTop = await impactPage.evaluate((element) => element.scrollTop);
-  await page.locator('.impact-history-link').last().click();
+  await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/\/map$/);
   await expect(page.locator('.report-sheet')).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(/\/impact$/);
   await expect(page.getByRole('heading', { name: 'Your impact' })).toBeVisible();
-  await expect.poll(() => impactPage.evaluate((element) => element.scrollTop)).toBe(previousScrollTop);
+  await expect(page.getByRole('tab', { name: 'Completed' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.impact-history-link')).toHaveCount(3);
+  await expect.poll(() => impactPage.evaluate(
+    (element, expectedScrollTop) => Math.abs(element.scrollTop - expectedScrollTop), previousScrollTop,
+  ))
+    .toBeLessThanOrEqual(24);
+});
+
+test('localizes the Impact history tabs and their empty states', async ({ page }) => {
+  await stubAuthenticatedClient(page);
+  const impact = { ...fixtures.impact, items: [], nextCursor: null };
+  await page.route('**/api/me/impact**', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(impact),
+  }));
+
+  await page.goto('/impact');
+  await page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByLabel('Email', { exact: true }).fill(email);
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'In progress' })).toBeVisible();
+  await expect(page.getByText('No reports are in progress.')).toBeVisible();
+  const inProgressTab = page.getByRole('tab', { name: 'In progress' });
+  await inProgressTab.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: 'Completed' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('No reports have been completed yet.')).toBeVisible();
+  await page.getByRole('button', { name: 'Deutsch' }).click();
+  await expect(page.getByRole('tab', { name: 'Abgeschlossen' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('Es wurden noch keine Meldungen abgeschlossen.')).toBeVisible();
 });
 
 test('shows quiet localized resolution notifications once, marks them read and returns to current Impact', async ({ page }) => {

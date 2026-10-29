@@ -7,7 +7,7 @@ import {
 import type { FirebaseSession } from './auth';
 import { renderAuthPanel } from './auth-panel';
 import {
-  renderImpactPage, type ImpactNotification, type ImpactPageView, type NotificationLoadState,
+  renderImpactPage, type ImpactHistoryTab, type ImpactNotification, type ImpactPageView, type NotificationLoadState,
 } from './ImpactPage';
 import {
   errorMessageKey,
@@ -19,6 +19,7 @@ import {
   type MessageValues,
 } from './i18n';
 import { renderMapPage, type MapPageState, type MapPageView } from './MapPage';
+import { renderRewardsPage, type RewardsPageView } from './RewardsPage';
 
 type ClientApi = ReturnType<typeof createClientApi>;
 type Translate = (key: MessageKey, values?: MessageValues) => string;
@@ -174,7 +175,9 @@ export function App(
   let tabs = new Map<TabId, HTMLButtonElement>();
   let currentMapPage: MapPageView | undefined;
   let currentImpactPage: ImpactPageView | undefined;
+  let currentRewardsPage: RewardsPageView | undefined;
   let impactScrollTop = 0;
+  let impactHistoryTab: ImpactHistoryTab = 'in-progress';
   let mapPageState: MapPageState | undefined;
   let notificationItems: ImpactNotification[] = [];
   let notificationLoadState: NotificationLoadState = 'loading';
@@ -520,6 +523,8 @@ export function App(
       currentImpactPage.dispose();
       currentImpactPage = undefined;
     }
+    currentRewardsPage?.dispose();
+    currentRewardsPage = undefined;
     currentMapPage?.dispose();
     currentMapPage = undefined;
     authPanel?.dispose();
@@ -590,6 +595,8 @@ export function App(
           },
           onMarkNotificationRead: markNotificationRead,
           onRefreshNotifications: () => syncNotificationPolling(true),
+          historyTab: impactHistoryTab,
+          onHistoryTabChange: (tab) => { impactHistoryTab = tab; },
         });
         panel.appendChild(currentImpactPage.element);
       } else {
@@ -604,15 +611,20 @@ export function App(
         );
       }
     } else {
-      appendElements(panel,
-        renderDeferredPanel(
-          t('deferred.rewards.heading'),
-          t(session?.uid && session.uid === accountUid ? 'auth.rewardsPending' : 'deferred.rewards.message'),
-          session?.uid && session.uid === accountUid ? undefined : t('deferred.signIn'),
-          t('deferred.signInPending'),
-          session ? () => openSignIn('rewards') : undefined,
-        ),
-      );
+      if (session?.uid && session.uid === accountUid) {
+        currentRewardsPage = renderRewardsPage(api, t, locale);
+        panel.appendChild(currentRewardsPage.element);
+      } else {
+        appendElements(panel,
+          renderDeferredPanel(
+            t('deferred.rewards.heading'),
+            t('deferred.rewards.message'),
+            t('deferred.signIn'),
+            t('deferred.signInPending'),
+            session ? () => openSignIn('rewards') : undefined,
+          ),
+        );
+      }
     }
 
     main.replaceChildren(panel);

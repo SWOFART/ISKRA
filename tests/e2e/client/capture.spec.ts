@@ -446,6 +446,37 @@ test('captures at most five camera photos, supports retake and explicit discard 
   expect(state.revoked).toBeGreaterThanOrEqual(5);
 });
 
+test('camera capture remains operable through emulated mobile orientation changes', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await enableCameraHarness(page);
+  await signIn(page);
+  await page.locator('.report-button').click();
+
+  const dialog = page.getByRole('dialog', { name: 'Capture report photos' });
+  const shutter = dialog.getByRole('button', { name: 'Take photo', exact: true });
+  const continueButton = dialog.getByRole('button', { name: 'Continue with photos' });
+  await expect(dialog.locator('video')).toBeVisible();
+  await shutter.click();
+  await expect(dialog.locator('.photo-capture-item')).toHaveCount(1);
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('video')).toBeVisible();
+  await shutter.scrollIntoViewIfNeeded();
+  await expect(shutter).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await shutter.click();
+  await expect(dialog.locator('.photo-capture-item')).toHaveCount(2);
+  await continueButton.scrollIntoViewIfNeeded();
+  await expect(continueButton).toBeInViewport();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(dialog).toBeVisible();
+  await continueButton.click();
+  await expect(page.getByRole('dialog', { name: 'Photos ready for the next step' })).toBeVisible();
+  expect((await captureState(page)).locationRequests).toBe(0);
+});
+
 test('explains denied and unsupported camera access and permits retry without a file picker', async ({ page }) => {
   await enableCameraHarness(page);
   await signIn(page);
