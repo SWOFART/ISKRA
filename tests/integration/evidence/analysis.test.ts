@@ -2,9 +2,9 @@ import { vertexAuthJson, withVertexAuth } from '../../fixtures/ai/vertex';
 import { readFile } from 'node:fs/promises';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ReportAnalysisSchema } from '../../../src/shared/contracts';
+import { CleanupAnalysisSchema, ReportAnalysisSchema } from '../../../src/shared/contracts';
 import { PostgresTransactionDatabase, type TransactionDatabase } from '../../../src/worker/db/client';
-import { beginCleanupAnalysis, beginReportAnalysis, finishReportAnalysis, readReportAnalysis, removeExpiredPhotos } from '../../../src/worker/db/evidence-store';
+import { beginReportAnalysis, finishReportAnalysis, readReportAnalysis, removeExpiredPhotos } from '../../../src/worker/db/evidence-store';
 import { PostgresCleanupSubmissionService } from '../../../src/worker/services/cleanup';
 import { createApp } from '../../../src/worker/index';
 import { PostgresReportPublicationService } from '../../../src/worker/services/publication';
@@ -17,6 +17,8 @@ const hash = Buffer.from(await crypto.subtle.digest('SHA-256', jpeg)).toString('
 const assessment = { decision: 'ACCEPT', route: 'GREEN', description: 'Litter beside a path.', hazardLevel: 'NONE',
   safetyMessage: '', reason: 'Small visible litter.', confidence: 0.8 } as const;
 const model = 'test-only-model';
+const cleanupAssessment = { decision: 'ACCEPT', sameScene: 'LIKELY', appearsClean: true,
+  hazardRemaining: false, reason: 'The litter is gone.', confidence: 0.9 } as const;
 
 async function prepare(pool: Pool, count = 1) {
   await pool.query(migration);
@@ -42,10 +44,47 @@ function modelResponse(result: unknown = assessment) {
   return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(result) }] } }] });
 }
 
-function appFor(database: TransactionDatabase, fetcher: typeof fetch = vi.fn(async () => modelResponse())) {
+async function prepareCleanup(pool: Pool, count = 1) {
+  const { database, input } = await prepare(pool, count);
+  await pool.query("UPDATE report_photos SET purpose = 'CLEANUP'");
+  const reportAnalysis = await pool.query<{ id: string }>(
+    `INSERT INTO ai_analyses (owner_user_id, kind, status, input_hash, result, expires_at)
+     VALUES ('resident', 'REPORT', 'READY', 'report-binding', $1::jsonb, now() + interval '15 minutes') RETURNING id`,
+    [JSON.stringify(assessment)],
+  );
+  const report = await pool.query<{ id: string }>(
+    `INSERT INTO reports (author_user_id, route, status, description, lat, lng, measured_lat, measured_lng,
+       accuracy_m, captured_location_at, analysis_id, existence_yes_count, existence_verified_at, last_existence_confirmed_at)
+     VALUES ('resident', 'GREEN', 'VERIFIED', 'Litter beside a path.', 49.14, 9.22, 49.14, 9.22,
+       10, now(), $1, 3, now(), now()) RETURNING id`, [reportAnalysis.rows[0].id],
+  );
+  const beforeBytes = new Uint8Array(await readFile(new URL('../../fixtures/photos/restart.jpg', import.meta.url)));
+  const beforeHash = Buffer.from(await crypto.subtle.digest('SHA-256', beforeBytes)).toString('hex');
+  const objects = new Map(input.photoIds.map((id) => ['photos/' + id, jpeg]));
+  for (let ordinal = 0; ordinal < count; ordinal++) {
+    const id = crypto.randomUUID();
+    objects.set('photos/' + id, beforeBytes);
+    await pool.query(
+      `INSERT INTO report_photos (id, owner_user_id, report_id, purpose, state, object_key, ordinal, mime_type,
+         byte_size, sha256, upload_expires_at)
+       VALUES ($1, 'resident', $2, 'REPORT', 'ATTACHED', $3, $4, 'image/jpeg', $5, $6, now() + interval '5 minutes')`,
+      [id, report.rows[0].id, 'photos/' + id, ordinal, beforeBytes.length, beforeHash],
+    );
+  }
+  return { database, objects, beforeBytes, input: {
+    reportId: report.rows[0].id, photoIds: input.photoIds, outputLocale: 'de' as const, location: input.measuredLocation,
+  } };
+}
+
+function appFor(database: TransactionDatabase, fetcher: typeof fetch = vi.fn(async () => modelResponse()),
+  objects?: Map<string, Uint8Array<ArrayBuffer>>) {
   vi.stubGlobal('fetch', withVertexAuth(fetcher));
   const app = createApp({ database, verify: async (token) => ({ uid: token }) });
-  const get = vi.fn(async () => ({ size: jpeg.length, arrayBuffer: async () => jpeg.slice().buffer }));
+  const get = vi.fn(async (key: string) => {
+    const bytes = objects ? objects.get(key) : jpeg;
+    if (!bytes) throw new Error('Missing test object');
+    return { size: bytes.length, arrayBuffer: async () => bytes.slice().buffer };
+  });
   const env = { FIREBASE_PROJECT_ID: 'iskra-test', VERTEX_AUTH_JSON: vertexAuthJson, GEMINI_MODEL_ID: model,
     PHOTOS: { get } as unknown as R2Bucket };
   const start = (input: unknown, key = crypto.randomUUID(), uid = 'resident') => app.request('https://iskra.test/api/ai/analyze-report', {
@@ -55,7 +94,11 @@ function appFor(database: TransactionDatabase, fetcher: typeof fetch = vi.fn(asy
   const poll = (id: string, uid = 'resident') => app.request('https://iskra.test/api/ai/analyses/' + id, {
     headers: { Authorization: 'Bearer ' + uid },
   }, env);
-  return { app, env, get, start, poll, fetcher };
+  const startCleanup = (input: unknown, key = crypto.randomUUID(), uid = 'resident') => app.request('https://iskra.test/api/ai/analyze-cleanup', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + uid, 'Content-Type': 'application/json', 'Idempotency-Key': key },
+    body: JSON.stringify(input),
+  }, env);
+  return { app, env, get, start, startCleanup, poll, fetcher };
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -331,62 +374,136 @@ describe('report-analysis HTTP orchestration (real SQL; explicit R2/provider dou
     }));
 });
 
-describe('cleanup analysis binding consumed by submission', () => {
-  it('stores a CLEANUP analysis on the verified report and lets submission attach the after photo', () =>
+describe('cleanup-analysis HTTP safety (real SQL; explicit R2/provider/auth doubles)', () => {
+  async function expectNoCleanupEffects(pool: Pool, input: { reportId: string; photoIds: string[] }) {
+    expect((await pool.query('SELECT status FROM reports WHERE id = $1', [input.reportId])).rows[0].status).toBe('VERIFIED');
+    expect((await pool.query('SELECT state, cleanup_id FROM report_photos WHERE id = ANY($1::uuid[])', [input.photoIds])).rows)
+      .toEqual(input.photoIds.map(() => ({ state: 'UPLOADED', cleanup_id: null })));
+    expect((await pool.query('SELECT count(*)::int AS n FROM cleanup_submissions')).rows[0].n).toBe(0);
+    expect((await pool.query('SELECT count(*)::int AS n FROM reward_ledger')).rows[0].n).toBe(0);
+  }
+
+  it('compares all five before/after photos outside SQL, replays once, and attaches only on explicit submission', () =>
     withTestDatabase(async (pool) => {
-      await pool.query(migration);
-      await pool.query("INSERT INTO users (id, nickname) VALUES ('resident', 'Resident')");
-      const reportAnalysis = await pool.query<{ id: string }>(
-        `INSERT INTO ai_analyses (owner_user_id, kind, status, input_hash, result, expires_at)
-         VALUES ('resident', 'REPORT', 'READY', 'report-binding', '{"decision":"ACCEPT"}'::jsonb, now() + interval '15 minutes')
-         RETURNING id`,
-      );
-      const report = await pool.query<{ id: string }>(
-        `INSERT INTO reports (author_user_id, route, status, description, lat, lng, measured_lat, measured_lng,
-           accuracy_m, captured_location_at, analysis_id, existence_yes_count, existence_verified_at, last_existence_confirmed_at)
-         VALUES ('resident', 'GREEN', 'VERIFIED', 'Litter beside a path.', 49.14, 9.22, 49.14, 9.22,
-           10, now(), $1, 3, now(), now()) RETURNING id`, [reportAnalysis.rows[0].id],
-      );
-      const before = crypto.randomUUID();
-      await pool.query(
-        `INSERT INTO report_photos (id, owner_user_id, report_id, purpose, state, object_key, ordinal, mime_type,
-           byte_size, sha256, upload_expires_at)
-         VALUES ($1, 'resident', $2, 'REPORT', 'ATTACHED', $3, 0, 'image/jpeg', 128, $4, now() + interval '5 minutes')`,
-        [before, report.rows[0].id, 'photos/' + before, 'a'.repeat(64)],
-      );
-      const after = crypto.randomUUID();
-      await pool.query(
-        `INSERT INTO report_photos (id, owner_user_id, purpose, state, object_key, ordinal, mime_type,
-           byte_size, sha256, upload_expires_at)
-         VALUES ($1, 'resident', 'CLEANUP', 'UPLOADED', $2, 0, 'image/jpeg', 128, $3, now() + interval '5 minutes')`,
-        [after, 'photos/' + after, 'b'.repeat(64)],
-      );
-      const database = new PostgresTransactionDatabase(pool);
-      const observedAt = new Date().toISOString();
-      const work = await beginCleanupAnalysis(database, 'resident', crypto.randomUUID(), {
-        reportId: report.rows[0].id, photoIds: [after], outputLocale: 'en',
-        location: { lat: 49.14, lng: 9.22, accuracyM: 10, observedAt },
-      }, model);
-      const cleanupAssessment = {
-        decision: 'ACCEPT' as const, sameScene: 'LIKELY' as const, appearsClean: true as const,
-        hazardRemaining: false as const, reason: 'The litter is gone.', confidence: 0.9,
-      };
-      expect(await finishReportAnalysis(database, 'resident', work.analysisId, cleanupAssessment, 'CLEANUP')).toBe(true);
-      const stored = await pool.query<{ kind: string; report_id: string }>(
-        'SELECT kind, report_id FROM ai_analyses WHERE id = $1', [work.analysisId],
-      );
-      expect(stored.rows[0]).toEqual({ kind: 'CLEANUP', report_id: report.rows[0].id });
-      const service = new PostgresCleanupSubmissionService(database, {
-        async resolveAttachedPhotos(photos) {
-          const expiresAt = new Date(Date.now() + 60_000).toISOString();
-          return photos.map((photo) => ({
-            id: photo.id, ordinal: photo.ordinal, mediaUrl: 'https://iskra.test/api/photos/' + photo.id, expiresAt,
-          }));
-        },
+      const { database, input, objects, beforeBytes } = await prepareCleanup(pool, 5);
+      let insideTransaction = 0;
+      const observedDatabase: TransactionDatabase = { withTransaction: (work) => database.withTransaction(async (client) => {
+        insideTransaction++; try { return await work(client); } finally { insideTransaction--; }
+      }) };
+      const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        expect(insideTransaction).toBe(0);
+        const body = JSON.parse(String(init?.body));
+        const images = body.contents[0].parts.filter((part: { inlineData?: unknown }) => part.inlineData)
+          .map((part: { inlineData: { data: string } }) => part.inlineData.data);
+        expect(images).toEqual([
+          ...Array(5).fill(Buffer.from(beforeBytes).toString('base64')),
+          ...Array(5).fill(Buffer.from(jpeg).toString('base64')),
+        ]);
+        expect(body.systemInstruction.parts[0].text).toContain('Deutsch');
+        return modelResponse(cleanupAssessment);
       });
-      const submitted = await service.submit('resident', crypto.randomUUID(), report.rows[0].id, { analysisId: work.analysisId });
+      const api = appFor(observedDatabase, fetcher, objects);
+      const key = crypto.randomUUID();
+      const response = await api.startCleanup(input, key);
+      expect(response.status).toBe(202);
+      const ready = CleanupAnalysisSchema.parse(await response.json());
+      expect(ready).toMatchObject({ status: 'READY', result: cleanupAssessment });
+      expect(await (await api.startCleanup(input, key)).json()).toEqual(ready);
+      expect(api.get).toHaveBeenCalledTimes(10);
+      expect(api.get.mock.calls.map(([key]) => key)).toEqual([
+        ...[...objects.keys()].slice(5), ...input.photoIds.map((id) => 'photos/' + id),
+      ]);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect((await api.poll(ready.analysisId, 'other')).status).toBe(404);
+      expect(await (await api.poll(ready.analysisId)).json()).toEqual(ready);
+      await expectNoCleanupEffects(pool, input);
+
+      const service = new PostgresCleanupSubmissionService(database,
+        createReportMediaResolver('https://iskra.test', 'test-only-signing-key-at-least-32-bytes'));
+      const submitted = await service.submit('resident', crypto.randomUUID(), input.reportId, { analysisId: ready.analysisId });
       expect(submitted.receipt.report.status).toBe('AWAITING_RESOLUTION');
-      expect((await pool.query("SELECT state, cleanup_id IS NOT NULL AS attached FROM report_photos WHERE id = $1", [after])).rows[0])
-        .toEqual({ state: 'ATTACHED', attached: true });
+      expect((await pool.query('SELECT state, cleanup_id FROM report_photos WHERE id = ANY($1::uuid[])', [input.photoIds])).rows)
+        .toEqual(input.photoIds.map(() => ({ state: 'ATTACHED', cleanup_id: submitted.receipt.cleanupId })));
+      expect((await pool.query('SELECT count(*)::int AS n FROM reward_ledger')).rows[0].n).toBe(0);
+      expect((await api.poll(ready.analysisId)).status).toBe(410);
+    }));
+
+  it.each(['provider quota', 'network failure', 'unsafe output'] as const)(
+    'keeps %s unpublishable, redacts details, and retries retained photos only with a fresh key', (failure) =>
+      withTestDatabase(async (pool) => {
+        const { database, input, objects } = await prepareCleanup(pool);
+        const fetcher = vi.fn(async () => {
+          if (failure === 'provider quota') return new Response('private-provider-detail', { status: 429 });
+          if (failure === 'network failure') throw new Error('private-provider-detail');
+          return modelResponse({ ...cleanupAssessment, hazardRemaining: true });
+        });
+        const api = appFor(database, fetcher, objects);
+        const key = crypto.randomUUID();
+        const response = await api.startCleanup(input, key);
+        expect(response.status).toBe(202);
+        const failed = CleanupAnalysisSchema.parse(await response.json());
+        expect(failed).toMatchObject({ status: 'FAILED', error: { code: 'AI_UNAVAILABLE', retryable: true } });
+        expect(JSON.stringify(failed)).not.toContain('private-provider-detail');
+        expect((await pool.query("SELECT status, result FROM ai_analyses WHERE kind = 'CLEANUP'")).rows)
+          .toEqual([{ status: 'FAILED', result: null }]);
+        const service = new PostgresCleanupSubmissionService(database,
+          createReportMediaResolver('https://iskra.test', 'test-only-signing-key-at-least-32-bytes'));
+        await expect(service.submit('resident', crypto.randomUUID(), input.reportId, { analysisId: failed.analysisId }))
+          .rejects.toMatchObject({ code: 'AI_UNAVAILABLE' });
+        await expectNoCleanupEffects(pool, input);
+        expect(await (await api.startCleanup(input, key)).json()).toMatchObject({ analysisId: failed.analysisId, status: 'FAILED' });
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect((await api.poll(failed.analysisId, 'other')).status).toBe(404);
+
+        fetcher.mockImplementation(async () => modelResponse(cleanupAssessment));
+        const recovered = CleanupAnalysisSchema.parse(await (await api.startCleanup(input)).json());
+        expect(recovered).toMatchObject({ status: 'READY', result: cleanupAssessment });
+        expect(recovered.analysisId).not.toBe(failed.analysisId);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(await (await api.poll(failed.analysisId)).json()).toMatchObject({ status: 'FAILED' });
+        await expectNoCleanupEffects(pool, input);
+      }));
+
+  it.each(['before read fails', 'after hash differs'] as const)(
+    'does not call Vertex or attach evidence when %s', (failure) => withTestDatabase(async (pool) => {
+      const { database, input, objects } = await prepareCleanup(pool);
+      const fetcher = vi.fn(async () => modelResponse(cleanupAssessment));
+      const api = appFor(database, fetcher, objects);
+      if (failure === 'before read fails') api.get.mockRejectedValueOnce(new Error('private-storage-detail'));
+      else {
+        const altered = jpeg.slice(); altered[0] = 0;
+        objects.set('photos/' + input.photoIds[0], altered);
+      }
+      const response = await api.startCleanup(input);
+      expect(response.status).toBe(202);
+      const failed = CleanupAnalysisSchema.parse(await response.json());
+      expect(failed).toMatchObject({ status: 'FAILED', error: { retryable: true } });
+      expect(JSON.stringify(failed)).not.toContain('private-storage-detail');
+      expect(fetcher).not.toHaveBeenCalled();
+      expect((await pool.query("SELECT status, result FROM ai_analyses WHERE kind = 'CLEANUP'")).rows)
+        .toEqual([{ status: 'FAILED', result: null }]);
+      await expectNoCleanupEffects(pool, input);
+    }));
+
+  it('rejects foreign after-photos and stale or distant GPS before storage, model calls or idempotency claims', () =>
+    withTestDatabase(async (pool) => {
+      const { database, input, objects } = await prepareCleanup(pool);
+      const api = appFor(database, vi.fn(async () => modelResponse(cleanupAssessment)), objects);
+      const foreign = await api.startCleanup(input, crypto.randomUUID(), 'other');
+      expect(foreign.status).toBe(403);
+      expect(await foreign.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+      for (const [location, status, code] of [
+        [{ ...input.location, observedAt: new Date(Date.now() - 120_000).toISOString() }, 422, 'LOCATION_STALE'],
+        [{ ...input.location, lat: 50 }, 403, 'TOO_FAR'],
+      ] as const) {
+        const response = await api.startCleanup({ ...input, location });
+        expect(response.status).toBe(status);
+        expect(await response.json()).toMatchObject({ error: { code } });
+      }
+      expect(api.get).not.toHaveBeenCalled();
+      expect(api.fetcher).not.toHaveBeenCalled();
+      expect((await pool.query("SELECT count(*)::int AS n FROM ai_analyses WHERE kind = 'CLEANUP'")).rows[0].n).toBe(0);
+      expect((await pool.query('SELECT count(*)::int AS n FROM idempotency_keys')).rows[0].n).toBe(0);
+      await expectNoCleanupEffects(pool, input);
     }));
 });
