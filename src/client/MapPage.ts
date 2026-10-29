@@ -502,7 +502,6 @@ export function renderMapPage(
     },
     onRetry: (reportId) => { void loadReportDetail(reportId); },
     onVote: castVote,
-    currentUserId,
     onLoadMission: async (reportId): Promise<Mission | null> => {
       try {
         const result = await api.request({
