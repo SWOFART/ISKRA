@@ -1,0 +1,632 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { App } from '../../../src/client/App';
+import { createClientApi, DEVELOPMENT_FIXTURE_LABEL, type FixtureResponse } from '../../../src/client/api';
+import type { FirebaseSession } from '../../../src/client/auth';
+import { clientDesign, type SupportedLocale } from '../../../src/client/designTokens';
+import { translate } from '../../../src/client/i18n';
+import { ImpactSchema, ReportSummarySchema } from '../../../src/shared/contracts';
+import p0Fixtures from '../../fixtures/contracts/p0.json';
+
+type TestListener = (event: Record<string, unknown>) => void;
+
+class TestElement {
+  readonly children: TestElement[] = [];
+  readonly attributes = new Map<string, string>();
+  readonly listeners = new Map<string, TestListener[]>();
+  className = '';
+  disabled = false;
+  id = '';
+  hidden = false;
+  href = '';
+  scrollTop = 0;
+  value = '';
+  tabIndex = 0;
+  type = '';
+  readonly dataset: Record<string, string> = {};
+  readonly classList = { toggle: () => undefined };
+  private ownText = '';
+
+  constructor(readonly tagName: string) {}
+
+  get textContent(): string {
+    return this.ownText + this.children.map((child) => child.textContent).join('');
+  }
+
+  set textContent(value: string) {
+    this.ownText = value;
+    this.children.splice(0);
+  }
+
+  appendChild(element: TestElement): TestElement {
+    this.children.push(element);
+    return element;
+  }
+
+  replaceChildren(...elements: TestElement[]): void {
+    this.children.splice(0, this.children.length, ...elements);
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+    if (name === 'tabindex') this.tabIndex = Number(value);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
+  }
+
+  addEventListener(name: string, listener: TestListener): void {
+    const listeners = this.listeners.get(name) ?? [];
+    listeners.push(listener);
+    this.listeners.set(name, listeners);
+  }
+
+  dispatch(name: string, event: Record<string, unknown> = {}): void {
+    if (name === 'click' && this.disabled) return;
+    for (const listener of this.listeners.get(name) ?? []) listener(event);
+  }
+
+  focus(): void {
+    focusedElement = this;
+  }
+
+  querySelector(selector: string): TestElement | null {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+
+  querySelectorAll(selector: string): TestElement[] {
+    const matches: TestElement[] = [];
+    if (this.matches(selector)) matches.push(this);
+    for (const child of this.children) matches.push(...child.querySelectorAll(selector));
+    return matches;
+  }
+
+  private matches(selector: string): boolean {
+    if (selector.startsWith('.')) return this.className.split(/\s+/).includes(selector.slice(1));
+    if (selector.startsWith('#')) return this.id === selector.slice(1);
+    if (selector.startsWith('[') && selector.endsWith(']')) {
+      const [name, value] = selector.slice(1, -1).split('=');
+      return value === undefined
+        ? this.attributes.has(name)
+        : this.getAttribute(name) === value.replaceAll('"', '');
+    }
+    return this.tagName === selector.toLowerCase();
+  }
+}
+
+let focusedElement: TestElement | null = null;
+
+function createHarness(
+  pathname = '/map',
+  api = createClientApi({
+    mode: 'fixture',
+    fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
+  }),
+  locale: SupportedLocale = 'en',
+  session?: FirebaseSession,
+) {
+  focusedElement = null;
+  const location = { pathname };
+  const windowListeners = new Map<string, ((event: unknown) => void)[]>();
+  const documentListeners = new Map<string, ((event: unknown) => void)[]>();
+  const timeoutCallbacks = new Map<number, () => void>();
+  let nextTimeoutId = 0;
+  const accessAttempts: string[] = [];
+  const storage = new Map<string, string>();
+  const fakeDocument = {
+    createElement: (tagName: string) => new TestElement(tagName),
+    documentElement: { lang: '' },
+    visibilityState: 'visible',
+    addEventListener: (name: string, listener: (event: unknown) => void) => {
+      const listeners = documentListeners.get(name) ?? [];
+      listeners.push(listener);
+      documentListeners.set(name, listeners);
+    },
+  };
+  const fakeWindow = {
+    location,
+    setTimeout: (callback: () => void) => {
+      const id = ++nextTimeoutId;
+      timeoutCallbacks.set(id, callback);
+      return id;
+    },
+    clearTimeout: (id: number) => timeoutCallbacks.delete(id),
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    },
+    history: {
+      pushState: (_state: unknown, _title: string, path: string) => {
+        location.pathname = path;
+      },
+    },
+    addEventListener: (name: string, listener: (event: unknown) => void) => {
+      const listeners = windowListeners.get(name) ?? [];
+      listeners.push(listener);
+      windowListeners.set(name, listeners);
+    },
+  };
+  const fakeNavigator = new Proxy({}, {
+    get: (target, property) => {
+      accessAttempts.push(String(property));
+      return Reflect.get(target, property);
+    },
+  });
+
+  vi.stubGlobal('document', fakeDocument);
+  vi.stubGlobal('window', fakeWindow);
+  vi.stubGlobal('navigator', fakeNavigator);
+
+  return {
+    root: App(api, locale, session) as unknown as TestElement,
+    location,
+    accessAttempts,
+    storage,
+    dispatchWindowEvent(name: string) {
+      for (const listener of windowListeners.get(name) ?? []) listener({});
+    },
+    dispatchDocumentEvent(name: string) {
+      for (const listener of documentListeners.get(name) ?? []) listener({});
+    },
+    fireNotificationTimer() {
+      const [id, callback] = timeoutCallbacks.entries().next().value ?? [];
+      if (id === undefined || callback === undefined) return;
+      timeoutCallbacks.delete(id);
+      callback();
+    },
+  };
+}
+
+function selectedTab(root: TestElement): TestElement | undefined {
+  return root.querySelectorAll('[role="tab"]').find(
+    (tab) => tab.getAttribute('aria-selected') === 'true',
+  );
+}
+
+const confirmedUnresolvedReport = ReportSummarySchema.parse({
+  id: '11111111-1111-4111-8111-111111111111',
+  route: 'GREEN',
+  status: 'AWAITING_RESOLUTION',
+  location: { lat: 49.14, lng: 9.22 },
+  coverPhotoId: '22222222-2222-4222-8222-222222222222',
+  description: 'Litter remains beside the path.',
+  existenceYesCount: 8,
+  resolutionYesCount: 2,
+  existenceVerifiedAt: '2026-10-27T11:00:00.000Z',
+  lastExistenceConfirmedAt: '2026-10-27T12:00:00.000Z',
+  version: 8,
+  updatedAt: '2026-10-27T12:00:00.000Z',
+  isDemo: false,
+});
+
+const impactResponse = ImpactSchema.parse({
+  reporter: { created: 1, inProgress: 1, resolved: 0, earnedRp: 20, pendingRp: 15 },
+  cleaner: { submitted: 1, pending: 1, verified: 0, earnedRp: 0, pendingRp: 40 },
+  verification: { acceptedVotes: 1, confirmedReports: 0, earnedRp: 5 },
+  totals: { earnedRp: 25, balanceRp: 20 },
+  impactScore: null,
+  impactScoreState: 'NOT_CONFIGURED',
+  balanceVersion: 2,
+  items: [{
+    report: confirmedUnresolvedReport,
+    roles: ['REPORTER', 'CLEANER', 'VERIFIER'],
+    lastUpdatedAt: '2026-10-27T12:00:00.000Z',
+  }],
+  nextCursor: null,
+});
+
+function authenticatedSession(): FirebaseSession {
+  return {
+    ready: Promise.resolve(),
+    uid: 'resident-1',
+    busy: false,
+    subscribe: () => () => undefined,
+    bootstrap: async () => undefined,
+    getIdToken: async () => 'fixture-token',
+    signInEmail: async () => undefined,
+    signInGoogle: async () => undefined,
+    createAccount: async () => undefined,
+    resetPassword: async () => undefined,
+    signOut: async () => undefined,
+  } as unknown as FirebaseSession;
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe('client shell', () => {
+  it('loads shared fixtures through the app and visibly labels sample data', async () => {
+    const { root } = createHarness('/map', createClientApi({ mode: 'fixture' }));
+
+    await vi.waitFor(() => expect(root.querySelector('.fixture-banner')?.hidden).toBe(false));
+
+    expect(root.querySelector('.fixture-banner')?.textContent).toBe(DEVELOPMENT_FIXTURE_LABEL);
+    expect(root.querySelector('.map-status')?.textContent).toContain('1 sample report loaded.');
+  });
+
+  it('offers a user-triggered retry after retryable fixture errors', async () => {
+    const responses: FixtureResponse[] = [
+      {
+        status: 429,
+        body: {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Wait before trying again.',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            retryable: true,
+          },
+        },
+      },
+      { status: 200, body: { items: [], nextCursor: null } },
+    ];
+    const fixtureResolver = vi.fn(() => responses.shift()!);
+    const { root } = createHarness('/map', createClientApi({ mode: 'fixture', fixtureResolver }));
+    const mapStatus = root.querySelector('.map-status');
+    const retryButton = root.querySelector('.retry-button');
+
+    await vi.waitFor(() => expect(retryButton?.hidden).toBe(false));
+    expect(mapStatus?.textContent).toContain('Wait before trying again.');
+    retryButton?.dispatch('click');
+    await vi.waitFor(() => expect(mapStatus?.textContent).toContain('No sample reports are available yet.'));
+
+    expect(fixtureResolver).toHaveBeenCalledTimes(2);
+    expect(retryButton?.hidden).toBe(true);
+  });
+
+  it('honors Retry-After before enabling a user-triggered retry after 429', async () => {
+    vi.useFakeTimers();
+    const responses = [
+      new Response(JSON.stringify({
+        error: {
+          code: 'RATE_LIMITED',
+          message: 'Rate limit reached.',
+          requestId: '11111111-1111-4111-8111-111111111111',
+          retryable: true,
+        },
+      }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '2' },
+      }),
+      new Response(JSON.stringify({ items: [], nextCursor: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ];
+    const fetcher = vi.fn(async () => responses.shift()!);
+    const { root } = createHarness('/map', createClientApi({ mode: 'live', fetcher }));
+    const mapStatus = root.querySelector('.map-status');
+    const retryButton = root.querySelector('.retry-button');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retryButton?.hidden).toBe(false);
+    expect(retryButton?.disabled).toBe(true);
+    expect(mapStatus?.textContent).toContain('Please wait before retrying.');
+
+    retryButton?.dispatch('click');
+    expect(fetcher).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(retryButton?.disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(retryButton?.disabled).toBe(false);
+
+    retryButton?.dispatch('click');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(mapStatus?.textContent).toContain('No reports are available yet.');
+  });
+
+  it('does not offer retry for non-retryable fixture errors', async () => {
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: () => ({
+        status: 400,
+        body: {
+          error: {
+            code: 'INVALID_INPUT',
+            message: 'Correct the request before continuing.',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            retryable: false,
+          },
+        },
+      }),
+    });
+    const { root } = createHarness('/map', api);
+    const mapStatus = root.querySelector('.map-status');
+    const retryButton = root.querySelector('.retry-button');
+
+    await vi.waitFor(() => expect(mapStatus?.textContent).toContain('Correct the request before continuing.'));
+
+    expect(retryButton?.hidden).toBe(true);
+  });
+
+  it('shows exactly three tabs and a Heilbronn map without accessing location or camera APIs', () => {
+    const { root, accessAttempts } = createHarness();
+
+    expect(root.querySelectorAll('[role="tab"]')
+      .map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual([
+      'Map', 'My Impact', 'Rewards',
+    ]);
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Map');
+
+    const mapCanvas = root.querySelector('.map-canvas');
+    expect(mapCanvas?.getAttribute('data-latitude')).toBe(String(clientDesign.map.center.latitude));
+    expect(mapCanvas?.getAttribute('data-longitude')).toBe(String(clientDesign.map.center.longitude));
+    expect(mapCanvas?.getAttribute('data-zoom')).toBe(String(clientDesign.map.zoom));
+    expect(accessAttempts).toEqual([]);
+  });
+
+  it('shows confirmed unresolved reports as active and keeps verification queries citywide', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: (request) => {
+        requests.push(request.path);
+        return { status: 200, body: { items: [confirmedUnresolvedReport], nextCursor: null } };
+      },
+    });
+    const { root } = createHarness('/map', api);
+
+    await vi.waitFor(() => expect(root.querySelector('.report-list-item')).not.toBeNull());
+
+    const reportRow = root.querySelector('.report-list-item');
+    expect(reportRow?.textContent).toContain('Cleanup awaiting verification');
+    expect(reportRow?.textContent).toContain('Existence: 3/3 threshold · 8 confirmations');
+    expect(new URL(requests[0], 'https://iskra.invalid').searchParams.get('resolved')).toBe('false');
+    expect(new URL(requests[0], 'https://iskra.invalid').searchParams.get('needsVerification')).toBe('false');
+
+    root.querySelectorAll('.map-filter-button')[0].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    const verificationQuery = new URL(requests[1], 'https://iskra.invalid').searchParams;
+    expect(verificationQuery.get('needsVerification')).toBe('true');
+    expect(verificationQuery.get('bbox')).toBeNull();
+
+    root.querySelectorAll('.map-filter-button')[1].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    const resolvedQuery = new URL(requests[2], 'https://iskra.invalid').searchParams;
+    expect(resolvedQuery.get('resolved')).toBe('true');
+  });
+
+  it('filters the three route layers with readable route labels', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: (request) => {
+        requests.push(request.path);
+        return { status: 200, body: { items: [], nextCursor: null } };
+      },
+    });
+    const { root } = createHarness('/map', api);
+
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(root.querySelectorAll('.route-filter').map((button) => button.textContent))
+      .toEqual(['Green', 'Yellow', 'Red']);
+
+    root.querySelectorAll('.route-filter')[2].dispatch('click');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expect(new URL(requests[1], 'https://iskra.invalid').searchParams.get('routes'))
+      .toBe('GREEN,YELLOW');
+  });
+
+  it('opens the protected /impact deep link with a sign-in option', () => {
+    const { root, location } = createHarness('/impact');
+    const panel = root.querySelector('.tab-panel');
+
+    expect(location.pathname).toBe('/impact');
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('My Impact');
+    expect(panel?.textContent).toContain('Sign in to see your reports and community contributions.');
+    expect(panel?.querySelector('button')?.textContent).toBe('Sign in');
+  });
+
+  it('renders the browser-local Rewards catalog for a guest without calling the API', () => {
+    const fixtureResolver = vi.fn(() => ({ status: 500, body: {} }));
+    const { root, storage } = createHarness('/rewards', createClientApi({ mode: 'fixture', fixtureResolver }));
+    const panel = root.querySelector('.tab-panel');
+
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Rewards');
+    expect(panel?.textContent).toContain('Browser-only demo');
+    expect(panel?.querySelector('.rewards-balance-value')?.textContent).toBe('45 RP');
+    expect(panel?.querySelectorAll('.rewards-card')).toHaveLength(3);
+    expect(Array.from(panel?.querySelectorAll('.rewards-card-title') ?? [], (item) => item.textContent)).toEqual([
+      '10% off a café drink',
+      'Coffee + apple cake',
+      '15% off a reusable cup',
+    ]);
+    expect(panel?.querySelectorAll('.rewards-card-image')).toHaveLength(3);
+    expect(panel?.querySelector('.deferred-card')).toBeNull();
+    expect(fixtureResolver).not.toHaveBeenCalled();
+    expect(storage.has('iskra:rewards:demo:v1')).toBe(false);
+  });
+
+  it('renders bilingual role-specific Impact and restores it after opening a report', async () => {
+    const requests: string[] = [];
+    const api = createClientApi({
+      mode: 'fixture',
+      fixtureResolver: ({ path }) => {
+        requests.push(path);
+        const pathname = new URL(path, 'https://iskra.invalid').pathname;
+        if (pathname === '/me/impact') return { status: 200, body: impactResponse };
+        if (pathname === '/reports') {
+          return { status: 200, body: { items: [confirmedUnresolvedReport], nextCursor: null } };
+        }
+        if (pathname === `/reports/${confirmedUnresolvedReport.id}`) {
+          return { status: 200, body: { ...p0Fixtures.publicReport, id: confirmedUnresolvedReport.id } };
+        }
+        return { status: 404, body: { error: {
+          code: 'NOT_FOUND', message: 'Not found.',
+          requestId: '11111111-1111-4111-8111-111111111111', retryable: false,
+        } } };
+      },
+    });
+    const { root, location, dispatchWindowEvent } = createHarness(
+      '/impact', api, 'de', authenticatedSession(),
+    );
+    root.querySelector('.deferred-card')?.querySelector('button')?.dispatch('click');
+
+    await vi.waitFor(() => expect(root.querySelector('.impact-history-link')).not.toBeNull());
+    expect(requests).toContain('/me/impact');
+    expect(root.querySelector('.impact-heading')?.textContent).toBe('Dein Einfluss');
+    expect(root.querySelector('.impact-score-note')?.textContent).toBe('Nicht konfiguriert');
+    expect(root.querySelector('.impact-metric-grid--totals')?.textContent).toContain('25 RP');
+    expect(root.querySelector('.impact-metric-grid--totals')?.textContent).toContain('20 RP');
+    expect(root.querySelector('.impact-role-section')?.textContent).toContain('15 RP');
+    expect(root.querySelector('.impact-history-roles')?.textContent).toContain('Meldende Person');
+    expect(root.querySelector('.impact-history-roles')?.textContent).toContain('Reinigende Person');
+    expect(root.querySelector('.impact-history-roles')?.textContent).toContain('Prüfende Person');
+    expect(root.querySelector('.impact-role-detail')?.textContent).toBe('Stimme angenommen');
+    expect(root.querySelector('.impact-report-status')?.textContent).toBe('Reinigung wird geprüft');
+    expect(root.querySelector('.fixture-banner')?.textContent).toBe(translate('de', 'fixture.banner'));
+
+    const impactPage = root.querySelector('.impact-page')!;
+    impactPage.scrollTop = 164;
+    root.querySelector('.impact-history-link')?.dispatch('click');
+
+    expect(location.pathname).toBe('/map');
+    expect(root.querySelector('.report-sheet-layer')?.hidden).toBe(false);
+
+    location.pathname = '/impact';
+    dispatchWindowEvent('popstate');
+    await vi.waitFor(() => expect(root.querySelector('.impact-history-link')).not.toBeNull());
+    expect(root.querySelector('.impact-page')?.scrollTop).toBe(164);
+  });
+
+  it('supports arrow, Home and End keyboard navigation while updating browser history', () => {
+    const { root, location } = createHarness();
+    const tabs = root.querySelectorAll('[role="tab"]');
+    const preventDefault = vi.fn();
+
+    tabs[0].dispatch('keydown', { key: 'ArrowRight', preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(focusedElement).toBe(tabs[1]);
+    expect(selectedTab(root)).toBe(tabs[1]);
+    expect(location.pathname).toBe('/impact');
+
+    tabs[1].dispatch('keydown', { key: 'End', preventDefault });
+    expect(focusedElement).toBe(tabs[2]);
+    expect(selectedTab(root)).toBe(tabs[2]);
+    expect(location.pathname).toBe('/rewards');
+
+    tabs[2].dispatch('keydown', { key: 'Home', preventDefault });
+    expect(focusedElement).toBe(tabs[0]);
+    expect(selectedTab(root)).toBe(tabs[0]);
+    expect(location.pathname).toBe('/map');
+  });
+
+  it('supports touch-friendly tab activation through the button click event', () => {
+    const { root, location } = createHarness();
+    const tabs = root.querySelectorAll('[role="tab"]');
+
+    tabs[2].dispatch('click');
+
+    expect(selectedTab(root)).toBe(tabs[2]);
+    expect(location.pathname).toBe('/rewards');
+  });
+
+  it('keeps the guest report entry deferred without requesting location or photos', () => {
+    const { root, accessAttempts } = createHarness();
+    const reportButton = root.querySelector('.report-button');
+
+    reportButton?.dispatch('click');
+
+    const notice = root.querySelector('.map-notice');
+    expect(notice?.hidden).toBe(false);
+    expect(notice?.textContent).toContain('No location or photos have been requested.');
+    expect(accessAttempts).not.toContain('geolocation');
+    expect(accessAttempts).not.toContain('mediaDevices');
+  });
+
+  it('restores the local Rewards tab on browser back/forward navigation', () => {
+    const { root, location, dispatchWindowEvent } = createHarness('/impact');
+    location.pathname = '/rewards';
+    dispatchWindowEvent('popstate');
+
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Rewards');
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Browser-only demo');
+    expect(root.querySelectorAll('.rewards-card')).toHaveLength(3);
+  });
+
+  it('applies a stored language before rendering the active view', () => {
+    const storage = new Map<string, string>([['iskra.locale', 'de']]);
+    vi.stubGlobal('window', {
+      location: { pathname: '/impact' },
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null },
+      history: { pushState: () => undefined },
+      addEventListener: () => undefined,
+    });
+    vi.stubGlobal('navigator', { language: 'en-US' });
+    vi.stubGlobal('localStorage', { getItem: () => 'de', setItem: () => undefined });
+    const documentElement = { lang: '' };
+    vi.stubGlobal('document', {
+      documentElement,
+      createElement: (tagName: string) => new TestElement(tagName),
+      visibilityState: 'visible',
+      addEventListener: () => undefined,
+    });
+
+    const root = App() as unknown as TestElement;
+
+    expect(documentElement.lang).toBe('de');
+    expect(root.querySelector('[role="tablist"]')?.getAttribute('aria-label')).toBe('Hauptnavigation');
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
+  });
+
+  it('switches language without losing the selected tab or route and persists the choice', () => {
+    const { root, location, storage } = createHarness('/impact');
+    const germanButton = root.querySelectorAll('.locale-button')
+      .find((button) => button.getAttribute('lang') === 'de');
+
+    germanButton?.dispatch('click');
+
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
+    expect(location.pathname).toBe('/impact');
+    expect(storage.get('iskra.locale')).toBe('de');
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Dein Einfluss');
+    expect(root.querySelector('.map-notice')).toBeNull();
+  });
+
+  it('keeps deferred /impact actions honest', () => {
+    const { root } = createHarness('/impact');
+    const panel = root.querySelector('.tab-panel');
+    const signIn = panel?.querySelector('button');
+
+    signIn?.dispatch('click');
+
+    expect(panel?.textContent).toContain(
+      'Sign-in will be available when account access is connected.',
+    );
+  });
+
+  it('renders German navigation and map copy for the German locale', async () => {
+    const { root } = createHarness('/map', createClientApi({
+      mode: 'fixture',
+      fixtureResolver: () => ({ status: 200, body: { items: [], nextCursor: null } }),
+    }), 'de');
+    expect(root.querySelectorAll('[role="tab"]')
+      .map((tab) => tab.querySelector('.nav-label')?.textContent)).toEqual([
+      'Karte', 'Mein Einfluss', 'Belohnungen',
+    ]);
+    expect(root.querySelector('.report-button')?.textContent).toBe('Müll melden');
+    await vi.waitFor(() => expect(root.querySelector('.map-status')?.textContent)
+      .toContain('Es sind noch keine Beispiel-Meldungen verfügbar.'));
+  });
+
+  it('switches language without losing the selected tab', () => {
+    const { root, location, storage } = createHarness('/impact');
+    const germanButton = root.querySelectorAll('.locale-button')
+      .find((button) => button.getAttribute('lang') === 'de');
+
+    germanButton?.dispatch('click');
+
+    expect(selectedTab(root)?.querySelector('.nav-label')?.textContent).toBe('Mein Einfluss');
+    expect(location.pathname).toBe('/impact');
+    expect(storage.get('iskra.locale')).toBe('de');
+    expect(root.querySelector('.tab-panel')?.textContent).toContain('Dein Einfluss');
+    const activeLocale = root.querySelectorAll('.locale-button')
+      .find((button) => button.getAttribute('aria-pressed') === 'true');
+    expect(activeLocale?.getAttribute('lang')).toBe('de');
+  });
+});

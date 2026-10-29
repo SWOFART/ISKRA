@@ -1,0 +1,20 @@
+import type { PhotoStorage } from '../services/photo-storage';
+
+export type WorkerEnv = {
+  Bindings: {
+    ASSETS?: Fetcher;
+    PHOTOS?: PhotoStorage;
+    GCS_PHOTOS_BUCKET?: string;
+    FIREBASE_PROJECT_ID?: string;
+    MEDIA_SIGNING_SECRET?: string;
+    VERTEX_AUTH_JSON?: string;
+    GEMINI_MODEL_ID?: string;
+    AI_RATE_PER_MINUTE?: string;
+    HYPERDRIVE?: { readonly connectionString: string };
+    RELEASE_SHA?: string;
+  };
+  Variables: {
+    requestId: string;
+    identity: { uid: string } | undefined;
+  };
+};

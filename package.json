@@ -1,0 +1,44 @@
+{
+  "name": "iskra",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "postinstall": "node .github/scripts/strict_jpeg_decoder.mjs",
+    "dev": "npm run build:client && wrangler dev --env=\"\"",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "build:client": "vite build",
+    "build": "npm run build:client && wrangler deploy --dry-run --env=\"\" --outdir dist/worker"
+  },
+  "dependencies": {
+    "firebase": "13.1.0",
+    "hono": "4.13.14",
+    "jose": "6.2.13",
+    "jpeg-js": "0.4.4",
+    "maplibre-gl": "6.16.0",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261027.1",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.0.5",
+    "wrangler": "4.153.0"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "workerd": true
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.6"
+  }
+}

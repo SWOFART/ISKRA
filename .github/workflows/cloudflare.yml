@@ -57,6 +57,7 @@ jobs:
       cancel-in-progress: false
     environment:
       name: ${{ inputs.environment || 'staging' }}
+      url: ${{ steps.smoke.outputs.verified_url }}
     env:
       DEPLOY_ENV: ${{ inputs.environment || 'staging' }}
       DEPLOY_TARGET: ${{ inputs.target || 'auto' }}
@@ -136,22 +137,21 @@ jobs:
         run: python3 .github/scripts/cloudflare_env.py deploy "$DEPLOY_ENV" "$SELECTED_TARGET"
 
       - name: Smoke-test deployed release
+        id: smoke
         if: steps.config.outputs.enabled == 'true'
         env:
           SELECTED_TARGET: ${{ steps.config.outputs.target }}
         run: python3 .github/scripts/cloudflare_env.py smoke "$DEPLOY_ENV" "$SELECTED_TARGET"
 
-      - name: Remove temporary secret material
-        if: always()
-        run: rm -f -- "$RUNNER_TEMP/iskra-environment.json" "$RUNNER_TEMP/iskra-worker-secrets.json"
-
       - name: Summarize delivery state
+        if: always()
         env:
           DEPLOY_ENABLED: ${{ steps.config.outputs.enabled }}
           SELECTED_TARGET: ${{ steps.config.outputs.target }}
-        run: |
-          if [[ "$DEPLOY_ENABLED" == true ]]; then
-            echo "Deployed $SELECTED_TARGET to $DEPLOY_ENV; release health check passed. Product acceptance is separate." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'Google authentication and environment retrieval passed. Deployment is disabled in Google Cloud; no Cloudflare write occurred.' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          TARGET_URL: ${{ steps.config.outputs.target_url }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: python3 .github/scripts/cloudflare_env.py summary "$DEPLOY_ENV" "$SELECTED_TARGET" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary secret material
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/iskra-environment.json" "$RUNNER_TEMP/iskra-worker-secrets.json" "$RUNNER_TEMP/iskra-wrangler.json"
