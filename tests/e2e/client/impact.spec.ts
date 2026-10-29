@@ -266,3 +266,50 @@ test('shows quiet localized resolution notifications once, marks them read and r
   await expect(page.locator(`.impact-notification-item[data-notification-id="${resolutionId}"]`)).toContainText('Gelesen');
   expect(impactReads).toBeGreaterThanOrEqual(3);
 });
+
+test('keeps a newer balance and cleanup stage when an older impact page arrives', async ({ page }) => {
+  const token = await stubAuthenticatedClient(page);
+  const current = {
+    ...fixtures.impact,
+    totals: { ...fixtures.impact.totals, balanceRp: 80 },
+    balanceVersion: 9,
+    nextCursor: 'older-page',
+  };
+  const staleReport = {
+    ...fixtures.impact.items[0].report,
+    status: 'VERIFIED',
+    resolutionYesCount: 0,
+    version: 4,
+  };
+  const stale = {
+    ...fixtures.impact,
+    totals: { ...fixtures.impact.totals, balanceRp: 10 },
+    balanceVersion: 2,
+    items: [{ ...fixtures.impact.items[0], report: staleReport }],
+    nextCursor: null,
+  };
+  await page.route('**/api/me/impact**', async (route) => {
+    expect(route.request().headers().authorization).toBe(`Bearer ${token}`);
+    const cursor = new URL(route.request().url()).searchParams.get('cursor');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(cursor ? stale : current),
+    });
+  });
+  await page.route('**/api/me/notifications*', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ items: [], nextCursor: null }),
+  }));
+  await page.goto('/impact');
+  await page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByLabel('Email', { exact: true }).fill(email);
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.locator('.impact-metric-grid--totals .impact-metric-value').nth(1)).toHaveText('80 RP');
+  await expect(page.locator('.impact-report-status')).toHaveText('Cleanup awaiting verification');
+  await page.getByRole('button', { name: 'Load more activity' }).click();
+  await expect(page.locator('.impact-metric-grid--totals .impact-metric-value').nth(1)).toHaveText('80 RP');
+  await expect(page.locator('.impact-report-status')).toHaveText('Cleanup awaiting verification');
+});

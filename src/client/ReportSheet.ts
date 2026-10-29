@@ -31,6 +31,7 @@ export interface ReportSheetOptions {
   onClose(reportId: string): void;
   onRetry(reportId: string): void;
   onVote(reportId: string, stage: Stage, choice: VoteChoice, reportPin: ReportSummary['location']): Promise<VoteSubmissionResult>;
+  onCleanup?(report: ReportDetail): void;
   onSignIn?(): void;
   refreshPhotos(reportId: string, stage: GalleryStage): Promise<readonly Photo[]>;
   onVisibilityChange(open: boolean): void;
@@ -282,6 +283,17 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
       voteSection.appendChild(stageCard);
     }
 
+    const cleanupSection = viewer?.canSubmitCleanup && options.onCleanup
+      ? makeElement('section', 'report-cleanup')
+      : null;
+    if (cleanupSection) {
+      cleanupSection.setAttribute('aria-label', options.t('report.cleanup.start'));
+      cleanupSection.appendChild(makeElement('p', 'report-cleanup-note', options.t('capture.cleanupIndependent')));
+      const startCleanup = makeButton(options.t('report.cleanup.start'), 'report-cleanup-start');
+      startCleanup.addEventListener('click', () => options.onCleanup?.(detail!));
+      cleanupSection.appendChild(startCleanup);
+    }
+
     const beforeGallery = renderPhotoGallery({
       title: options.t('report.beforePhotos'),
       photos: detail.beforePhotos,
@@ -299,6 +311,7 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
 
     content.replaceChildren(overview, progress,
       ...(voteStages.length > 0 || voteFeedback.size > 0 ? [voteSection] : []),
+      ...(cleanupSection ? [cleanupSection] : []),
       beforeGallery.element, afterGallery.element);
   }
 

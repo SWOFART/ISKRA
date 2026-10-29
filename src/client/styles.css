@@ -568,6 +568,9 @@ button {
 .report-vote-choice--yes { border-color: var(--client-color-focus); font-weight: 700; }
 .report-vote-choice:disabled,
 .report-vote-sign-in:disabled { opacity: 0.55; cursor: default; }
+.report-cleanup { display: grid; gap: 8px; margin: 14px 0; }
+.report-cleanup-note { margin: 0; color: var(--client-color-text-muted); line-height: 1.45; }
+.report-cleanup-start { min-height: 44px; padding: 8px 12px; border: 1px solid var(--client-color-focus); border-radius: var(--client-radius-control); background: var(--client-color-surface); color: var(--client-color-text); font: inherit; font-weight: 700; cursor: pointer; }
 .photo-gallery { margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--client-color-border); }
 .photo-gallery-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .photo-gallery-heading { margin: 0; font-size: 0.92rem; }

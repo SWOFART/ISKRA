@@ -7,6 +7,7 @@ import { clientDesign, type SupportedLocale } from './designTokens';
 import { errorMessageKey, formatDateTime, formatNumber, type MessageKey, type MessageValues } from './i18n';
 import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from './mapModel';
 import { renderPhotoCapture, type CapturedPhoto, type CaptureStage } from './PhotoCapture';
+import { renderCleanupSubmission } from './CleanupSubmission';
 import { renderReportSubmission, type ReportSubmissionView } from './ReportSubmission';
 import { renderReportSheet, type VoteChoice, type VoteSubmissionResult } from './ReportSheet';
 import { createOperationKeyScope, type OperationKeyScope } from './operationKey';
@@ -206,6 +207,7 @@ export function renderMapPage(
   setChromeInert?: (inert: boolean) => void,
   onLocaleChange?: (locale: SupportedLocale) => void,
   onSignIn?: () => void,
+  onShowImpact?: () => void,
 ): MapPageView {
   const pageState = initialState ?? createMapPageState();
   const page = makeElement('section', 'map-page');
@@ -460,6 +462,12 @@ export function renderMapPage(
     },
     onRetry: (reportId) => { void loadReportDetail(reportId); },
     onVote: castVote,
+    onCleanup: (detail) => {
+      cleanupReportId = detail.id;
+      captureTarget = { lat: detail.location.lat, lng: detail.location.lng };
+      reportSheet.dismiss();
+      photoCapture.open('cleanup');
+    },
     onSignIn,
     refreshPhotos: async (reportId, stage): Promise<readonly Photo[]> => {
       const response = await api.request({
@@ -484,7 +492,9 @@ export function renderMapPage(
     t,
     onContinue: (photos, stage) => {
       if (stage === 'report') reportSubmission.open(photos);
-      else showCaptureHandoff(photos, stage, captureTarget);
+      else if (cleanupReportId && captureTarget) {
+        cleanupSubmission.open(photos, { id: cleanupReportId, location: captureTarget });
+      } else showCaptureHandoff(photos, stage, captureTarget);
     },
     onExit: () => reportButton.focus(),
     onVisibilityChange: setCaptureModalInert,
@@ -543,6 +553,29 @@ export function renderMapPage(
     },
   });
   page.appendChild(reportSubmission.element);
+  let cleanupReportId: string | null = null;
+  const cleanupSubmission = renderCleanupSubmission({
+    api,
+    t,
+    locale,
+    onEditPhotos: () => photoCapture.open('cleanup'),
+    onDiscard: () => {
+      cleanupReportId = null;
+      captureTarget = undefined;
+      photoCapture.discard();
+    },
+    onOpenImpact: () => {
+      cleanupReportId = null;
+      captureTarget = undefined;
+      photoCapture.discard();
+      onShowImpact?.();
+    },
+    onCommitted: (result) => {
+      mergeReportDetail(result.data.report);
+    },
+    onVisibilityChange: setCaptureModalInert,
+  });
+  page.appendChild(cleanupSubmission.element);
 
   const captureHandoff = makeElement('section', 'photo-capture-handoff');
   captureHandoff.hidden = true;
@@ -934,6 +967,7 @@ export function renderMapPage(
 
     try {
       const nextReports = new Map<string, ReportSummary>();
+      const committedReports = new Map(reports.map((report) => [report.id, report]));
       const seenCursors = new Set<string>();
       let cursor: string | null = null;
       let fixture = false;
@@ -952,7 +986,17 @@ export function renderMapPage(
         });
         if (generation !== loadGeneration) return;
         fixture ||= result.provenance.mode === 'fixture';
-        for (const report of result.data.items) nextReports.set(report.id, report);
+        for (const report of result.data.items) {
+          const cached = reportDetails.get(report.id);
+          const known = [
+            report,
+            committedReports.get(report.id),
+            nextReports.get(report.id),
+            cached ? summaryFromDetail(cached) : undefined,
+          ].filter((item): item is ReportSummary => item !== undefined);
+          const freshest = known.reduce((best, item) => item.version > best.version ? item : best);
+          nextReports.set(freshest.id, freshest);
+        }
         cursor = result.data.nextCursor;
         hasMore = cursor !== null;
         if (!cursor) break;
@@ -1123,6 +1167,7 @@ export function renderMapPage(
     mapReady = false;
     reportSheet.dispose();
     reportSubmission.dispose();
+    cleanupSubmission.dispose();
     if (highlightTimer !== undefined) clearTimeout(highlightTimer);
     handoffPhotos = [];
     handoffLocationBinding = null;
