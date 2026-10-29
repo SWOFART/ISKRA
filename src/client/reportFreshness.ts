@@ -21,8 +21,8 @@ const lifecycleRank: Record<ReportSummary['status'], number> = {
 /**
  * Orders two snapshots of the same report.
  *
- * A positive result means `next` is at least as advanced as `current`, so it may
- * replace it. A negative result means `next` would display an older lifecycle,
+ * A positive result means `next` is more advanced than `current`, so it may
+ * replace it; zero means they show the same progress. A negative result means `next` would display an older lifecycle,
  * fewer confirmations or an older version and must not overwrite committed data.
  * Equal versions are compared by lifecycle progress, which keeps a delayed `2/3`
  * payload from replacing a committed `3/3` one.
