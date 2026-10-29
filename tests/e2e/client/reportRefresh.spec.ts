@@ -204,3 +204,49 @@ test('keeps an open full-screen photo when the unchanged report refreshes', asyn
   await page.keyboard.press('Escape');
   await expect(sheet).toBeVisible();
 });
+
+test('waits for cleanup evidence before adopting an advanced list status', async ({ page }) => {
+  test.setTimeout(60_000);
+  const verified = makeReport({
+    status: 'VERIFIED', existenceYesCount: 8, resolutionYesCount: 0,
+    existenceVerifiedAt: '2026-10-27T12:00:00.000Z', lastExistenceConfirmedAt: '2026-10-27T12:00:00.000Z',
+    version: 13, updatedAt: '2026-10-27T12:00:00.000Z',
+  });
+  const cleaned = makeReport({
+    status: 'AWAITING_RESOLUTION', existenceYesCount: 9, resolutionYesCount: 1,
+    existenceVerifiedAt: '2026-10-27T12:00:00.000Z', lastExistenceConfirmedAt: '2026-10-27T12:05:00.000Z',
+    version: 14, updatedAt: '2026-10-27T12:05:00.000Z',
+  });
+  const reportId = cleaned.id;
+  const detailSnapshots = [verified, verified, cleaned];
+  let detailRequests = 0;
+
+  await page.route((url) => url.pathname === '/api/reports', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ items: [summaryOf(cleaned)], nextCursor: null }),
+  }));
+  await page.route((url) => url.pathname === `/api/reports/${reportId}`, (route) => {
+    const snapshot = detailSnapshots[Math.min(detailRequests, detailSnapshots.length - 1)];
+    detailRequests += 1;
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot) });
+  });
+  await stubPhotoMedia(page);
+
+  await page.goto('/map');
+  await expect(page.locator(`.report-list-item[data-report-id="${reportId}"]`)).toContainText('Cleanup awaiting verification');
+  await page.locator('.map-marker').click();
+  const sheet = page.getByRole('dialog', { name: 'Report details' });
+  // The list is already ahead, but this payload has no cleanup evidence yet.
+  await expect(sheet).toContainText('Confirmed — more residents can still support');
+  await expect(sheet).toContainText('No photos are available.');
+  await expect(page.locator(`.report-list-item[data-report-id="${reportId}"]`)).toContainText('Cleanup awaiting verification');
+  await expect(sheet).toContainText('Confirmed — more residents can still support');
+
+  await expect.poll(() => detailRequests, { timeout: 8_000 }).toBeGreaterThanOrEqual(2);
+  await expect(sheet).toContainText('Confirmed — more residents can still support');
+
+  await expect.poll(() => detailRequests, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
+  await expect(sheet).toContainText('Cleanup awaiting verification');
+  await expect(sheet.locator('.report-stage-progress')).toContainText('Cleanup verification: 1/3');
+});

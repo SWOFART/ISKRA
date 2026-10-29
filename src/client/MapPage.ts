@@ -367,6 +367,12 @@ export function renderMapPage(
    */
   function keepCommittedProgress(detail: ReportDetail, listed: ReportSummary): ReportDetail {
     if (compareReportProgress(listed, detail) >= 0) return detail;
+    // The list summary can run ahead of a delayed detail payload. Adopt its
+    // status only when this payload already carries the after photos and cleaner
+    // that status renders; otherwise keep the loaded detail until the next
+    // refresh, so the sheet never claims a cleanup it cannot show.
+    const cleaned = listed.status === 'AWAITING_RESOLUTION' || listed.status === 'RESOLVED';
+    if (cleaned && (detail.afterPhotos.length === 0 || !detail.cleaner)) return detail;
     return {
       ...detail,
       status: listed.status,
