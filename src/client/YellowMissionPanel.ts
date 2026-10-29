@@ -357,7 +357,7 @@ export function renderYellowMissionPanel(options: YellowMissionPanelOptions): Ye
     dispose() {
       disposed = true;
       generation += 1;
-      element.remove();
+      element.replaceChildren();
     },
   };
 }
