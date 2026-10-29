@@ -571,6 +571,30 @@ button {
 .report-cleanup { display: grid; gap: 8px; margin: 14px 0; }
 .report-cleanup-note { margin: 0; color: var(--client-color-text-muted); line-height: 1.45; }
 .report-cleanup-start { min-height: 44px; padding: 8px 12px; border: 1px solid var(--client-color-focus); border-radius: var(--client-radius-control); background: var(--client-color-surface); color: var(--client-color-text); font: inherit; font-weight: 700; cursor: pointer; }
+.yellow-mission-panel { display: grid; gap: 10px; margin: 14px 0; padding: 14px; border: 1px solid var(--client-color-border); border-radius: var(--client-radius-control); background: var(--client-color-surface-muted); }
+.yellow-mission-heading,
+.yellow-mission-panel h4 { margin: 0; font-size: 0.95rem; }
+.yellow-mission-description,
+.yellow-mission-status,
+.yellow-mission-organizer,
+.yellow-mission-start,
+.yellow-mission-location,
+.yellow-mission-participants,
+.yellow-mission-announcement,
+.yellow-mission-feedback,
+.yellow-mission-deferred { margin: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.yellow-mission-status,
+.yellow-mission-feedback,
+.yellow-mission-deferred { color: var(--client-color-text-muted); }
+.yellow-mission-form { display: grid; gap: 9px; }
+.yellow-mission-field { display: grid; gap: 4px; font-size: 0.85rem; font-weight: 650; }
+.yellow-mission-field input,
+.yellow-mission-field textarea { box-sizing: border-box; width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid var(--client-color-border); border-radius: var(--client-radius-control); background: var(--client-color-surface); color: var(--client-color-text); font: inherit; }
+.yellow-mission-field textarea { min-height: 96px; resize: vertical; }
+.yellow-mission-panel button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--client-color-focus); border-radius: var(--client-radius-control); background: var(--client-color-surface); color: var(--client-color-text); font: inherit; font-weight: 700; cursor: pointer; }
+.yellow-mission-panel button:disabled { opacity: 0.55; cursor: default; }
+.yellow-mission-panel .primary-button { background: var(--client-color-brand); color: var(--client-color-brand-text); }
+.yellow-mission-deferred { padding-top: 8px; border-top: 1px solid var(--client-color-border); font-size: 0.8rem; }
 .photo-gallery { margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--client-color-border); }
 .photo-gallery-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .photo-gallery-heading { margin: 0; font-size: 0.92rem; }

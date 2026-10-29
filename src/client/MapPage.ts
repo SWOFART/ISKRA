@@ -1,5 +1,7 @@
-import { POLICY, ReportDetailSchema, ReportListSchema, ReportSummarySchema,
-  VoteReceiptSchema, VoteRequestSchema, type ErrorCode, type Photo, type Point, type ReportSummary, type Route, type Stage } from '../shared/contracts';
+import { CreateMissionRequestSchema, EmptyBodySchema, MissionAnnouncementRequestSchema, MissionEnvelopeSchema,
+  POLICY, ReportDetailSchema, ReportListSchema, ReportSummarySchema,
+  VoteReceiptSchema, VoteRequestSchema, type CreateMissionRequest, type ErrorCode, type Mission,
+  type Photo, type Point, type ReportSummary, type Route, type Stage } from '../shared/contracts';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { ApiClientError, createClientApi } from './api';
@@ -211,6 +213,7 @@ export function renderMapPage(
   onLocaleChange?: (locale: SupportedLocale) => void,
   onSignIn?: () => void,
   onShowImpact?: () => void,
+  currentUserId?: string | null,
 ): MapPageView {
   const pageState = initialState ?? createMapPageState();
   const page = makeElement('section', 'map-page');
@@ -356,6 +359,7 @@ export function renderMapPage(
   interface VoteAttempt { operation: OperationKeyScope; body: ReturnType<typeof VoteRequestSchema.parse>; }
   const reportDetails = new Map<string, ReportDetail>();
   const voteAttempts = new Map<string, VoteAttempt>();
+  const missionCreateOperations = new Map<string, OperationKeyScope>();
   let sheetRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   let sheetRefreshInFlight = false;
   let sheetRefreshNotBefore = 0;
@@ -478,6 +482,8 @@ export function renderMapPage(
   }
 
   const reportSheet = renderReportSheet({
+    apiMode: api.mode,
+    currentUserId: currentUserId ?? null,
     t,
     locale,
     onLocaleChange: (nextLocale) => onLocaleChange?.(nextLocale),
@@ -496,6 +502,56 @@ export function renderMapPage(
     },
     onRetry: (reportId) => { void loadReportDetail(reportId); },
     onVote: castVote,
+    currentUserId,
+    onLoadMission: async (reportId): Promise<Mission | null> => {
+      try {
+        const result = await api.request({
+          path: `/reports/${reportId}/mission`,
+          auth: 'none',
+          responseSchema: MissionEnvelopeSchema,
+        });
+        return result.data.mission;
+      } catch (error) {
+        if (error instanceof ApiClientError && error.code === 'NOT_FOUND') return null;
+        throw error;
+      }
+    },
+    onCreateMission: async (reportId, input, existingOperation): Promise<Mission> => {
+      const operation = existingOperation ?? missionCreateOperations.get(reportId) ?? createOperationKeyScope();
+      missionCreateOperations.set(reportId, operation);
+      const result = await api.request({
+        path: `/reports/${reportId}/missions`,
+        method: 'POST',
+        body: input,
+        bodySchema: CreateMissionRequestSchema,
+        responseSchema: MissionEnvelopeSchema,
+        operation,
+        acceptedStatuses: [200, 201],
+      });
+      operation.complete();
+      missionCreateOperations.delete(reportId);
+      return result.data.mission;
+    },
+    onJoinMission: async (missionId): Promise<Mission> => {
+      const result = await api.request({
+        path: `/missions/${missionId}/participants`,
+        method: 'POST',
+        body: {},
+        bodySchema: EmptyBodySchema,
+        responseSchema: MissionEnvelopeSchema,
+      });
+      return result.data.mission;
+    },
+    onUpdateMissionAnnouncement: async (missionId, announcement): Promise<Mission> => {
+      const result = await api.request({
+        path: `/missions/${missionId}/announcement`,
+        method: 'PATCH',
+        body: { announcement },
+        bodySchema: MissionAnnouncementRequestSchema,
+        responseSchema: MissionEnvelopeSchema,
+      });
+      return result.data.mission;
+    },
     onCleanup: (detail) => {
       cleanupReportId = detail.id;
       captureTarget = { lat: detail.location.lat, lng: detail.location.lng };
