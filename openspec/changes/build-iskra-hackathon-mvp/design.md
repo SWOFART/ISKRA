@@ -224,17 +224,17 @@ Status reflects the user's confirmed follow-up on 2026-10-27 and delegated engin
 
 ## Conditional P1 capacity and admission record — 2026-10-29
 
-**M3 prerequisite:** GitHub issue [#49](https://github.com/SWOFART/ISKRA/issues/49) is closed as completed, and the user confirmed that closure on 2026-10-29. The earlier comment saying #49 remained open predates that closure and is historical. This record accepts the current issue state as the M3 completion signal; it does not invent or restate runtime evidence.
+**M3 prerequisite:** GitHub issue [#49](https://github.com/SWOFART/ISKRA/issues/49) is closed, as confirmed by the user on 2026-10-29. Its latest recorded runtime update says `applicationReady: false` and explicitly does not claim real-scene acceptance, publication, cleanup or three-voter Green. Treat the closed issue state and genuine M3 acceptance as separate facts: task 8.1 remains unchecked until full live evidence is attached and verified. This section therefore records a conditional work order, not an active P1 admission.
 
-**Capacity basis:** The user explicitly directed Codex to finish the assigned B issues first, then take the listed Vspaceman11 issues. Work is admitted as one serialized Codex lane, with no parallel A/B/C capacity assumed and no assignee changes. The existing estimates total 7.5 focused hours for the seven admitted implementation issues, or 8 hours including this 0.5-hour planning checkpoint. These are issue estimates, not measured completed hours. A/C have not stated remaining person-hours; their existing non-P1 work remains in their streams.
+**Capacity basis:** The user explicitly directed Codex to finish the assigned B issues first, then take the listed Vspaceman11 issues. This is a conditional work order for one serialized Codex lane; it does not authorize parallel A/B/C implementation or establish that the P1 gate has passed. The existing estimates total 7.5 focused hours for the seven planned implementation issues, or 8 hours including this 0.5-hour planning checkpoint. These are issue estimates, not measured completed hours. A/C have not stated remaining person-hours; their existing non-P1 work remains in their streams.
 
-| Stream | Admitted conditional P1 issues | Order and gate |
+| Stream | Planned conditional P1 issues (not yet admitted) | Order and gate |
 |---|---|---|
-| B | #56 (9.2), #58 (9.4), #60 (9.6) | One at a time after this 9.1 admission is integrated; #60 also requires #15, already closed. |
-| A | #57 (9.3), #59 (9.5), #61 (9.7), #62 (9.8) | Begin only after the user's B issue set is closed and after 05:00 Europe/Berlin; preserve each issue's dependencies, including #56→#57, #58→#59, #60→#61, and #47→#62. |
+| B | #56 (9.2), #58 (9.4), #60 (9.6) | One at a time after genuine M3 and explicit admission; #60 also requires #15, already closed. |
+| A | #57 (9.3), #59 (9.5), #61 (9.7), #62 (9.8) | Begin only after genuine M3 and admission, the user's B issue set is closed, and local time is after 05:00 Europe/Berlin; preserve each issue's dependencies, including #56→#57, #58→#59, #60→#61, and #47→#62. |
 | C | None in conditional tasks 9.2–9.8 | Existing C release tasks remain unchanged; no C capacity is presumed or admitted here. |
 
-No conditional P1 implementation had started before the completed #49/M3 gate and this admission record. All seven existing 9.x implementation issues are admitted in the user-requested order; no 9.x item is deferred. P2 remains deferred, P0 safety and release gates remain intact, and all H18/H28/H36 cut rules continue to apply if their triggering conditions recur. The user-authorized sequence is the capacity commitment for this Codex work; it is not represented as A/C approval or available A/C hours.
+No conditional P1 implementation has started. The user-authorized sequence is recorded as planned work, but all seven issues remain deferred until genuine M3 evidence is verified and the capacity admission is active. P2 remains deferred, P0 safety and release gates remain intact, and all H18/H28/H36 cut rules continue to apply if their triggering conditions recur. The user-authorized sequence is not represented as A/C approval or available A/C hours.
 
 ## Acceptance Traceability
 
