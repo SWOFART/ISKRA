@@ -3,7 +3,7 @@ import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import { withTestDatabase } from '../auth/postgres';
 import { PostgresTransactionDatabase, type TransactionDatabase } from '../../../src/worker/db/client';
-import { readPhoto, removeExpiredPhotos } from '../../../src/worker/db/evidence-store';
+import { readPhoto, removeExpiredPhotos, sweepUnindexedPhotos, type UnindexedPhotoObject } from '../../../src/worker/db/evidence-store';
 import { authorizePhotoRead, createPhotoReadCapability, createReportMediaResolver } from '../../../src/worker/services/media';
 import { PostgresReportReadService } from '../../../src/worker/services/report-context';
 import { createApp } from '../../../src/worker';
@@ -13,6 +13,10 @@ const migration = await readFile(new URL('../../../migrations/0001_p0_core.sql',
 const origin = 'https://iskra.test';
 const secret = 'integration-photo-signing-key-at-least-32-bytes';
 const owner = 'photo-owner';
+function orphan(id = crypto.randomUUID()): UnindexedPhotoObject {
+  const old = new Date(Date.now() - 27 * 60 * 60 * 1000).toISOString();
+  return { id, key: 'photos/' + id, createdAt: old, updatedAt: old, expiresAt: old, generation: '1234', metageneration: '1' };
+}
 
 async function setup(pool: Pool) {
   await pool.query(migration);
@@ -45,6 +49,65 @@ async function report(pool: Pool) {
 
 // R2 is an explicit object-store test double; the SQL/locking below uses real PostgreSQL.
 describe('photo authorization and orphan transactions', () => {
+  it('sweeps only unindexed old objects, preserving attached/reserved/uploads and even row-less live analysis references', () =>
+    withTestDatabase(async (pool) => {
+      const database = await setup(pool);
+      const attached = await photo(pool, { reportId: await report(pool) });
+      const uploaded = await photo(pool); const reserved = await photo(pool);
+      await pool.query("UPDATE report_photos SET state='RESERVED' WHERE id=$1", [reserved.id]);
+      const activeId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO ai_analyses(owner_user_id,kind,status,input_hash,photo_ids,expires_at)
+         VALUES($1,'REPORT','RUNNING',$2,$3::jsonb,now()+interval '45 seconds')`,
+        [owner, crypto.randomUUID(), JSON.stringify([activeId])],
+      );
+      const abandoned = orphan();
+      const objects = [orphan(attached.id), orphan(uploaded.id), orphan(reserved.id), orphan(activeId), abandoned];
+      let insideTransaction = false;
+      const observed: TransactionDatabase = { withTransaction: (work) => database.withTransaction(async (client) => {
+        insideTransaction = true; try { return await work(client); } finally { insideTransaction = false; }
+      }) };
+      const remove = vi.fn(async () => { expect(insideTransaction).toBe(false); return 'deleted' as const; });
+      expect(await sweepUnindexedPhotos(observed, objects, remove)).toMatchObject({ eligible: 1, protected: 4, deleted: 0, dryRun: true });
+      expect(remove).not.toHaveBeenCalled();
+      expect(await sweepUnindexedPhotos(observed, objects, remove, true)).toMatchObject({ deleted: 1, protected: 4, failed: false });
+      expect(remove).toHaveBeenCalledExactlyOnceWith(abandoned);
+      expect((await pool.query('SELECT count(*)::int AS n FROM report_photos')).rows[0].n).toBe(3);
+      expect((await pool.query('SELECT count(*)::int AS n FROM ai_analyses')).rows[0].n).toBe(2);
+      expect((await pool.query('SELECT count(*)::int AS n FROM reward_ledger')).rows[0].n).toBe(0);
+    }));
+
+  it('rechecks SQL references after listing and preserves a newly indexed object', () => withTestDatabase(async (pool) => {
+    const database = await setup(pool); const object = orphan(); let checks = 0;
+    const raced: TransactionDatabase = { withTransaction: (work) => database.withTransaction((client) => work({
+      query: async <Row extends Record<string, unknown>>(sql: string, parameters?: readonly unknown[]) => {
+        const result = await client.query<Row>(sql, parameters);
+        if (sql.includes('jsonb_array_elements_text') && ++checks === 1) {
+          await pool.query(
+            `INSERT INTO report_photos(id,owner_user_id,purpose,state,object_key,ordinal,mime_type,byte_size,sha256,upload_expires_at)
+             VALUES($1,$2,'REPORT','UPLOADED',$3,0,'image/jpeg',3,$4,now())`,
+            [object.id, owner, object.key, 'a'.repeat(64)],
+          );
+        }
+        return result;
+      },
+    })) };
+    const remove = vi.fn(async () => 'deleted' as const);
+    expect(await sweepUnindexedPhotos(raced, [object], remove, true)).toMatchObject({ selected: 1, protected: 1, deleted: 0 });
+    expect(remove).not.toHaveBeenCalled();
+  }));
+
+  it('bounds deletes to25, treats changed/missing generations safely and stops after a storage failure', () => withTestDatabase(async (pool) => {
+    const database = await setup(pool); const objects = Array.from({ length: 30 }, () => orphan());
+    const remove = vi.fn(async () => 'deleted' as const);
+    expect(await sweepUnindexedPhotos(database, objects, remove, true)).toMatchObject({ eligible: 30, selected: 25, deleted: 25 });
+    expect(remove).toHaveBeenCalledTimes(25);
+    const outcomes = vi.fn().mockResolvedValueOnce('changed').mockResolvedValueOnce('missing').mockRejectedValueOnce(new Error('private provider detail'));
+    expect(await sweepUnindexedPhotos(database, objects, outcomes, true)).toMatchObject({ changed: 1, missing: 1, deleted: 0, failed: true });
+    expect(outcomes).toHaveBeenCalledTimes(3);
+    expect((await pool.query('SELECT count(*)::int AS n FROM report_photos')).rows[0].n).toBe(0);
+  }));
+
   it('issues and refreshes owner previews after PUT expiry without exposing storage keys or granting guest access', () =>
     withTestDatabase(async (pool) => {
       const database = await setup(pool);

@@ -1,4 +1,4 @@
-import { API_ERROR_POLICY, CleanupAnalysisRequestSchema, CleanupAssessmentSchema, POLICY,
+import { API_ERROR_POLICY, CleanupAnalysisRequestSchema, CleanupAssessmentSchema, POLICY, UuidSchema,
   ReportAnalysisContextSchema, ReportAssessmentSchema,
   type ReportAnalysisRequestSchema, type UploadRequestSchema } from '../../shared/contracts';
 import type { Infer } from '../../shared/schema';
@@ -149,6 +149,52 @@ export async function removeExpiredPhotos(database: TransactionDatabase, bucket:
     }
     return result.rows.length;
   });
+}
+
+export interface UnindexedPhotoObject {
+  id: string; key: string; createdAt: string; updatedAt: string; expiresAt: string;
+  generation: string; metageneration: string;
+}
+
+/** Operator-only: old absent rows cannot still finalize under a five-minute upload ticket. */
+export async function sweepUnindexedPhotos(database: TransactionDatabase, objects: readonly UnindexedPhotoObject[],
+  remove: (object: UnindexedPhotoObject) => Promise<'deleted' | 'missing' | 'changed'>, apply = false) {
+  if (objects.length > 1000) throw new Error('Orphan scan exceeds its safety bound.');
+  const clock = await database.withTransaction((client) => client.query<{ now: Date }>('SELECT clock_timestamp() AS now'));
+  const cutoff = new Date(clock.rows[0].now).getTime() - 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(cutoff)) throw new Error('Database clock is unavailable.');
+  const aged = objects.filter((photo) => UuidSchema.safeParse(photo.id).success && photo.id === photo.id.toLowerCase()
+    && photo.key === 'photos/' + photo.id
+    && /^[1-9][0-9]{0,19}$/.test(photo.generation) && /^[1-9][0-9]{0,19}$/.test(photo.metageneration)
+    && [photo.createdAt, photo.updatedAt, photo.expiresAt].every((value) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)
+      && Date.parse(value) < cutoff));
+  if (new Set(aged.map((photo) => photo.id)).size !== aged.length) throw new Error('Duplicate storage objects.');
+  async function referenced(ids: string[]) {
+    if (!ids.length) return new Set<string>();
+    const rows = await database.withTransaction((client) => client.query<{ id: string }>(
+      `SELECT id::text FROM report_photos WHERE id = ANY($1::uuid[])
+       UNION
+       SELECT jsonb_array_elements_text(photo_ids) AS id FROM ai_analyses
+       WHERE photo_ids ?| $1::text[] AND status IN ('RUNNING', 'READY') AND consumed_at IS NULL
+         AND (expires_at IS NULL OR expires_at > clock_timestamp())`, [ids],
+    ));
+    return new Set(rows.rows.map((row) => row.id));
+  }
+  const protectedIds = await referenced(aged.map((photo) => photo.id));
+  const eligible = aged.filter((photo) => !protectedIds.has(photo.id));
+  const selected = eligible.sort((a, b) => Date.parse(a.expiresAt) - Date.parse(b.expiresAt) || a.id.localeCompare(b.id)).slice(0, 25);
+  const result = { scanned: objects.length, aged: aged.length, protected: aged.length - eligible.length,
+    eligible: eligible.length, selected: selected.length, deleted: 0, missing: 0, changed: 0, failed: false, dryRun: !apply };
+  if (!apply) return result;
+  for (const photo of selected) {
+    // Recheck SQL immediately before deleting; never hold a transaction across Google I/O.
+    try {
+      if ((await referenced([photo.id])).has(photo.id)) { result.protected++; continue; }
+      result[await remove(photo)]++;
+    }
+    catch { result.failed = true; break; }
+  }
+  return result;
 }
 
 type ReportInput = Infer<typeof ReportAnalysisRequestSchema>;

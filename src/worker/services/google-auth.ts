@@ -33,7 +33,7 @@ export function parseGoogleIdentity(raw: string): GoogleIdentity {
 }
 
 /** Bound JSON authentication/metadata replies; never expose provider response bodies. */
-export async function readGoogleJson(response: Response): Promise<Record<string, unknown>> {
+export async function readGoogleJson(response: Response, maximumBytes = 64 * 1024): Promise<Record<string, unknown>> {
   const reader = response.body?.getReader();
   if (!reader) return unavailable();
   const chunks: Uint8Array[] = []; let length = 0;
@@ -42,7 +42,7 @@ export async function readGoogleJson(response: Response): Promise<Record<string,
       const { done, value } = await reader.read();
       if (done) break;
       length += value.byteLength;
-      if (length > 64 * 1024) return unavailable();
+      if (length > maximumBytes) return unavailable();
       chunks.push(value);
     }
     const bytes = new Uint8Array(length); let offset = 0;
