@@ -169,7 +169,7 @@ test('pauses the open report refresh while the tab is hidden and refreshes on re
   await expect(page.getByRole('dialog', { name: 'Report details' })).toBeVisible();
 });
 
-test('keeps an open full-screen photo when the unchanged report refreshes', async ({ page }) => {
+test('preserves a loaded photo and focus across signed URL rotation, then opens the fresh URL', async ({ page }) => {
   test.setTimeout(60_000);
   const detail = makeReport({
     status: 'AWAITING_RESOLUTION', existenceYesCount: 8, resolutionYesCount: 2,
@@ -178,6 +178,10 @@ test('keeps an open full-screen photo when the unchanged report refreshes', asyn
   });
   const reportId = detail.id;
   let detailRequests = 0;
+  let photoRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/photos/')) photoRequests++;
+  });
 
   await page.route((url) => url.pathname === '/api/reports', (route) => route.fulfill({
     status: 200,
@@ -186,7 +190,11 @@ test('keeps an open full-screen photo when the unchanged report refreshes', asyn
   }));
   await page.route((url) => url.pathname === `/api/reports/${reportId}`, (route) => {
     detailRequests += 1;
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detail) });
+    const rotated = { ...detail, beforePhotos: detail.beforePhotos.map((photo) => ({
+      ...photo, mediaUrl: photo.mediaUrl + '?ticket=' + detailRequests,
+      expiresAt: new Date(Date.now() + 300_000 + detailRequests * 1000).toISOString(),
+    })) };
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(rotated) });
   });
   await stubPhotoMedia(page);
 
@@ -198,11 +206,23 @@ test('keeps an open full-screen photo when the unchanged report refreshes', asyn
   const lightbox = page.getByRole('dialog', { name: 'Before photos · 1 of 1' });
   await expect(lightbox).toBeVisible();
 
-  await page.waitForTimeout(6_000);
-  expect(detailRequests).toBeGreaterThanOrEqual(2);
+  const close = lightbox.getByRole('button', { name: 'Close full-screen photo' });
+  await expect(close).toBeFocused();
+  const image = lightbox.locator('img');
+  await expect(image).toHaveJSProperty('complete', true);
+  const initialRequests = photoRequests;
+  await image.evaluate((element) => { element.dataset.preserved = 'true'; });
+  await expect.poll(() => detailRequests, { timeout: 8_000 }).toBe(2);
   await expect(lightbox).toBeVisible();
+  await expect(close).toBeFocused();
+  await expect(image).toHaveAttribute('data-preserved', 'true');
+  await expect(image).toHaveAttribute('src', /ticket=1$/);
+  expect(photoRequests).toBe(initialRequests);
   await page.keyboard.press('Escape');
   await expect(sheet).toBeVisible();
+  await sheet.getByRole('button', { name: 'View photo 1 full screen' }).first().click();
+  await expect(lightbox).toBeVisible();
+  await expect(image).toHaveAttribute('src', /ticket=2$/);
 });
 
 test('waits for cleanup evidence before adopting an advanced list status', async ({ page }) => {
@@ -249,4 +269,78 @@ test('waits for cleanup evidence before adopting an advanced list status', async
   await expect.poll(() => detailRequests, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
   await expect(sheet).toContainText('Cleanup awaiting verification');
   await expect(sheet.locator('.report-stage-progress')).toContainText('Cleanup verification: 1/3');
+});
+
+
+test('focus and visibility signals honor Retry-After without extra report requests', async ({ page }) => {
+  const detail = makeReport({ status: 'VERIFIED', existenceYesCount: 3, resolutionYesCount: 0,
+    existenceVerifiedAt: '2026-10-27T12:00:00.000Z', lastExistenceConfirmedAt: '2026-10-27T12:00:00.000Z',
+    version: 12, updatedAt: '2026-10-27T12:00:00.000Z' });
+  let requests = 0;
+  await page.route((url) => url.pathname === '/api/reports', (route) => route.fulfill({ json: { items: [summaryOf(detail)], nextCursor: null } }));
+  await page.route((url) => url.pathname === `/api/reports/${detail.id}`, (route) => {
+    requests++;
+    return requests === 2
+      ? route.fulfill({ status: 429, headers: { 'Retry-After': '20' }, json: { error: { code: 'RATE_LIMITED', message: 'Try later', requestId: '11111111-1111-4111-8111-111111111123', retryable: true } } })
+      : route.fulfill({ json: detail });
+  });
+  await stubPhotoMedia(page);
+  await page.goto('/map');
+  await expect(page.locator('.map-marker')).toBeVisible();
+  const clockStart = new Date();
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 1_000));
+  await page.locator('.map-marker').click();
+  const sheet = page.getByRole('dialog', { name: 'Report details' });
+  await expect(sheet).toContainText('Confirmed — more residents can still support');
+  await page.clock.runFor(5_000);
+  await expect.poll(() => requests).toBe(2);
+  // Wait for the 429 to be parsed before delivering foreground signals.
+  await page.waitForTimeout(100);
+  await page.evaluate(() => {
+    for (let i = 0; i < 3; i++) {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    }
+  });
+  await page.waitForTimeout(100);
+  expect(requests).toBe(2);
+  await page.clock.runFor(19_000);
+  expect(requests).toBe(2);
+  await page.clock.runFor(1_000);
+  await expect.poll(() => requests).toBe(3);
+  await expect(sheet).toContainText('Confirmed — more residents can still support');
+});
+
+test('a slow initial detail request does not overlap foreground or timer refreshes', async ({ page }) => {
+  const detail = makeReport({ status: 'VERIFIED', existenceYesCount: 3, resolutionYesCount: 0,
+    existenceVerifiedAt: '2026-10-27T12:00:00.000Z', lastExistenceConfirmedAt: '2026-10-27T12:00:00.000Z',
+    version: 12, updatedAt: '2026-10-27T12:00:00.000Z' });
+  let requests = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route((url) => url.pathname === '/api/reports', (route) => route.fulfill({ json: { items: [summaryOf(detail)], nextCursor: null } }));
+  await page.route((url) => url.pathname === `/api/reports/${detail.id}`, async (route) => {
+    requests++;
+    if (requests === 1) await gate;
+    await route.fulfill({ json: detail });
+  });
+  await stubPhotoMedia(page);
+  await page.goto('/map');
+  await expect(page.locator('.map-marker')).toBeVisible();
+  const clockStart = new Date();
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 1_000));
+  await page.locator('.map-marker').click();
+  await expect.poll(() => requests).toBe(1);
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.clock.runFor(6_000);
+  expect(requests).toBe(1);
+  release();
+  await expect(page.getByRole('dialog', { name: 'Report details' })).toContainText('Confirmed — more residents can still support');
+  await page.clock.runFor(5_000);
+  await expect.poll(() => requests).toBe(2);
 });
