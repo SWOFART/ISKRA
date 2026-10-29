@@ -52,6 +52,7 @@ test('shows browser-only demo rewards and redeems a local voucher without Reward
   await expect(voucherImage).toHaveAttribute('alt', 'Cappuccino with leaf latte art and a croissant by a café window.');
   await expect.poll(() => voucherImage.evaluate((image) =>
     (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  expect((await voucherImage.boundingBox())!.height).toBeLessThanOrEqual(144);
   await expect(voucher.locator('canvas, svg')).toHaveCount(0);
   await expect(voucher).not.toContainText(/expires|expiration|giltig bis/i);
   expect(apiRequests).toEqual([]);
@@ -62,6 +63,26 @@ test('shows browser-only demo rewards and redeems a local voucher without Reward
   await expect(page.locator('.rewards-voucher-image')).toHaveCount(1);
   expect(apiRequests).toEqual([]);
 });
+
+for (const width of [320, 390, 768, 1280]) {
+  test(`keeps reward photos compact and centered at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/rewards');
+    const images = page.locator('.rewards-card-image');
+    await expect(images).toHaveCount(3);
+    await expect.poll(() => images.evaluateAll((elements) => elements.every((element) =>
+      (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth > 0))).toBe(true);
+    for (const image of await images.all()) {
+      const bounds = (await image.boundingBox())!;
+      expect(bounds.height).toBeGreaterThanOrEqual(104);
+      expect(bounds.height).toBeLessThanOrEqual(144);
+      expect(bounds.width).toBeGreaterThan(0);
+      await expect(image).toHaveCSS('object-fit', 'cover');
+      await expect(image).toHaveCSS('object-position', '50% 50%');
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+}
 
 test('localizes the mock offers and their photo descriptions into German', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('iskra.locale', 'de'));
