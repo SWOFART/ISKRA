@@ -263,6 +263,25 @@ class CloudConfigurationTests(unittest.TestCase):
                     assert_public_assets(directory, values)
                 self.assertNotIn(secret, str(error.exception))
 
+    def test_encoded_server_credentials_cannot_enter_public_assets(self):
+        import base64
+
+        secret = "private-media-key-for-encoded-scan"
+        values = {"MEDIA_SIGNING_SECRET": secret}
+        encoded = secret.encode()
+        leaked = [
+            base64.b64encode(encoded),
+            base64.urlsafe_b64encode(encoded).rstrip(b"="),
+            encoded.hex().upper().encode(),
+        ]
+        for payload in leaked:
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as folder:
+                directory = Path(folder)
+                (directory / "index.html").write_text("<main>ISKRA</main>")
+                (directory / "app.js").write_bytes(b"prefix:" + payload + b":suffix")
+                with self.assertRaisesRegex(ValueError, "server credential"):
+                    assert_public_assets(directory, values)
+
     def test_browser_keys_are_public_but_missing_assets_and_symlinks_fail_closed(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
