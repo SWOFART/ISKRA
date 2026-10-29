@@ -578,7 +578,7 @@ export function App(
       }, api, t, locale, mapPageState, (inert) => {
         header.inert = inert;
         tablist.inert = inert;
-      }, setLocale, session ? () => openSignIn('map') : undefined, () => activateTab('impact', true));
+      }, setLocale, session ? () => openSignIn('map') : undefined, () => activateTab('impact', true), accountUid);
       mapPageState = currentMapPage.state;
       appendElements(panel, currentMapPage.element);
     } else if (selectedTab === 'impact') {
