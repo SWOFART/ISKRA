@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 RUNTIME_KEYS = {
     "APP_ENV", "FIREBASE_PROJECT_ID", "VERTEX_AUTH_JSON", "GEMINI_MODEL_ID",
-    "MEDIA_SIGNING_SECRET", "VOTE_RADIUS_M", "MAX_GPS_ACCURACY_M",
+    "MEDIA_SIGNING_SECRET", "GCS_PHOTOS_BUCKET", "VOTE_RADIUS_M", "MAX_GPS_ACCURACY_M",
     "LOCATION_MAX_AGE_SECONDS", "REPORTER_REWARD_RP", "GREEN_CLEANER_REWARD_RP",
     "PHOTO_MAX_BYTES", "AI_RATE_PER_MINUTE", "DEMO_DATA",
 }
@@ -57,7 +57,7 @@ def validate_config(raw, template, environment, target):
         required = ["FIREBASE_PROJECT_ID", "VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN",
                     "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID", "VITE_MAPTILER_KEY"]
         if environment == "production":
-            required += ["VERTEX_AUTH_JSON", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID"]
+            required += ["VERTEX_AUTH_JSON", "MEDIA_SIGNING_SECRET", "GEMINI_MODEL_ID", "GCS_PHOTOS_BUCKET"]
         for name in required:
             if not values.get(name):
                 raise ValueError(f"Required cloud configuration is missing: {name}")
@@ -79,6 +79,12 @@ def validate_config(raw, template, environment, target):
                 valid = False
             if not valid:
                 raise ValueError("Vertex identity must match the deployment environment and application origin")
+        if values.get("GCS_PHOTOS_BUCKET"):
+            if (not values.get("HYPERDRIVE_ID") or not values.get("VERTEX_AUTH_JSON")
+                    or len(values.get("MEDIA_SIGNING_SECRET", "").encode()) < 32):
+                raise ValueError("Cloud Storage requires Hyperdrive, Google identity and a media signing secret of at least 32 bytes")
+            if values["GCS_PHOTOS_BUCKET"] != f"iskra-{identity['projectId']}-{environment}-photos":
+                raise ValueError("GCS_PHOTOS_BUCKET must match the Google project and deployment environment")
         if environment == "production" and values.get("DEMO_DATA") != "false":
             raise ValueError("Production requires DEMO_DATA=false")
     return values

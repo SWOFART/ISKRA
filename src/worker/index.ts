@@ -12,6 +12,7 @@ import { removeExpiredPhotos } from './db/evidence-store';
 import { createDomainRoutes, type DomainRouteDependencies } from './routes/domain';
 import { createRequestScopedDatabase, type RequestScopedDatabaseFactory } from './db/runtime';
 import type { verifyFirebaseToken } from './middleware/auth';
+import { createGooglePhotoStorage } from './services/photo-storage';
 
 export function createApp(domainDependencies: DomainRouteDependencies = {}) {
   const app = new Hono<WorkerEnv>();
@@ -65,8 +66,13 @@ export function createWorkerHandler({
   createDatabase = createRequestScopedDatabase,
   verify,
 }: WorkerHandlerDependencies = {}) {
+  function withPhotoStorage(env: WorkerEnv['Bindings']): WorkerEnv['Bindings'] {
+    return !env.PHOTOS && env.GCS_PHOTOS_BUCKET && env.VERTEX_AUTH_JSON
+      ? { ...env, PHOTOS: createGooglePhotoStorage(env.GCS_PHOTOS_BUCKET, env.VERTEX_AUTH_JSON) } : env;
+  }
   return {
     async scheduled(_event: ScheduledController, env: WorkerEnv['Bindings']) {
+      env = withPhotoStorage(env);
       if (!env.HYPERDRIVE?.connectionString.trim() || !env.PHOTOS) {
         throw new ApiError(503, 'UNAVAILABLE', 'Photo cleanup is not configured.');
       }
@@ -75,6 +81,7 @@ export function createWorkerHandler({
       finally { await runtime.close(); }
     },
     async fetch(request: Request, env: WorkerEnv['Bindings'], executionContext: ExecutionContext) {
+      env = withPhotoStorage(env);
       const binding = env.HYPERDRIVE;
       if (!binding?.connectionString.trim()) {
         return createApp({ verify }).fetch(request, env, executionContext);

@@ -28,7 +28,7 @@ export function createPhotoRoutes({ database, verify }: {
       new URL(c.req.url).origin, c.env.MEDIA_SIGNING_SECRET, c.get('identity')?.uid);
     try {
       let body: ReadableStream | null = null;
-      let object: R2Object | null;
+      let object: { size: number } | null;
       if (c.req.method === 'HEAD') object = await c.env.PHOTOS.head(photo.object_key);
       else {
         const content = await c.env.PHOTOS.get(photo.object_key);

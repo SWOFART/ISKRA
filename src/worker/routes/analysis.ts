@@ -8,8 +8,9 @@ import { ApiError } from '../middleware/errors';
 import { parseJsonBody } from '../middleware/validation';
 import { analyzeCleanup, analyzeReport, validateGeminiConfig } from '../services/gemini';
 import { validateJpeg } from '../services/media';
+import type { PhotoStorage } from '../services/photo-storage';
 
-async function loadReportBytes(bucket: R2Bucket, photos: readonly AnalysisPhoto[]) {
+async function loadReportBytes(bucket: PhotoStorage, photos: readonly AnalysisPhoto[]) {
   const reads = Promise.all(photos.map(async (photo) => {
     const object = await bucket.get(photo.object_key);
     if (!object || object.size !== photo.byte_size) throw new Error('Unavailable photo');

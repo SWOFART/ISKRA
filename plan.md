@@ -20,6 +20,8 @@ Build **ISKRA**, a mobile-first web application for the Green City Hackathon in 
 - **CONFIRMED AI PROVIDER DECISION (2026-10-28):** use Gemini through **Vertex AI** in Google Cloud project `iskra-512914`, billed through its Google Cloud billing account. This supersedes earlier Gemini Developer API / AI Studio key examples. Worker authentication uses a dedicated inference-only service account through Workload Identity Federation; no Google service-account private key is distributed. Google Secret Manager holds the Worker federation identity configuration, and deployment supplies its runtime copy to Cloudflare.
 - **CURRENT SCOPE (latest user instruction):** deployment and CI/CD only. Product implementation and team coordination are handled separately; do not split work between people or start product features in this task.
 
+**CONFIRMED STORAGE DECISION (2026-10-29):** the user selected **Google Cloud Storage instead of R2** for photos. The app remains on Cloudflare Workers. This supersedes historical private-R2 selections in the OpenSpec baseline; the API, photo IDs, ownership checks, immutable writes and Worker-mediated signed delivery remain unchanged. Google Secret Manager remains the configuration source. Storage readiness requires actual Google IAM/object-operation and deployed Worker evidence, not bucket creation alone.
+
 ### Delivery target
 
 The non-negotiable vertical slice is:
@@ -84,21 +86,19 @@ flowchart LR
     ASSETS[Worker static assets]
     API[Hono /api/*\nvalidation + authorization]
     JWT[Firebase JWT verification\nWeb Crypto + cached public keys]
-    SEC[Workers Secrets\nGemini key + media signing secret]
+    SEC[Workers Secrets\nGoogle identity + media signing secret]
     HD[Hyperdrive\nquery cache disabled]
-    R2[Private R2 bucket\nASSUMPTION default]
     ASSETS --> SPA
     API --> JWT
     SEC --> API
     API <-->|pg + Drizzle| HD
-    API <-->|binding / restricted media delivery| R2
   end
   subgraph G[External Google services]
     AUTH[Firebase Authentication]
     KEYS[Firebase public signing keys]
     SQL[Cloud SQL PostgreSQL\nrestricted network + verified TLS]
     AI[Gemini multimodal API]
-    GCS[GCS private bucket\nalternative only]
+    GCS[Google Cloud Storage\nPrivate photo bucket]
     GSM[Google Secret Manager\nenvironment and key source]
     GID[Google Workload Identity Federation]
   end
@@ -108,7 +108,7 @@ flowchart LR
   JWT --> KEYS
   HD <-->|TLS| SQL
   API -->|server-side photos + prompt| AI
-  API -.->|if storage decision changes| GCS
+  API <-->|Google federation + authenticated object API| GCS
   MAP -->|origin-restricted public key| MT[MapTiler styles / tiles]
   GH[GitHub CI / approved release] -->|test + build + deploy| CF
   GH -->|short-lived OIDC identity| GID
@@ -120,7 +120,7 @@ Recommendations: one package manifest, one Worker deployment per environment, on
 
 Use the [Cloudflare Vite SPA/API integration](https://developers.cloudflare.com/workers/vite-plugin/tutorial/) and [Hono guide](https://developers.cloudflare.com/workers/framework-guides/web-apps/more-web-frameworks/hono/). Configure static SPA fallback while giving `/api/*` the Worker path: API errors must never become HTML `index.html` responses. Verify direct navigation to `/impact` and `/reports/:id`.
 
-R2 versus GCS (decision OPEN): R2 has a direct Worker binding and avoids a second service-account/signing implementation. GCS aligns with Google infrastructure but requires IAM and authenticated object operations/signed URL generation from Workers. **ASSUMPTION / NEEDS CONFIRMATION: use R2**, private bucket, Worker-mediated signed upload tickets and media delivery. Keep object IDs in SQL, not provider URLs; do not build a generic storage framework.
+Google Cloud Storage is the user's confirmed photo store. The Worker reuses its Google Workload Identity Federation identity and a bucket-scoped create/get/delete role. Uploads use `ifGenerationMatch=0` to prevent overwrites; public bucket access is blocked. Signed upload/read capabilities remain on Worker routes, with the existing Firebase ownership and SQL-state checks. Keep photo IDs/object keys in SQL, not provider URLs. Do not add a second production storage provider or a public browser-to-bucket upload path.
 
 ## 4. Proposed repository and dependencies
 
@@ -237,7 +237,7 @@ Cross-row role and state constraints cannot safely be SQL CHECKs that query othe
 
 **TECHNICAL RECOMMENDATION:** store counts on reports for straightforward map queries, maintain only inside the locked vote transaction, and test against `COUNT(votes WHERE choice='YES')`. Do not add a second asynchronous counter pipeline. Close voting at three YES: a fourth distinct request after closure is `409 STAGE_CLOSED`, no vote and no +5. This is a proposed stage-closure policy, to confirm; “every eligible vote” means a vote accepted while that stage is open.
 
-Two concurrent voters serialize on the report row: e.g. count 1 becomes 2 then 3, with one transition. Two identical votes yield one row/credit. Worker failure before commit rolls everything back; failure after commit causes a safe retry returning the recorded result. Database errors/deadlocks get a bounded retry with the same key. Do not put Gemini, R2 uploads or push delivery inside a SQL transaction.
+Two concurrent voters serialize on the report row: e.g. count 1 becomes 2 then 3, with one transition. Two identical votes yield one row/credit. Worker failure before commit rolls everything back; failure after commit causes a safe retry returning the recorded result. Database errors/deadlocks get a bounded retry with the same key. Do not put Gemini, Cloud Storage uploads or push delivery inside a SQL transaction.
 
 ### Publication, cleanup and redemption
 
@@ -504,7 +504,7 @@ Browser Firebase SDK obtains ID token, Worker validates it with a Workers-compat
 
 ### Media and privacy controls
 
-- Private R2 bucket; no public bucket domain or object listing. Signed Worker upload ticket binds random photo ID, UID, purpose, MIME, size and short expiry (assumption 5 min). Require bearer auth even with upload ticket. Worker streams a bounded body, validates JPEG signature/dimensions and stored size, then marks UPLOADED. Uploads use unique objects; no overwrites after UPLOADED/ATTACHED. Failed DB finalization leaves an orphan, not published evidence.
+- Private Google Cloud Storage bucket with enforced public-access prevention and uniform bucket-level access; no public bucket domain or browser object listing. Signed Worker upload ticket binds random photo ID, UID, purpose, MIME, size and short expiry (assumption 5 min). Require bearer auth even with upload ticket. Worker streams a bounded body, validates JPEG signature/dimensions and stored size, then marks UPLOADED. Uploads use unique objects; no overwrites after UPLOADED/ATTACHED. Failed DB finalization leaves an orphan, not published evidence.
 - Download capabilities expire (assumption 5 min), identify photo and permitted purpose, and are issued only for published photos or to the owner of uncommitted evidence. Published photos must remain viewable by guests per approved UX: private bucket does **not** make public report photos confidential. Never publish an owner's unattached uploads. Use `Referrer-Policy: no-referrer`, no token logging, `private/no-store` media responses for MVP.
 - Normalize camera image with canvas re-encoding to avoid carrying EXIF; validate supported image format on server, not extension. Avoid faces/license plates when framing; warn before publish, use controlled demo scenes. Automated redaction/moderation is not delivered; public pilot with uncontrolled uploads requires a privacy review.
 - Orphan cleanup removes only expired unattached photos/analyses, e.g. after 24h; do not delete any attached object based solely on upload age. Retention of published photos is OPEN; before any public pilot choose deletion/support policy. Keep demo data resettable.
@@ -519,15 +519,15 @@ Current repository-specific setup and activation instructions live in [infra/run
 
 ### Provisioning order and prerequisites
 
-1. **H0 account gate:** confirm Google project/billing owner, Cloud SQL creation permission, Gemini key/quota, Firebase provider settings, Cloudflare account/domain ownership, Hyperdrive/R2 availability, MapTiler key/budget and GitHub deployment permissions. Record spending cap, named owner and teardown date. No real credentials in this document.
+1. **H0 account gate:** confirm Google project/billing owner, Cloud SQL creation permission, Gemini key/quota, Firebase provider settings, Cloudflare account/domain ownership, Hyperdrive/Google Cloud Storage availability, MapTiler key/budget and GitHub deployment permissions. Record spending cap, named owner and teardown date. No real credentials in this document.
 2. Create dev/demo and prod resource boundaries. **ASSUMPTION:** one modest Cloud SQL instance with separate databases/users for dev/staging/prod to save hackathon cost; prod/public data must never be reachable by demo reset credentials. Separate instances are preferred if existing budget permits. Select EU region close to users and confirm organizational data-region requirements; no guaranteed cross-service residency claim.
 3. Provision Cloud SQL PostgreSQL, storage/budget alarms, automated backups and supported PITR settings. Create dedicated runtime user without DDL and separate migration role. Select a currently supported PG major and test Drizzle migration compatibility.
 4. **Selected connectivity recommendation, to validate H0–H4:** Cloud SQL public endpoint restricted to the current documented Hyperdrive/Cloudflare source IP ranges, plus temporary named developer `/32` if needed. No `0.0.0.0/0`. Require authenticated encrypted database connections and certificate validation; verify origin CA/server identity settings against current Hyperdrive TLS support. Reject unverified TLS / `rejectUnauthorized:false`. Store origin credentials in Hyperdrive configuration, not browser or repository.
 5. [Cloudflare's Cloud SQL guide](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/postgres-database-providers/google-cloud-sql/) permits restricted ranges; use the authoritative [Hyperdrive networking guide](https://developers.cloudflare.com/hyperdrive/configuration/firewall-and-networking-configuration/) to record the actual current allowlist. This is a public-address design with shared Cloudflare source ranges, **not** private networking or a source identity guarantee. Credentials/TLS remain essential. Review IP-range changes and Cloud SQL allowlist quotas. If policy forbids this topology or certificate compatibility fails, timebox private Workers VPC/managed cloud connectivity feasibility; do not silently open the database or replace PostgreSQL. Any additional connector runs in cloud infrastructure, never a laptop tunnel. This fallback is a schedule risk, not an already verified configuration.
 6. Create Hyperdrive binding `HYPERDRIVE`, **disable query caching**, verify actual remote settings. [Caching is enabled by default](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/); read-after-write tests are an explicit deployment gate. Do not assume SQL writes invalidate all cached selects. Test `pg` with `nodejs_compat` and a pinned compatible Worker date using the [node-postgres integration](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/).
-7. Create private R2 bucket per environment, bind `PHOTOS`. Store upload HMAC secret and Gemini key in Google Secret Manager first; sync their runtime copies into Workers Secrets during deployment. Disable public bucket access. If GCS selected, replace this step with dedicated bucket IAM/service-account design and validated Worker signing, adding time to the estimate.
+7. Create a private Google Cloud Storage bucket per environment. Set `GCS_PHOTOS_BUCKET`, Google federation identity and `MEDIA_SIGNING_SECRET` in Google Secret Manager; sync their operational copies through the existing Worker deployment. Grant the existing Worker identity only bucket-scoped create/get/delete. Enforce public-access prevention and uniform access. Validate immutable uploads and owner/public reads through Worker URLs; no service-account private key or R2 subscription is required.
 8. Enable Firebase Google Sign-in, authorize exact local/staging/custom production domains and OAuth redirect behavior; test from the final hostname, including Safari. Enable email/password only if needed as fallback. Never use one environment's emulator token verifier for another.
-9. Configure Worker `ASSETS`, `HYPERDRIVE`, `PHOTOS`, nonsecret `vars`, `nodejs_compat`, `/api/*` routing and SPA fallback in `wrangler.jsonc`; bindings/secrets explicitly per named environment, not assumed inherited. Deploy static assets and API together; add Cloudflare custom-domain mapping and HTTPS.
+9. Configure Worker `ASSETS` and `HYPERDRIVE`, Google-sourced `GCS_PHOTOS_BUCKET`/federation/signing settings, `nodejs_compat`, `/api/*` routing and SPA fallback. The Worker creates its internal `PHOTOS` storage dependency per request; it is not an R2 binding. Bindings/secrets are explicit per environment, not assumed inherited. Deploy static assets and API together; add Cloudflare custom-domain mapping and HTTPS.
 10. Set MapTiler style/key per environment with allowed HTTP origins. Local, staging and production keys and quotas are separate. Validate tiles from final domain; do not place a server key in the client to bypass restrictions.
 
 ### Environment/secrets matrix
@@ -539,7 +539,7 @@ Current repository-specific setup and activation instructions live in [infra/run
 | `VITE_MAPTILER_KEY`, `VITE_MAP_STYLE_URL` | Local-origin key | Staging-origin key | Custom-domain key |
 | `VITE_API_BASE` | `/api` | `/api` | `/api` |
 | `HYPERDRIVE` | Supported local connection to dev SQL only | Staging binding, no cache | Prod binding, no cache |
-| `PHOTOS` | Local R2 emulation/dev bucket | Private demo bucket | Private prod bucket |
+| `GCS_PHOTOS_BUCKET` | Local test double / approved isolated dev bucket | Private staging GCS bucket | Separate private production GCS bucket |
 | `GEMINI_API_KEY` | Google-sourced ignored local file | Google source → Worker Secret copy | Separate Google source → Worker Secret copy |
 | `MEDIA_SIGNING_SECRET` | Google-sourced ignored local file | Google source → Worker Secret copy | Separate Google source → Worker Secret copy |
 | `GEMINI_MODEL_ID` | Verified configured ID | Same tested ID | Explicitly validated ID |
@@ -709,7 +709,7 @@ Seed balances only through labeled ledger entries; choose catalog prices compati
 | **OPEN: full reporter RP** | `REPORTER_REWARD_RP=40`, initial 10/final 30, divisible by four; snapshot per report | Product, H2 |
 | **OPEN: Yellow RP** | Unset; no live Yellow awards in 48h. P2 requires one approved equal attendee amount | Product, before P2 |
 | **OPEN: Impact Score formula** | Null/unconfigured, no computed points; clearly labeled sample fixture only if needed | Product, before real scoring |
-| **OPEN: R2 vs GCS** | R2 private binding default; do not implement both | Tech lead, H2 |
+| **CONFIRMED: photo storage** | Google Cloud Storage, selected by the user on 2026-10-29; app remains on Cloudflare | C, staging runtime verification |
 | **CONFIRMED: brand name** | **ISKRA**, from Ukrainian **«іскра»** (spark), confirmed by the user on 2026-10-27. Domain choice and visual identity remain OPEN; no domain availability or trademark check has been performed | Product, domain before deployment |
 | Green cleaner RP | Use specified conceptual +50 demo amount; snapshot as `cleaner_rp=50`, not a real payout promise | Product confirms demo usage, H2 |
 | Verifier reuse across stages | Allowed if eligible independently; three distinct users within each stage | Product, H2 |
