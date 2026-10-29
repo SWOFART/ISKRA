@@ -525,3 +525,15 @@ Public `VITE_FIREBASE_API_KEY` and `VITE_MAPTILER_KEY` values remain permitted b
 Regression tests deliberately write server credentials/private keys to a temporary public source map, verify rejection without echoing the value, permit intentional public keys, reject missing/symlinked assets, and verify a failing gate prevents Wrangler from running. The existing PR configuration-test step runs these tests without cloud credentials; actual deployment checks the Google-sourced values before upload. No workflow, cloud value, runtime policy, quota or billing setting is changed by this PR.
 
 This completes one no-secret-build check from plan section13, not the whole task8.6. Provider/storage outage evidence, request-log redaction, cross-user access, rate behavior, the genuine Green slice and physical-device checks remain separate acceptance work. Keep #54 open; this change neither activates media nor claims production security certification.
+
+## Cleanup analysis failure and recovery checks — issue #54, partial
+
+`tests/integration/evidence/analysis.test.ts` now exercises cleanup analysis through the HTTP API with real disposable PostgreSQL schemas. Its seven cleanup cases replace the previous single direct-service binding case. Firebase identity, R2 and Vertex authentication/model responses are explicit test doubles; no cloud database, real resident data, provider quota or billable resource is used.
+
+- Five attached BEFORE and five owned AFTER photos are read in capture order and passed to the model with German instructions, outside SQL transactions. Same-key replay makes no extra storage/model calls; foreign polling returns404. Only explicit cleanup submission attaches the photos and advances to AWAITING_RESOLUTION; neither analysis nor submission awards RP.
+- Provider429, network failure and unsafe ACCEPT output persist FAILED with no result. Response details stay generic; rejected submission creates no cleanup, attachment or reward. Same-key replay stays FAILED without another model call; a fresh key can analyze the retained photos successfully without reviving the failed attempt.
+- BEFORE storage failure and altered AFTER bytes fail before the model call, leaving photos and report state intact. Foreign after-photos, stale GPS and distant GPS are rejected before object/model access and leave no analysis/idempotency rows.
+
+Run `TEST_DATABASE_URL=postgres://iskra_test@127.0.0.1:55432/iskra_test npm run test:integration` against the existing disposable loopback harness. Local verification:95 real-PostgreSQL tests passed,1 intentional invariant probe skipped;376 unit tests, typecheck, application build dry-run and diff-check passed. CI uses the existing full integration job; no workflow or production behavior changes.
+
+This verifies part of task8.6/plan section13, not deployed R2/Vertex failure handling or genuine Green. Request-log redaction, full cross-system acceptance, live storage/model/device evidence and the release gates remain unverified. No new key names or Google/GitHub/Cloudflare settings are required; #54 stays open.
