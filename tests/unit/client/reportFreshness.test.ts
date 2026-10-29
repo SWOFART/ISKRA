@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { compareReportProgress, isStaleReportSnapshot, selectNewerReport } from '../../../src/client/reportFreshness';
+import {
+  compareReportProgress, isNewerReportSnapshot, isStaleReportSnapshot, selectNewerReport,
+} from '../../../src/client/reportFreshness';
 
 function snapshot(overrides: Partial<{
   version: number;
@@ -58,5 +60,14 @@ describe('report snapshot ordering', () => {
     const next = snapshot();
     expect(selectNewerReport(undefined, next)).toBe(next);
     expect(compareReportProgress(next, next)).toBe(0);
+  });
+
+  it('separates the newer- and stale-snapshot predicates in opposite directions', () => {
+    const committed = snapshot({ version: 6, status: 'AWAITING_RESOLUTION', resolutionYesCount: 2 });
+    const stale = snapshot({ version: 6, status: 'AWAITING_EXISTENCE', existenceYesCount: 2, resolutionYesCount: 0 });
+    expect(isNewerReportSnapshot(committed, stale)).toBe(false);
+    expect(isStaleReportSnapshot(committed, stale)).toBe(true);
+    expect(isNewerReportSnapshot(stale, committed)).toBe(true);
+    expect(isStaleReportSnapshot(stale, committed)).toBe(false);
   });
 });

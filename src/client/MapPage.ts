@@ -375,6 +375,7 @@ export function renderMapPage(
     if (cleaned && (detail.afterPhotos.length === 0 || !detail.cleaner)) return detail;
     return {
       ...detail,
+      route: listed.route,
       status: listed.status,
       existenceYesCount: listed.existenceYesCount,
       resolutionYesCount: listed.resolutionYesCount,

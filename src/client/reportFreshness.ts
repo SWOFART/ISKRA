@@ -45,3 +45,8 @@ export function selectNewerReport<T extends ReportProgress>(current: T | undefin
 export function isStaleReportSnapshot(current: ReportProgress, next: ReportProgress): boolean {
   return compareReportProgress(current, next) < 0;
 }
+
+/** True when `next` may replace `current` without losing committed progress. */
+export function isNewerReportSnapshot(current: ReportProgress, next: ReportProgress): boolean {
+  return compareReportProgress(current, next) > 0;
+}
