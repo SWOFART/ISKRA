@@ -1,5 +1,6 @@
 """Read Google-sourced configuration without storing values in GitHub settings."""
 
+import base64
 import html
 import json
 import os
@@ -105,8 +106,24 @@ def assert_public_assets(directory, values):
         identity = json.loads(values["VERTEX_AUTH_JSON"])
         if identity.get("privateKey"):
             secrets.add(identity["privateKey"])
-    patterns = {value.encode() for secret in secrets
-                for value in (secret, json.dumps(secret)[1:-1])}
+    patterns = set()
+    for secret in secrets:
+        values_to_scan = (secret, json.dumps(secret)[1:-1])
+        for value in values_to_scan:
+            encoded = value.encode()
+            patterns.add(encoded)
+            # Long private values can be copied into a bundle after a common
+            # transport encoding. Public keys are excluded above; short values
+            # are left literal-only to avoid matching routine application text.
+            if len(encoded) >= 16:
+                patterns.update({
+                    base64.b64encode(encoded),
+                    base64.urlsafe_b64encode(encoded),
+                    base64.b64encode(encoded).rstrip(b"="),
+                    base64.urlsafe_b64encode(encoded).rstrip(b"="),
+                    encoded.hex().encode(),
+                    encoded.hex().upper().encode(),
+                })
     for path in directory.rglob("*"):
         if path.is_symlink():
             raise ValueError("Public build must not contain symbolic links")
