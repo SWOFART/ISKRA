@@ -298,7 +298,7 @@ export function App(
       }, api, t, locale, mapPageState, (inert) => {
         header.inert = inert;
         tablist.inert = inert;
-      }, setLocale);
+      }, setLocale, session ? () => openSignIn('map') : undefined);
       mapPageState = currentMapPage.state;
       appendElements(panel, currentMapPage.element);
     } else if (selectedTab === 'impact') {
