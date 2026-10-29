@@ -429,6 +429,12 @@ describe('client shell', () => {
     expect(panel?.textContent).toContain('Browser-only demo');
     expect(panel?.querySelector('.rewards-balance-value')?.textContent).toBe('45 RP');
     expect(panel?.querySelectorAll('.rewards-card')).toHaveLength(3);
+    expect(Array.from(panel?.querySelectorAll('.rewards-card-title') ?? [], (item) => item.textContent)).toEqual([
+      '10% off a café drink',
+      'Coffee + apple cake',
+      '15% off a reusable cup',
+    ]);
+    expect(panel?.querySelectorAll('.rewards-card-image')).toHaveLength(3);
     expect(panel?.querySelector('.deferred-card')).toBeNull();
     expect(fixtureResolver).not.toHaveBeenCalled();
     expect(storage.has('iskra:rewards:demo:v1')).toBe(false);

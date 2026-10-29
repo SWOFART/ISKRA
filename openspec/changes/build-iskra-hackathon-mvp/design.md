@@ -242,6 +242,8 @@ On 2026-10-29, after PR #143 was merged, the user explicitly ordered issues #61 
 
 On 2026-10-29, after staging Rewards returned HTTP 500, the user directed the #61 catalog, balance and voucher UI to use a browser-local mock without Rewards API dependencies. It is guest-accessible, starts with 45 demo RP, uses the illustrative 5/15/40 RP catalog, and stores mock receipts only in this browser. The local state does not sync to an account and has no real value. Existing B-owned Rewards endpoints remain separate; this UI override does not verify or activate the staging database, mark M3 complete, or authorize deployment/public release.
 
+On 2026-10-29, the user approved local mock offer examples and generated photos before implementation: 10% off an imaginary café drink (5 RP), coffee with apple cake (15 RP), and 15% off an imaginary reusable cup (40 RP). English and German catalog labels and image alternatives are required. These offers and photos are illustrative only; they create no real merchant relationship, discount, product entitlement, voucher fulfillment, or release evidence.
+
 ## Acceptance Traceability
 
 | Plan requirement | Spec / owner | Evidence to attach at gate |
