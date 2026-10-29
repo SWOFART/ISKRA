@@ -144,7 +144,9 @@ describe('Yellow mission endpoints on PostgreSQL', () => {
         [eligible, envelope.mission.id],
       );
       expect(records.rows[0]).toEqual({ missions: '1', participants: '1' });
-      const stored = await pool.query<{ meeting_lat: number; meeting_lng: number }>(
+      const stored = await pool.query<{
+        meeting_lat: number; meeting_lng: number; report_lat: number; report_lng: number;
+      }>(
         `SELECT m.meeting_lat, m.meeting_lng, r.lat AS report_lat, r.lng AS report_lng
          FROM missions m JOIN reports r ON r.id = m.report_id WHERE m.id = $1::uuid`, [envelope.mission.id],
       );
