@@ -359,7 +359,9 @@ test('captures at most five camera photos, supports retake and explicit discard 
   await expect(dialog.getByRole('button', { name: 'Continue with photos' })).toBeDisabled();
   await expect(dialog.locator('input[type="file"]')).toHaveCount(0);
   await expect(page.locator('.app-header')).toHaveJSProperty('inert', true);
-  await expect(page.locator('.bottom-nav')).toHaveJSProperty('inert', true);
+  // The Map / My Impact / Rewards tabs stay available while the capture
+  // dialog is open, so the user can leave any submenu directly.
+  await expect(page.locator('.bottom-nav')).toHaveJSProperty('inert', false);
   await expect(dialog.locator('video')).toBeVisible();
 
   const shutter = dialog.getByRole('button', { name: 'Take photo', exact: true });

@@ -55,6 +55,7 @@ export interface MapPageState {
   includeResolved: boolean;
   selectedReportId: string | null;
   expandedClusterReportIds: string[] | null;
+  listCollapsed: boolean;
   center: { latitude: number; longitude: number };
   zoom: number;
 }
@@ -66,6 +67,7 @@ function createMapPageState(): MapPageState {
     includeResolved: false,
     selectedReportId: null,
     expandedClusterReportIds: null,
+    listCollapsed: false,
     center: { ...clientDesign.map.center },
     zoom: clientDesign.map.zoom,
   };
@@ -326,7 +328,39 @@ export function renderMapPage(
   const listHeading = makeElement('h2', undefined, t('map.list.heading'));
   listHeading.id = 'map-report-list-heading';
   const listSummary = makeElement('span', 'report-list-summary');
-  appendElements(listHeader, listHeading, listSummary);
+  const listToggleChevron = makeElement('span', 'report-list-toggle-chevron', '▾');
+  const listToggleLabel = makeElement('span', undefined);
+  const listToggle = makeButton('', 'report-list-toggle');
+  listToggle.setAttribute('aria-expanded', 'true');
+  listToggle.setAttribute('aria-controls', 'map-report-list');
+  appendElements(listToggle, listToggleChevron, listToggleLabel);
+  const listHeaderActions = makeElement('div', 'report-list-header-actions');
+  appendElements(listHeaderActions, listSummary, listToggle);
+  appendElements(listHeader, listHeading, listHeaderActions);
+  let listCollapsed = pageState.listCollapsed;
+
+  function updateListToggle(): void {
+    const label = t(listCollapsed ? 'map.list.show' : 'map.list.hide');
+    listToggleLabel.textContent = label;
+    listToggle.setAttribute('aria-label', label);
+    listToggle.setAttribute('aria-expanded', String(!listCollapsed));
+    listToggle.classList.toggle('report-list-toggle--collapsed', listCollapsed);
+  }
+
+  function setListCollapsed(collapsed: boolean): void {
+    listCollapsed = collapsed;
+    pageState.listCollapsed = collapsed;
+    page.classList.toggle('map-page--list-collapsed', collapsed);
+    listPanel.classList.toggle('report-list-fallback--collapsed', collapsed);
+    updateListToggle();
+  }
+
+  listToggle.addEventListener('click', () => setListCollapsed(!listCollapsed));
+  updateListToggle();
+  if (listCollapsed) {
+    page.classList.add('map-page--list-collapsed');
+    listPanel.classList.add('report-list-fallback--collapsed');
+  }
   const clusterDetails = makeElement('section', 'map-cluster-details');
   clusterDetails.setAttribute('aria-label', t('map.clusterDetails.region'));
   clusterDetails.setAttribute('aria-live', 'polite');
@@ -957,15 +991,39 @@ export function renderMapPage(
     pageState.zoom = mapInstance.getZoom();
   }
 
+  /**
+   * Reprojects every rendered marker against the current camera without
+   * rebuilding clusters or the report list. Called continuously while the map
+   * is dragged so markers stay locked to the spot where they were placed.
+   */
+  function updateMarkerPositions(): void {
+    if (!mapInstance || !mapReady || disposed) return;
+    const width = mapViewport.clientWidth || 1000;
+    const height = mapViewport.clientHeight || 700;
+    const markers = markerLayer.querySelectorAll<HTMLElement>('.map-marker');
+    for (const marker of markers) {
+      const lng = marker.dataset.lng;
+      const lat = marker.dataset.lat;
+      if (lng === undefined || lat === undefined) continue;
+      const point = mapInstance.project([Number(lng), Number(lat)]);
+      marker.style.left = `${(point.x / width) * 100}%`;
+      marker.style.top = `${(point.y / height) * 100}%`;
+    }
+  }
+
   function renderReports(): void {
     const visibleReports = reports.filter((report) => report.id === selectedReportId || report.id === highlightedReportId
       || (selectedRoutes.has(report.route) && (includeResolved || report.status !== 'RESOLVED')));
     const mapWidth = mapViewport.clientWidth || 1000;
     const mapHeight = mapViewport.clientHeight || 700;
-    const projectLocation = mapInstance && mapReady
+    // Project every report onto the canvas regardless of the current viewport.
+    // Markers anchored to their geographic position must keep that position
+    // while the map pans and zoom, and simply scroll out of view at the edges
+    // instead of being dropped or clamped against the container.
+    const mapInstanceAtRender = mapInstance;
+    const projectLocation = mapInstanceAtRender && mapReady
       ? (location: Point) => {
-        if (!mapInstance?.getBounds().contains([location.lng, location.lat])) return null;
-        const point = mapInstance.project([location.lng, location.lat]);
+        const point = mapInstanceAtRender.project([location.lng, location.lat]);
         return { x: point.x, y: point.y };
       }
       : undefined;
@@ -991,12 +1049,14 @@ export function renderMapPage(
         cluster.reports.length > 1 ? formatNumber(locale, cluster.reports.length) : '•',
         `map-marker ${cluster.reports.length > 1 ? 'map-marker--cluster' : ''} ${mixedRouteClass}${highlighted ? ' map-marker--highlighted' : ''}`,
       );
-      const marginX = (19 / mapWidth) * 100;
-      const marginY = (19 / mapHeight) * 100;
-      const left = Math.max(marginX, Math.min(100 - marginX, (cluster.x / mapWidth) * 100));
-      const top = Math.max(marginY, Math.min(100 - marginY, (cluster.y / mapHeight) * 100));
-      marker.style.left = `${left}%`;
-      marker.style.top = `${top}%`;
+      marker.style.left = `${(cluster.x / mapWidth) * 100}%`;
+      marker.style.top = `${(cluster.y / mapHeight) * 100}%`;
+      // Geographic anchor so the marker can be reprojected live while the map
+      // is dragged, keeping it locked to the spot where it was placed.
+      const anchorLat = cluster.reports.reduce((sum, item) => sum + item.location.lat, 0) / cluster.reports.length;
+      const anchorLng = cluster.reports.reduce((sum, item) => sum + item.location.lng, 0) / cluster.reports.length;
+      marker.dataset.lat = String(anchorLat);
+      marker.dataset.lng = String(anchorLng);
       marker.setAttribute('aria-label', cluster.reports.length > 1
         ? t('map.clusterLabel', { count: cluster.reports.length, routes: routeSummary })
         : t(highlighted ? 'map.newlyPublishedMarker' : 'map.markerLabel', {
@@ -1275,9 +1335,14 @@ export function renderMapPage(
         if (pendingMapFit) fitMapToReports(pendingMapFit);
         renderReports();
       });
+      instance.on('move', updateMarkerPositions);
       instance.on('moveend', () => {
         rememberMapCamera();
         renderReports();
+      });
+      instance.on('dragstart', () => {
+        // Give the user the full canvas while they explore the map.
+        if (!listCollapsed) setListCollapsed(true);
       });
       resizeObserver = new ResizeObserver(() => instance.resize());
       resizeObserver.observe(mapViewport);
