@@ -1,8 +1,11 @@
-import { ReportDetailSchema, type Photo, type ReportSummary, type Route, type Stage } from '../shared/contracts';
+import { ReportDetailSchema, type CreateMissionRequest, type Mission, type Photo, type ReportSummary, type Route, type Stage } from '../shared/contracts';
 import type { Infer } from '../shared/schema';
+import type { ApiMode } from './api';
 import type { SupportedLocale } from './designTokens';
 import { formatDateTime, type MessageKey, type MessageValues } from './i18n';
+import type { OperationKeyScope } from './operationKey';
 import { renderPhotoGallery, type PhotoGalleryView } from './PhotoGallery';
+import { renderYellowMissionPanel } from './YellowMissionPanel';
 import { isStaleReportSnapshot, selectNewerReport } from './reportFreshness';
 
 type Translate = (key: MessageKey, values?: MessageValues) => string;
@@ -26,6 +29,8 @@ interface VoteFeedback {
 }
 
 export interface ReportSheetOptions {
+  apiMode: ApiMode;
+  currentUserId: string | null;
   t: Translate;
   locale: SupportedLocale;
   onLocaleChange(locale: SupportedLocale): void;
@@ -34,6 +39,10 @@ export interface ReportSheetOptions {
   onVote(reportId: string, stage: Stage, choice: VoteChoice, reportPin: ReportSummary['location']): Promise<VoteSubmissionResult>;
   onCleanup?(report: ReportDetail): void;
   onSignIn?(): void;
+  onLoadMission(reportId: string): Promise<Mission | null>;
+  onCreateMission(reportId: string, input: CreateMissionRequest, operation: OperationKeyScope): Promise<Mission>;
+  onJoinMission(missionId: string): Promise<Mission>;
+  onUpdateMissionAnnouncement(missionId: string, announcement: string): Promise<Mission>;
   refreshPhotos(reportId: string, stage: GalleryStage): Promise<readonly Photo[]>;
   onVisibilityChange(open: boolean): void;
 }
@@ -107,6 +116,17 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
   let pointerStart: number | null = null;
   let galleries: PhotoGalleryView[] = [];
   const voteFeedback = new Map<Stage, VoteFeedback>();
+  const yellowMissionPanel = renderYellowMissionPanel({
+    apiMode: options.apiMode,
+    currentUserId: options.currentUserId,
+    locale: options.locale,
+    t: options.t,
+    onSignIn: options.onSignIn,
+    onLoadMission: options.onLoadMission,
+    onCreateMission: options.onCreateMission,
+    onJoinMission: options.onJoinMission,
+    onUpdateAnnouncement: options.onUpdateMissionAnnouncement,
+  });
 
   const root = makeElement('div', 'report-sheet-layer');
   root.hidden = true;
@@ -180,6 +200,7 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     if (!summary || !detail) { renderLoading(); return; }
     disposeGalleries();
     content.setAttribute('aria-busy', 'false');
+    yellowMissionPanel.setReport(detail);
 
     const route = makeElement('span', `report-route report-route--${detail.route.toLowerCase()}`,
       options.t(routeKey(detail.route)));
@@ -323,6 +344,7 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     content.replaceChildren(overview, progress,
       ...(voteStages.length > 0 || voteFeedback.size > 0 ? [voteSection] : []),
       ...(cleanupSection ? [cleanupSection] : []),
+      ...(detail.route === 'YELLOW' ? [yellowMissionPanel.element] : []),
       beforeGallery.element, afterGallery.element);
   }
 
@@ -353,6 +375,7 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     summary = report;
     detail = null;
     voteFeedback.clear();
+    yellowMissionPanel.reset();
     root.hidden = false;
     options.onVisibilityChange(true);
     setState('partial');
@@ -433,6 +456,7 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     dismiss: () => close(false),
     dispose() {
       close(false);
+      yellowMissionPanel.dispose();
       root.parentNode?.removeChild(root);
     },
   };

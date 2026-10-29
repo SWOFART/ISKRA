@@ -17,6 +17,7 @@ import { withTestDatabase } from '../auth/postgres';
 const migrations = await Promise.all([
   readFile(new URL('../../../migrations/0001_p0_core.sql', import.meta.url), 'utf8'),
   readFile(new URL('../../../migrations/0004_demo_rewards.sql', import.meta.url), 'utf8'),
+  readFile(new URL('../../../migrations/0005_demo_rewards_runtime_privileges.sql', import.meta.url), 'utf8'),
 ]);
 
 async function installSchema(pool: Pool) {
@@ -31,6 +32,23 @@ async function installSchema(pool: Pool) {
   } finally {
     client.release();
   }
+}
+
+async function withRewardsDatabase<T>(run: (pool: Pool) => Promise<T>): Promise<T> {
+  return withTestDatabase(async (pool) => {
+    // CI and the documented local integration database are disposable; create
+    // staging's exact runtime role so the migration's ACLs are exercised.
+    await pool.query('CREATE ROLE iskra_runtime NOLOGIN');
+    try {
+      await installSchema(pool);
+      return await run(pool);
+    } finally {
+      // This role is created only by this helper; revoke its generated-schema
+      // grants and remove it even when an assertion or migration fails.
+      await pool.query('DROP OWNED BY iskra_runtime');
+      await pool.query('DROP ROLE iskra_runtime');
+    }
+  });
 }
 
 async function createUser(pool: Pool, id: string, balance = 0) {
@@ -107,9 +125,41 @@ async function counts(pool: Pool, actorId: string) {
 }
 
 describe('atomic demo reward redemption', () => {
+  it('grants the runtime only catalog reads and voucher reads/inserts', () =>
+    withRewardsDatabase(async (pool) => {
+      const { rows } = await pool.query<{
+        catalog_read: boolean;
+        catalog_insert: boolean;
+        catalog_update: boolean;
+        catalog_delete: boolean;
+        voucher_read: boolean;
+        voucher_insert: boolean;
+        voucher_update: boolean;
+        voucher_delete: boolean;
+      }>(
+        `SELECT has_table_privilege('iskra_runtime', 'reward_catalog', 'SELECT') AS catalog_read,
+           has_table_privilege('iskra_runtime', 'reward_catalog', 'INSERT') AS catalog_insert,
+           has_table_privilege('iskra_runtime', 'reward_catalog', 'UPDATE') AS catalog_update,
+           has_table_privilege('iskra_runtime', 'reward_catalog', 'DELETE') AS catalog_delete,
+           has_table_privilege('iskra_runtime', 'user_vouchers', 'SELECT') AS voucher_read,
+           has_table_privilege('iskra_runtime', 'user_vouchers', 'INSERT') AS voucher_insert,
+           has_table_privilege('iskra_runtime', 'user_vouchers', 'UPDATE') AS voucher_update,
+           has_table_privilege('iskra_runtime', 'user_vouchers', 'DELETE') AS voucher_delete`,
+      );
+      expect(rows[0]).toEqual({
+        catalog_read: true,
+        catalog_insert: false,
+        catalog_update: false,
+        catalog_delete: false,
+        voucher_read: true,
+        voucher_insert: true,
+        voucher_update: false,
+        voucher_delete: false,
+      });
+    }));
+
   it('lists active demo items without exposing storage keys or caching the catalog', () =>
-    withTestDatabase(async (pool) => {
-      await installSchema(pool);
+    withRewardsDatabase(async (pool) => {
       const activeId = await createCatalogItem(pool, { imageKey: 'private/reward-image-key' });
       await createCatalogItem(pool, { title: 'Inactive demo item', active: false });
       const app = createApp(pool);
@@ -133,8 +183,7 @@ describe('atomic demo reward redemption', () => {
     }));
 
   it('debits once, replays the same voucher with the current balance and rejects a changed accepted payload', () =>
-    withTestDatabase(async (pool) => {
-      await installSchema(pool);
+    withRewardsDatabase(async (pool) => {
       const actor = 'reward-idempotency-resident';
       await createUser(pool, actor, 50);
       const itemId = await createCatalogItem(pool, { costRp: 20 });
@@ -176,8 +225,7 @@ describe('atomic demo reward redemption', () => {
     }));
 
   it('does not claim a stale-price key and permits explicit reconfirmation after refresh', () =>
-    withTestDatabase(async (pool) => {
-      await installSchema(pool);
+    withRewardsDatabase(async (pool) => {
       const actor = 'reward-price-resident';
       await createUser(pool, actor, 100);
       const itemId = await createCatalogItem(pool, { costRp: 20 });
@@ -199,8 +247,7 @@ describe('atomic demo reward redemption', () => {
     }));
 
   it('serializes different-key purchases so two concurrent redemptions cannot overspend', () =>
-    withTestDatabase(async (pool) => {
-      await installSchema(pool);
+    withRewardsDatabase(async (pool) => {
       const actor = 'reward-race-resident';
       await createUser(pool, actor, 40);
       const itemId = await createCatalogItem(pool, { costRp: 40 });
@@ -217,8 +264,7 @@ describe('atomic demo reward redemption', () => {
     }));
 
   it('denies insufficient and negative balances without clamping or creating any receipt', () =>
-    withTestDatabase(async (pool) => {
-      await installSchema(pool);
+    withRewardsDatabase(async (pool) => {
       const itemId = await createCatalogItem(pool, { costRp: 10 });
       const app = createApp(pool);
       for (const [actor, balance] of [['reward-poor-resident', 5], ['reward-negative-resident', -3]] as const) {
@@ -231,8 +277,7 @@ describe('atomic demo reward redemption', () => {
     }));
 
   it('keeps vouchers private to their authenticated owner and requires auth', () =>
-    withTestDatabase(async (pool) => {
-      await installSchema(pool);
+    withRewardsDatabase(async (pool) => {
       const owner = 'reward-voucher-owner';
       const other = 'reward-voucher-other';
       await createUser(pool, owner, 30);
