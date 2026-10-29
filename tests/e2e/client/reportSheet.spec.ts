@@ -170,7 +170,9 @@ test('opens the report sheet with stage labels and supports keyboard, touch and 
   await expect(sheet).toContainText('Cleanup verification: 2/3');
   await expect(page.getByRole('button', { name: 'Close report details' })).toBeFocused();
   await expect(page.locator('.app-header')).toHaveJSProperty('inert', true);
-  await expect(page.locator('.bottom-nav')).toHaveJSProperty('inert', true);
+  // The Map / My Impact / Rewards tabs stay available while the sheet is
+  // open, so the user can leave the report submenu directly.
+  await expect(page.locator('.bottom-nav')).toHaveJSProperty('inert', false);
 
   const lastSheetButton = page.locator('.photo-gallery-open').last();
   await lastSheetButton.focus();
@@ -222,6 +224,30 @@ test('keeps the selected report open and its authored description unchanged when
   await expect(germanSheet).toContainText('Reinigungsprüfung: 2/3');
   await expect(germanSheet.locator('.report-detail-description')).toHaveText(authoredDescription);
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
+});
+
+test('switches to Map, My Impact and Rewards tabs from the open report sheet', async ({ page }) => {
+  const detail = makeReportDetail();
+  await stubReportApi(page, () => detail);
+  await page.goto('/map');
+
+  await page.locator('.map-marker').click();
+  await expect(page.getByRole('dialog', { name: 'Report details' })).toBeVisible();
+
+  // The bottom navigation stays available while the sheet is open, so the
+  // user can leave the report submenu and switch to any other tab directly.
+  const bottomNav = page.locator('.bottom-nav');
+  await expect(bottomNav).toHaveJSProperty('inert', false);
+  await page.getByRole('tab', { name: 'My Impact' }).click();
+  await expect(page.getByRole('tab', { name: 'My Impact' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('dialog', { name: 'Report details' })).toBeHidden();
+
+  await page.getByRole('tab', { name: 'Rewards' }).click();
+  await expect(page.getByRole('tab', { name: 'Rewards' })).toHaveAttribute('aria-selected', 'true');
+
+  await page.getByRole('tab', { name: 'Map' }).click();
+  await expect(page.getByRole('tab', { name: 'Map' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.report-list-item')).toHaveCount(1);
 });
 
 test('keeps one- and five-photo galleries independent with swipe and full-screen navigation', async ({ page }) => {

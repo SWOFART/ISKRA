@@ -576,8 +576,10 @@ export function App(
           notice.hidden = false;
         }
       }, api, t, locale, mapPageState, (inert) => {
+        // Keep the Map / My Impact / Rewards tabs available from every overlay
+        // (report sheet, photo capture, submission flows) so the user can leave
+        // any submenu directly; only the header becomes inert while one is open.
         header.inert = inert;
-        tablist.inert = inert;
       }, setLocale, session ? () => openSignIn('map') : undefined, () => activateTab('impact', true));
       mapPageState = currentMapPage.state;
       appendElements(panel, currentMapPage.element);
