@@ -83,7 +83,7 @@ def validate_config(raw, template, environment, target):
             if (not values.get("HYPERDRIVE_ID") or not values.get("VERTEX_AUTH_JSON")
                     or len(values.get("MEDIA_SIGNING_SECRET", "").encode()) < 32):
                 raise ValueError("Cloud Storage requires Hyperdrive, Google identity and a media signing secret of at least 32 bytes")
-            if values["GCS_PHOTOS_BUCKET"] != f"iskra-{identity['projectId']}-{environment}-photos":
+            if values["GCS_PHOTOS_BUCKET"] != f"{identity['projectId']}-{environment}-photos":
                 raise ValueError("GCS_PHOTOS_BUCKET must match the Google project and deployment environment")
         if environment == "production" and values.get("DEMO_DATA") != "false":
             raise ValueError("Production requires DEMO_DATA=false")

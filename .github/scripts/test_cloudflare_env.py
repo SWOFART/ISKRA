@@ -121,14 +121,14 @@ class CloudConfigurationTests(unittest.TestCase):
             "APP_ENV": "staging", "FIREBASE_PROJECT_ID": "sample-project",
             "VITE_FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_API_KEY": "browser-key",
             "VITE_FIREBASE_AUTH_DOMAIN": "sample-project.firebaseapp.com", "VITE_FIREBASE_APP_ID": "sample-app",
-            "VITE_MAPTILER_KEY": "map-key", "GCS_PHOTOS_BUCKET": "iskra-sample-project-staging-photos",
+            "VITE_MAPTILER_KEY": "map-key", "GCS_PHOTOS_BUCKET": "sample-project-staging-photos",
             "HYPERDRIVE_ID": "a" * 32, "MEDIA_SIGNING_SECRET": "sample-signing-key-at-least-32-bytes",
             "VERTEX_AUTH_JSON": json.dumps({"environment": "staging", "issuer": "https://app.example.test",
                 "projectId": "sample-project", "audience": "test-audience", "subject": "worker",
                 "serviceAccountEmail": "test-account", "privateKey": "test-only-key", "keyId": "test-only-id"}),
         }
         self.assertEqual(validate_config(json.dumps(values), self.template, "staging", "application"), values)
-        for change in ({"GCS_PHOTOS_BUCKET": "iskra-sample-project-production-photos"},
+        for change in ({"GCS_PHOTOS_BUCKET": "sample-project-production-photos"},
                        {"GCS_PHOTOS_BUCKET": "foreign-bucket"}, {"MEDIA_SIGNING_SECRET": "short"},
                        {"VERTEX_AUTH_JSON": ""}, {"HYPERDRIVE_ID": ""}):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, "Cloud Storage|GCS_PHOTOS_BUCKET"):
@@ -207,7 +207,7 @@ class CloudConfigurationTests(unittest.TestCase):
             "VITE_FIREBASE_APP_ID": "sample-app",
             "VITE_MAPTILER_KEY": "sample-map-key", "MIGRATION_DATABASE_URL": "postgres://operator",
             "HYPERDRIVE_ID": "a" * 32,
-            "GCS_PHOTOS_BUCKET": "iskra-sample-project-staging-photos",
+            "GCS_PHOTOS_BUCKET": "sample-project-staging-photos",
         }
         with tempfile.TemporaryDirectory() as directory:
             env = os.environ | {
