@@ -319,7 +319,12 @@ export function renderPhotoGallery(options: PhotoGalleryOptions): PhotoGalleryVi
     element,
     updatePhotos(nextPhotos) {
       const currentId = currentPhoto()?.id;
+      const sameContent = photos.length === nextPhotos.length
+        && photos.every((photo, index) => photo.id === nextPhotos[index].id && photo.ordinal === nextPhotos[index].ordinal);
       photos = [...nextPhotos];
+      // Keep an already displayed immutable image; future opens use the renewed URL.
+      if (sameContent && (!currentId || !failedPhotoIds.has(currentId))
+        && (photos.length === 0 || figure.querySelector('.photo-gallery-image'))) return;
       const nextIndex = photos.findIndex(({ id }) => id === currentId);
       selectedIndex = nextIndex >= 0 ? nextIndex : Math.min(selectedIndex, Math.max(photos.length - 1, 0));
       render();

@@ -47,9 +47,14 @@ export interface ReportSheetView {
   dispose(): void;
 }
 
-/** Compares the rendered report detail, ignoring object identity. */
+/** Signed URLs rotate even when immutable photo content has not changed. */
 function sameReportDetail(current: ReportDetail, next: ReportDetail): boolean {
-  return JSON.stringify(current) === JSON.stringify(next);
+  const content = ({ beforePhotos, afterPhotos, ...report }: ReportDetail) => ({
+    ...report,
+    beforePhotos: beforePhotos.map(({ id, ordinal }) => ({ id, ordinal })),
+    afterPhotos: afterPhotos.map(({ id, ordinal }) => ({ id, ordinal })),
+  });
+  return JSON.stringify(content(current)) === JSON.stringify(content(next));
 }
 
 function makeElement<K extends keyof HTMLElementTagNameMap>(
@@ -414,9 +419,13 @@ export function renderReportSheet(options: ReportSheetOptions): ReportSheetView 
     setDetail(nextDetail) {
       if (!summary || nextDetail.id !== summary.id) return;
       if (detail && isStaleReportSnapshot(detail, nextDetail)) return;
-      // Background refresh must not rebuild galleries (and drop a full-screen
-      // photo or the focused control) while the payload stays unchanged.
-      if (detail && sameReportDetail(detail, nextDetail)) return;
+      // Renew capabilities without replacing the rendered photos or focus.
+      if (detail && galleries.length === 2 && sameReportDetail(detail, nextDetail)) {
+        detail = nextDetail;
+        galleries[0].updatePhotos(nextDetail.beforePhotos);
+        galleries[1].updatePhotos(nextDetail.afterPhotos);
+        return;
+      }
       detail = nextDetail;
       renderDetail();
     },

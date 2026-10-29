@@ -484,6 +484,7 @@ export function renderMapPage(
     onClose: (reportId) => {
       clearSheetRefreshTimer();
       detailLoadGeneration += 1;
+      sheetRefreshInFlight = false;
       selectedReportId = null;
       pageState.selectedReportId = null;
       if (externallyOpenedReport?.id === reportId) {
@@ -817,6 +818,8 @@ export function renderMapPage(
 
   async function loadReportDetail(reportId: string, silent = false): Promise<void> {
     const generation = ++detailLoadGeneration;
+    clearSheetRefreshTimer();
+    sheetRefreshInFlight = true;
     try {
       const response = await api.request({
         path: `/reports/${reportId}`,
@@ -825,15 +828,18 @@ export function renderMapPage(
       if (generation !== detailLoadGeneration || selectedReportId !== reportId) return;
       reportSheet.setDetail(mergeReportDetail(response.data));
     } catch (error) {
-      // A background refresh keeps the committed detail visible instead of
-      // replacing it with an error while the sheet stays open.
-      if (silent) {
-        if (error instanceof ApiClientError && error.retryAfterMs) {
-          sheetRefreshNotBefore = Date.now() + Math.min(error.retryAfterMs, 2_147_483_647);
-        }
-        return;
+      if (generation !== detailLoadGeneration || selectedReportId !== reportId) return;
+      if (error instanceof ApiClientError && error.retryAfterMs) {
+        sheetRefreshNotBefore = Date.now() + Math.min(error.retryAfterMs, 2_147_483_647);
       }
-      if (generation === detailLoadGeneration && selectedReportId === reportId) reportSheet.setError();
+      // Background failure keeps the committed detail visible.
+      if (!silent) reportSheet.setError();
+    } finally {
+      // An older request must not clear a newer selection's in-flight guard.
+      if (generation === detailLoadGeneration) {
+        sheetRefreshInFlight = false;
+        scheduleSheetRefresh();
+      }
     }
   }
 
@@ -860,13 +866,11 @@ export function renderMapPage(
   async function refreshOpenSheet(): Promise<void> {
     const reportId = selectedReportId;
     if (!reportId || sheetRefreshInFlight || !sheetRefreshAllowed()) return;
-    sheetRefreshInFlight = true;
-    try {
-      await loadReportDetail(reportId, true);
-    } finally {
-      sheetRefreshInFlight = false;
+    if (Date.now() < sheetRefreshNotBefore) {
       scheduleSheetRefresh();
+      return;
     }
+    await loadReportDetail(reportId, true);
   }
 
   function handleSheetRefreshSignal(): void {
@@ -1038,6 +1042,8 @@ export function renderMapPage(
       pageState.selectedReportId = null;
       pageState.expandedClusterReportIds = null;
       detailLoadGeneration += 1;
+      sheetRefreshInFlight = false;
+      clearSheetRefreshTimer();
       reportSheet.dismiss();
     }
     fixtureBanner.hidden = true;
