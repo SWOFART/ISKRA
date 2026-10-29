@@ -4,6 +4,7 @@ import {
 import { ApiClientError, createClientApi } from './api';
 import { errorMessageKey, formatDateTime, formatNumber, type MessageKey, type MessageValues } from './i18n';
 import type { SupportedLocale } from './designTokens';
+import { compareReportProgress } from './reportFreshness';
 
 type ClientApi = ReturnType<typeof createClientApi>;
 type ImpactRole = Impact['items'][number]['roles'][number];
@@ -87,7 +88,7 @@ function mergeImpact(current: Impact, incoming: Impact, append: boolean): Impact
   const items = new Map(baseItems.map((item) => [item.report.id, item]));
   for (const item of extraItems) {
     const existing = items.get(item.report.id);
-    if (!existing || item.report.version > existing.report.version) items.set(item.report.id, item);
+    if (!existing || compareReportProgress(existing.report, item.report) < 0) items.set(item.report.id, item);
   }
   return { ...(newerAccount ? incoming : current), items: [...items.values()], nextCursor: incoming.nextCursor };
 }

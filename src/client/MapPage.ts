@@ -10,6 +10,7 @@ import { renderPhotoCapture, type CapturedPhoto, type CaptureStage } from './Pho
 import { renderCleanupSubmission } from './CleanupSubmission';
 import { renderReportSubmission, type ReportSubmissionView } from './ReportSubmission';
 import { renderReportSheet, type VoteChoice, type VoteSubmissionResult } from './ReportSheet';
+import { compareReportProgress, selectNewerReport } from './reportFreshness';
 import { createOperationKeyScope, type OperationKeyScope } from './operationKey';
 import {
   captureFreshCleanupLocation,
@@ -31,6 +32,8 @@ const routeKeys: Record<Route, MessageKey> = {
   RED: 'map.route.red',
 };
 const defaultMapStyleUrl = 'https://api.maptiler.com/maps/streets-v4/style.json';
+/** Plan §7 assumption: refresh an open report sheet every 5 seconds while the tab is visible. */
+const openSheetRefreshIntervalMs = 5_000;
 
 export interface MapPageView {
   element: HTMLElement;
@@ -353,15 +356,37 @@ export function renderMapPage(
   interface VoteAttempt { operation: OperationKeyScope; body: ReturnType<typeof VoteRequestSchema.parse>; }
   const reportDetails = new Map<string, ReportDetail>();
   const voteAttempts = new Map<string, VoteAttempt>();
+  let sheetRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let sheetRefreshInFlight = false;
+  let sheetRefreshNotBefore = 0;
+
+  /**
+   * Keeps the lifecycle fields of an already listed, more advanced summary while
+   * retaining this response's evidence and viewer permissions. A delayed detail
+   * payload therefore cannot show `2/3` after the map already shows `3/3`.
+   */
+  function keepCommittedProgress(detail: ReportDetail, listed: ReportSummary): ReportDetail {
+    if (compareReportProgress(listed, detail) >= 0) return detail;
+    return {
+      ...detail,
+      status: listed.status,
+      existenceYesCount: listed.existenceYesCount,
+      resolutionYesCount: listed.resolutionYesCount,
+      existenceVerifiedAt: listed.existenceVerifiedAt,
+      lastExistenceConfirmedAt: listed.lastExistenceConfirmedAt,
+      version: listed.version,
+      updatedAt: listed.updatedAt,
+    };
+  }
 
   function mergeReportDetail(incoming: ReportDetail): ReportDetail {
     const cached = reportDetails.get(incoming.id);
     const listed = reports.find(({ id }) => id === incoming.id);
-    const floor = Math.max(cached?.version ?? -1, listed?.version ?? -1);
-    const detail = incoming.version < floor && cached && cached.version >= floor ? cached : incoming;
-    if (detail.version >= (cached?.version ?? -1)) reportDetails.set(detail.id, detail);
+    const newestKnown = selectNewerReport(cached, incoming);
+    const detail = listed ? keepCommittedProgress(newestKnown, listed) : newestKnown;
+    if (!cached || compareReportProgress(cached, detail) >= 0) reportDetails.set(detail.id, detail);
     const nextSummary = summaryFromDetail(detail);
-    if (!listed || nextSummary.version >= listed.version) {
+    if (!listed || compareReportProgress(listed, nextSummary) >= 0) {
       reports = reports.map((report) => report.id === detail.id ? nextSummary : report);
       if (highlightedReport?.id === detail.id) highlightedReport = nextSummary;
       if (externallyOpenedReport?.id === detail.id) externallyOpenedReport = nextSummary;
@@ -450,6 +475,7 @@ export function renderMapPage(
     locale,
     onLocaleChange: (nextLocale) => onLocaleChange?.(nextLocale),
     onClose: (reportId) => {
+      clearSheetRefreshTimer();
       detailLoadGeneration += 1;
       selectedReportId = null;
       pageState.selectedReportId = null;
@@ -782,7 +808,7 @@ export function renderMapPage(
     });
   }
 
-  async function loadReportDetail(reportId: string): Promise<void> {
+  async function loadReportDetail(reportId: string, silent = false): Promise<void> {
     const generation = ++detailLoadGeneration;
     try {
       const response = await api.request({
@@ -791,10 +817,61 @@ export function renderMapPage(
       });
       if (generation !== detailLoadGeneration || selectedReportId !== reportId) return;
       reportSheet.setDetail(mergeReportDetail(response.data));
-    } catch {
+    } catch (error) {
+      // A background refresh keeps the committed detail visible instead of
+      // replacing it with an error while the sheet stays open.
+      if (silent) {
+        if (error instanceof ApiClientError && error.retryAfterMs) {
+          sheetRefreshNotBefore = Date.now() + Math.min(error.retryAfterMs, 2_147_483_647);
+        }
+        return;
+      }
       if (generation === detailLoadGeneration && selectedReportId === reportId) reportSheet.setError();
     }
   }
+
+  function clearSheetRefreshTimer(): void {
+    if (sheetRefreshTimer === undefined) return;
+    clearTimeout(sheetRefreshTimer);
+    sheetRefreshTimer = undefined;
+  }
+
+  function sheetRefreshAllowed(): boolean {
+    return !disposed && selectedReportId !== null
+      && (typeof document === 'undefined' || document.visibilityState !== 'hidden');
+  }
+
+  function scheduleSheetRefresh(): void {
+    if (sheetRefreshTimer !== undefined || sheetRefreshInFlight || !sheetRefreshAllowed()) return;
+    const delayMs = Math.max(openSheetRefreshIntervalMs, sheetRefreshNotBefore - Date.now());
+    sheetRefreshTimer = setTimeout(() => {
+      sheetRefreshTimer = undefined;
+      void refreshOpenSheet();
+    }, delayMs);
+  }
+
+  async function refreshOpenSheet(): Promise<void> {
+    const reportId = selectedReportId;
+    if (!reportId || sheetRefreshInFlight || !sheetRefreshAllowed()) return;
+    sheetRefreshInFlight = true;
+    try {
+      await loadReportDetail(reportId, true);
+    } finally {
+      sheetRefreshInFlight = false;
+      scheduleSheetRefresh();
+    }
+  }
+
+  function handleSheetRefreshSignal(): void {
+    clearSheetRefreshTimer();
+    if (!sheetRefreshAllowed()) return;
+    void refreshOpenSheet();
+  }
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener?.('visibilitychange', handleSheetRefreshSignal);
+  }
+  if (typeof window !== 'undefined') window.addEventListener?.('focus', handleSheetRefreshSignal);
 
   function selectReport(report: ReportSummary, fit = false): void {
     if (fit) fitMapToReports([report]);
@@ -803,6 +880,8 @@ export function renderMapPage(
     reportSheet.open(report);
     renderReports();
     void loadReportDetail(report.id);
+    clearSheetRefreshTimer();
+    scheduleSheetRefresh();
   }
 
   function rememberMapCamera(): void {
@@ -1153,6 +1232,12 @@ export function renderMapPage(
 
   function disposeMap(): void {
     disposed = true;
+    clearSheetRefreshTimer();
+    sheetRefreshInFlight = false;
+    if (typeof document !== 'undefined') {
+      document.removeEventListener?.('visibilitychange', handleSheetRefreshSignal);
+    }
+    if (typeof window !== 'undefined') window.removeEventListener?.('focus', handleSheetRefreshSignal);
     for (const { operation } of voteAttempts.values()) operation.complete();
     voteAttempts.clear();
     loadGeneration += 1;
