@@ -46,6 +46,8 @@ button {
   width: min(100%, 760px);
   min-height: 100vh;
   min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   margin: 0 auto;
   overflow: hidden;
   background: var(--client-color-surface);
@@ -886,6 +888,8 @@ button {
   .app-shell {
     min-height: calc(100vh - 48px);
     min-height: calc(100dvh - 48px);
+    height: calc(100vh - 48px);
+    height: calc(100dvh - 48px);
     border: 1px solid var(--client-color-border);
     border-radius: var(--client-radius-sheet);
   }
@@ -909,6 +913,8 @@ button {
   overflow-y: auto;
   padding: 18px 16px calc(24px + env(safe-area-inset-bottom, 0px));
   overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .impact-page h1,
