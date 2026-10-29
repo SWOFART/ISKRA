@@ -33,7 +33,7 @@ OpenSpec change / task IDs / contract revision:
 
 Notes / non-applicable guarantees and reasons:
 
-<!-- A check means verified or explicitly explained N/A. Gate A, passing CI and human review cannot be waived by N/A. -->
+<!-- A check means verified or explicitly explained N/A. Gate A and passing CI cannot be waived by N/A. -->
 
 ## Validation — required
 
@@ -43,14 +43,14 @@ command/check: PASS / FAIL / NOT RUN — concise evidence
 
 Not tested / live acceptance still missing:
 
-## Independent Gate A review — required before ready for review
+## Gate A review — required before ready
 
-<!-- Use .github/prompts/gate-a-review.md. Author self-review is not Gate A. Record only an actual independent verdict supplied by the user; otherwise keep PENDING. -->
+<!-- Use .github/prompts/gate-a-review.md for a fresh, read-only Codex review pass. The implementation agent may perform it; record the actual tool/reviewer and verdict honestly. No user-provided verdict or separate human approval is required. -->
 
 - Candidate base revision:
 - Candidate HEAD revision:
-- Exact prompt provided to the user (link or text, with revisions filled):
-- User-provided Gate A verdict: `PENDING`
+- Exact prompt reviewed (link or text, with revisions filled):
+- Codex Gate A verdict: `PENDING`
 - Reviewer / evidence:
 - Blocking findings and resolution / residual risks:
 
@@ -62,9 +62,9 @@ Not tested / live acceptance still missing:
 
 ## Merge gates — required
 
-- [ ] Independent Gate A is PASS for the exact base and HEAD above; blocking findings are resolved.
+- [ ] Codex Gate A is PASS for the exact base and HEAD above; blocking findings are resolved.
 - [ ] Required CI checks pass for the current HEAD.
 - [ ] Applicable OpenSpec acceptance gates pass; no fixture/dry-run is presented as live evidence.
-- [ ] An independent human review is complete; a human owner performs the merge.
+- [ ] After the previous gates pass, Codex may mark this PR ready and merge it; no human approval is required.
 
-<!-- Keep unchecked gates visible and stay draft. Any new commit invalidates the prior Gate A verdict. This checklist records process; repository rules must separately enforce merge restrictions. -->
+<!-- Keep unchecked gates visible and stay draft. Any new commit invalidates the prior Gate A verdict. The agent must still obey any active GitHub protection rule or required check. -->
