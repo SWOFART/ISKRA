@@ -10,13 +10,16 @@ import { apiSecurity } from '../../../src/worker/middleware/security';
 import { createDomainRoutes } from '../../../src/worker/routes/domain';
 import { withTestDatabase } from '../auth/postgres';
 
-const migration = await readFile(new URL('../../../migrations/0001_p0_core.sql', import.meta.url), 'utf8');
+const migrations = await Promise.all([
+  readFile(new URL('../../../migrations/0001_p0_core.sql', import.meta.url), 'utf8'),
+  readFile(new URL('../../../migrations/0004_demo_rewards.sql', import.meta.url), 'utf8'),
+]);
 
 async function installSchema(pool: Pool) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(migration);
+    for (const migration of migrations) await client.query(migration);
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -207,8 +210,22 @@ describe('PostgreSQL resident Impact projection', () => {
       expect(body.items.some((item) => item.report.id === demoReport)).toBe(false);
       expect(body).not.toHaveProperty('votes');
 
-      // A later balance debit changes spendable RP, not the immutable credit history.
-      await pool.query('UPDATE users SET rp_balance = 12, version = 10 WHERE id = $1', ['impact-resident']);
+      // A real redemption changes spendable RP, not the immutable positive category earnings.
+      const catalog = await pool.query<{ id: string }>(
+        `INSERT INTO reward_catalog (title, description, cost_rp)
+         VALUES ('Demo item', 'No real-world value.', 23) RETURNING id`,
+      );
+      const redemption = await app.request(`/api/rewards/${catalog.rows[0].id}/redeem`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer impact-resident',
+          'Content-Type': 'application/json',
+          'Idempotency-Key': crypto.randomUUID(),
+        },
+        body: JSON.stringify({ confirmedCostRp: 23 }),
+      }, { FIREBASE_PROJECT_ID: 'impact-test-project' });
+      expect(redemption.status).toBe(201);
+      expect(await redemption.json()).toMatchObject({ balance: 12, rpDebited: 23 });
       const afterRedemption = ImpactSchema.parse(await (await getImpact(app)).json());
       expect(afterRedemption.totals).toEqual({ earnedRp: 80, balanceRp: 12 });
       expect(afterRedemption.verification).toEqual({ acceptedVotes: 3, confirmedReports: 1, earnedRp: 15 });
