@@ -1,7 +1,10 @@
+import type { PhotoStorage } from '../services/photo-storage';
+
 export type WorkerEnv = {
   Bindings: {
     ASSETS?: Fetcher;
-    PHOTOS?: R2Bucket;
+    PHOTOS?: PhotoStorage;
+    GCS_PHOTOS_BUCKET?: string;
     FIREBASE_PROJECT_ID?: string;
     MEDIA_SIGNING_SECRET?: string;
     VERTEX_AUTH_JSON?: string;

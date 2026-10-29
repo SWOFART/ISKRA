@@ -116,6 +116,29 @@ class CloudConfigurationTests(unittest.TestCase):
             validate_config(json.dumps(values | {"VERTEX_AUTH_JSON": "{invalid"}),
                             self.template, "staging", "application")
 
+    def test_google_photo_storage_requires_matching_environment_identity_and_signing(self):
+        values = json.loads(self.valid()) | {
+            "APP_ENV": "staging", "FIREBASE_PROJECT_ID": "sample-project",
+            "VITE_FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_API_KEY": "browser-key",
+            "VITE_FIREBASE_AUTH_DOMAIN": "sample-project.firebaseapp.com", "VITE_FIREBASE_APP_ID": "sample-app",
+            "VITE_MAPTILER_KEY": "map-key", "GCS_PHOTOS_BUCKET": "sample-project-staging-photos",
+            "HYPERDRIVE_ID": "a" * 32, "MEDIA_SIGNING_SECRET": "sample-signing-key-at-least-32-bytes",
+            "VERTEX_AUTH_JSON": json.dumps({"environment": "staging", "issuer": "https://app.example.test",
+                "projectId": "sample-project", "audience": "test-audience", "subject": "worker",
+                "serviceAccountEmail": "test-account", "privateKey": "test-only-key", "keyId": "test-only-id"}),
+        }
+        self.assertEqual(validate_config(json.dumps(values), self.template, "staging", "application"), values)
+        prefixed = values | {
+            "GCS_PHOTOS_BUCKET": "iskra-512914-staging-photos",
+            "VERTEX_AUTH_JSON": json.dumps(json.loads(values["VERTEX_AUTH_JSON"]) | {"projectId": "iskra-512914"}),
+        }
+        self.assertEqual(validate_config(json.dumps(prefixed), self.template, "staging", "application"), prefixed)
+        for change in ({"GCS_PHOTOS_BUCKET": "sample-project-production-photos"},
+                       {"GCS_PHOTOS_BUCKET": "foreign-bucket"}, {"MEDIA_SIGNING_SECRET": "short"},
+                       {"VERTEX_AUTH_JSON": ""}, {"HYPERDRIVE_ID": ""}):
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "Cloud Storage|GCS_PHOTOS_BUCKET"):
+                validate_config(json.dumps(values | change), self.template, "staging", "application")
+
     def test_malformed_hyperdrive_identifier_is_rejected_before_deploy(self):
         with self.assertRaisesRegex(ValueError, "HYPERDRIVE_ID"):
             validate_config(self.valid(HYPERDRIVE_ID="../wrong"), self.template, "staging", "application")
@@ -183,12 +206,13 @@ class CloudConfigurationTests(unittest.TestCase):
     def test_preparation_excludes_deployment_and_migration_keys_from_worker(self):
         values = json.loads(self.valid()) | {
             "APP_ENV": "staging", "VERTEX_AUTH_JSON": json.dumps({"environment": "staging", "issuer": "https://app.example.test", "projectId": "sample-project", "audience": "test-audience", "subject": "worker", "serviceAccountEmail": "test-account", "privateKey": "test-only-key", "keyId": "test-only-id"}),
-            "MEDIA_SIGNING_SECRET": "sample-signing-key", "GEMINI_MODEL_ID": "sample-model",
+            "MEDIA_SIGNING_SECRET": "sample-signing-key-at-least-32-bytes", "GEMINI_MODEL_ID": "sample-model",
             "FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_API_KEY": "sample-browser-key",
             "VITE_FIREBASE_PROJECT_ID": "sample-project", "VITE_FIREBASE_AUTH_DOMAIN": "sample-project.firebaseapp.com",
             "VITE_FIREBASE_APP_ID": "sample-app",
             "VITE_MAPTILER_KEY": "sample-map-key", "MIGRATION_DATABASE_URL": "postgres://operator",
             "HYPERDRIVE_ID": "a" * 32,
+            "GCS_PHOTOS_BUCKET": "sample-project-staging-photos",
         }
         with tempfile.TemporaryDirectory() as directory:
             env = os.environ | {
@@ -200,6 +224,7 @@ class CloudConfigurationTests(unittest.TestCase):
             runtime = json.loads((Path(directory) / "iskra-worker-secrets.json").read_text())
             outputs = (Path(directory) / "outputs").read_text()
             self.assertEqual(runtime["VERTEX_AUTH_JSON"], values["VERTEX_AUTH_JSON"])
+            self.assertEqual(runtime["GCS_PHOTOS_BUCKET"], values["GCS_PHOTOS_BUCKET"])
             self.assertIn("target_url=https://app.example.test\n", outputs)
             self.assertNotIn("sample-token", outputs)
             generated = json.loads((Path(directory) / "iskra-wrangler.json").read_text())

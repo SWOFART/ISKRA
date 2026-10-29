@@ -4,6 +4,7 @@ import { createApp, createWorkerHandler } from '../../../src/worker';
 import type { TransactionDatabase } from '../../../src/worker/db/client';
 import type { StoredPhoto } from '../../../src/worker/db/evidence-store';
 import { authorizePhotoRead, createPhotoReadCapability, createReportMediaResolver } from '../../../src/worker/services/media';
+import { vertexAuthJson, withVertexAuth } from '../../fixtures/ai/vertex';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const otherId = '22222222-2222-4222-8222-222222222222';
@@ -24,7 +25,7 @@ function fixture(photo: StoredPhoto | null = stored) {
   return { database, query, get, head, bucket, app };
 }
 function token(url: string) { return new URL(url).searchParams.get('token')!; }
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('private photo capabilities', () => {
   it('authenticates preview requests and rejects malformed IDs and query extras before SQL', async () => {
@@ -174,5 +175,27 @@ describe('Worker photo delivery', () => {
     }, {} as ExecutionContext);
     expect(response.status).toBe(200); expect(close).toHaveBeenCalledOnce();
     await expect(worker.scheduled({} as ScheduledController, {})).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  });
+
+  it('serves Google-stored photos through the same signed Worker URL without an R2 binding', async () => {
+    const f = fixture(); const close = vi.fn(async () => {});
+    const google = vi.fn(async (url: unknown) => {
+      expect(String(url)).toContain('https://storage.googleapis.com/storage/v1/b/iskra-test-staging-photos/o/');
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: { 'Content-Type': 'image/jpeg', 'Content-Length': '3' },
+      });
+    });
+    vi.stubGlobal('fetch', withVertexAuth(google));
+    const worker = createWorkerHandler({ createDatabase: () => ({ database: f.database, close }) });
+    const photo = await createPhotoReadCapability(ref, origin, secret);
+    const response = await worker.fetch(new Request(photo.mediaUrl), {
+      GCS_PHOTOS_BUCKET: 'iskra-test-staging-photos', VERTEX_AUTH_JSON: vertexAuthJson,
+      MEDIA_SIGNING_SECRET: secret, HYPERDRIVE: { connectionString: 'postgres://fixture/iskra' },
+    }, {} as ExecutionContext);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    expect(google).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

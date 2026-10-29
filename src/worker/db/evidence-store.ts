@@ -6,6 +6,7 @@ import { distanceM, reportPinAdmission } from '../../shared/location';
 import { hashBeforeEvidence } from '../services/report-context';
 import { executeIdempotently, IdempotencyConflictError, type CheckedOutClient, type TransactionDatabase } from './client';
 import { ApiError } from '../middleware/errors';
+import type { PhotoStorage } from '../services/photo-storage';
 
 /** ponytail: one UID/minute cap from AI_RATE_PER_MINUTE. 0 pauses AI and uploads. Per-IP caps need a new table. */
 export function evidenceQuota(raw: string | undefined, fallback: number) {
@@ -127,7 +128,7 @@ export async function readOwnerPreview(database: TransactionDatabase, photoId: s
 }
 
 /** Operator/scheduler only: retain expired unattached evidence for at least 24 hours. */
-export async function removeExpiredPhotos(database: TransactionDatabase, bucket: Pick<R2Bucket, 'delete'>) {
+export async function removeExpiredPhotos(database: TransactionDatabase, bucket: Pick<PhotoStorage, 'delete'>) {
   return database.withTransaction(async (client) => {
     const result = await client.query<{ id: string; object_key: string }>(
       `SELECT p.id, p.object_key FROM report_photos p

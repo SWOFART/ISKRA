@@ -1,5 +1,35 @@
 # ISKRA infrastructure and delivery
 
+## Current storage decision — 2026-10-29 / issue #49
+
+The user selected **Google Cloud Storage instead of R2**. This supersedes historical R2 selections/activation instructions below and the earlier OpenSpec D03 baseline. Root `plan.md` records the new decision; B's canonical task checklist is unchanged. The Cloudflare app and existing Firebase/SQL/Vertex contracts remain in place. R2 was not activated and no R2 subscription was accepted.
+
+The private Standard bucket `iskra-512914-staging-photos` is in `europe-west3` (Frankfurt), with uniform bucket-level access, enforced public-access prevention and seven-day soft-delete recovery. No public IAM member, object ACL, browser CORS grant or public bucket domain was added. GCS storage, operations, egress and retained soft-deleted bytes use the existing Google project's usage billing; bucket creation does not impose a hard spending cap or a retention policy for published photos.
+
+The existing Worker federation service account has the additional custom role `iskraStagingPhotoObjects`, **only on this bucket**, with `storage.objects.create`, `storage.objects.get` and `storage.objects.delete`. Its Vertex inference role is unchanged. No project-wide storage role, admin role or service-account private key was added. `VERTEX_AUTH_JSON` retains its existing name and now supplies the shared Google identity for Vertex and storage; its RSA assertion remains a possession credential, not Cloudflare platform attestation. The original rotation procedure must therefore consider both services.
+
+`MEDIA_SIGNING_SECRET` was securely generated in Google Secret Manager staging environment version13, preserving every prior field. It has not been printed or saved in GitHub. The new blank name `GCS_PHOTOS_BUCKET` is a server runtime setting. The existing deployment helper validates the exact `<identity-project>-<environment>-photos` bucket, database, identity and signing prerequisites, then supplies it through the same secret-copy deployment path. Do not add it to the live Google JSON until the matching code/template is integrated: older validators correctly reject the new name. Production remains disabled and has no staging bucket/identity copied to it.
+
+### Storage behavior and proof
+
+The Worker instantiates a request-scoped photo storage dependency from Google settings; `PHOTOS` is the internal test/runtime interface, not an R2 resource binding. Upload admission, Firebase ownership, signed Worker URLs, SQL finalization, analysis binding and RP logic are unchanged. Cloud Storage multipart creation preserves photo hash/expiry metadata and uses `ifGenerationMatch=0`;412 means conflict, never overwrite. Missing reads/deletes are idempotent. Provider URLs and bearer tokens remain server-side. Image reads are bounded to the declared size and existing1MiB cap; metadata/authentication replies are capped at64KiB. Redirects fail closed, storage operations have a10-second deadline, and parallel reads share only their request's short-lived Google token. Google federation code is shared with Vertex rather than duplicated.
+
+Actual Google federation/service-account calls completed immutable create, rejected overwrite, metadata read, exact private byte roundtrip, anonymous denial, delete and repeat-delete checks. A separate **local workerd** probe used actual Google Storage plus the actual Vertex model, returningHTTP200 with one image and schema-valid **RETAKE** for a controlled blank JPEG. All probe objects were deleted; seven-day soft-delete recovery still applies. These are genuine provider/runtime-compatibility probes, not a deployed Cloudflare/Firebase/SQL/camera/Green result. No resident image or data was used.
+
+Local checks:391 unit tests,95 real disposable PostgreSQL tests plus1 intentional skipped invariant probe,33 Python configuration tests,3 infrastructure Worker tests/build, typecheck and application build dry-run passed. The full local browser suite passed48/49; its delayed analysis response after leaving Map case failed at `capture.spec.ts:719`. The exact same focused failure reproduced on unchanged develop SHA `b2a89580f38bbb15fbefcfa1b96fc8906b637f93` in a separate checkout. This PR does not change client code/tests or claim a passing browser suite. Required CI remains a merge gate.
+
+### Activation and rollback
+
+1. Integrate the storage change through the required PR/CI process. Keep full #49/Green acceptance open. The canonical OpenSpec R2 decision needs B's separate reconciliation with the user's new choice; do not mark tasks completed from these probes.
+2. Fetch the complete latest `iskra-staging-env` JSON into operator memory, preserve all fields, add only `GCS_PHOTOS_BUCKET` with this bucket name and validate against the integrated `.env.example`/helper. Save a new Google secret version and verify it. No value belongs in GitHub settings. The existing staging source still has no bucket setting until this step.
+3. Run the existing `cloudflare.yml` staging/application workflow from `develop`. Verify its exact-release health and the Google-sourced signing/bucket setting names on `iskra-staging`; health alone remains insufficient for application readiness.
+4. Verify a genuine Firebase-authenticated HTTP upload, owner-only preview and Vertex analysis through the deployed Worker. Real scene ACCEPT/publication, mobile capture/GPS, cleanup, three-voter Green and final Impact still need their own evidence. A controlled blank fixture RETAKE cannot pass them.
+
+No cron or automatic bucket lifecycle deletion is activated. Existing SQL-indexed orphan housekeeping uses the new storage interface, but object-only orphan reclamation/log controls and public-pilot retention remain acceptance work; do not claim them complete. The existing R2 demo seed/reset helpers are **local test tooling**, not a Google-staging seed implementation or live evidence.
+
+Rollback must preserve objects, photos, analyses and ledger rows. Pause evidence writes if necessary, remove the new bucket name from the Google source before restoring code whose validator does not know it, and deploy a compatible prior Worker through the same pipeline. Omission from bulk secrets does not remove an old runtime name; remove obsolete copies explicitly where needed. Do not delete the bucket/data or fall back to public storage as a code rollback.
+
+
 ## Report upload finalization candidate — issues #27 / #28
 
 This draft continues OpenSpec tasks 4.1/4.2, contract `v1-candidate.2`, on top of the existing #84 admission commits (preserved by a normal merge). It does not complete either task. Review this successor together with #84; merging this candidate includes #84's code, so maintainers should avoid treating them as independent changes. Canonical tasks.md stays with B.
