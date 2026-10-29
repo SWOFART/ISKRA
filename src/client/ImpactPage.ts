@@ -10,6 +10,7 @@ type ClientApi = ReturnType<typeof createClientApi>;
 type ImpactRole = Impact['items'][number]['roles'][number];
 export type ImpactNotification = ReturnType<typeof NotificationSchema.parse>;
 export type NotificationLoadState = 'loading' | 'ready' | 'error';
+export type ImpactHistoryTab = 'in-progress' | 'completed';
 type Translate = (key: MessageKey, values?: MessageValues) => string;
 
 export interface ImpactPageOptions {
@@ -18,6 +19,8 @@ export interface ImpactPageOptions {
   onOpenNotificationReport: (reportId: string, notificationId: string, report?: ReportSummary) => void;
   onMarkNotificationRead: (notificationId: string) => Promise<boolean>;
   onRefreshNotifications: () => void;
+  historyTab?: ImpactHistoryTab;
+  onHistoryTabChange?: (tab: ImpactHistoryTab) => void;
 }
 
 export interface ImpactPageView {
@@ -171,16 +174,53 @@ export function renderImpactPage(
 
   const historySection = makeElement('section', 'impact-history-section');
   historySection.hidden = true;
+  const historyTabs = makeElement('div', 'impact-history-tabs');
+  historyTabs.setAttribute('role', 'tablist');
+  historyTabs.setAttribute('aria-label', t('impact.history'));
+  const historyTabButtons: Record<ImpactHistoryTab, HTMLButtonElement> = {
+    'in-progress': makeButton(t('impact.history.inProgress'), 'impact-history-tab'),
+    completed: makeButton(t('impact.history.completed'), 'impact-history-tab'),
+  };
+  const historyPanel = makeElement('div', 'impact-history-panel');
+  historyPanel.id = 'impact-history-panel';
+  historyPanel.setAttribute('role', 'tabpanel');
   const historyList = makeElement('ul', 'impact-history-list');
   historyList.setAttribute('aria-label', t('impact.history'));
-  const emptyHistory = makeElement('p', 'impact-empty-history', t('impact.emptyHistory'));
+  const emptyHistory = makeElement('p', 'impact-empty-history', t('impact.history.emptyInProgress'));
   emptyHistory.hidden = true;
   const retryButton = makeButton(t('impact.retry'), 'impact-retry-button');
   retryButton.hidden = true;
   const moreButton = makeButton(t('impact.loadMore'), 'impact-load-more-button');
   moreButton.hidden = true;
-  append(historySection, makeElement('h2', undefined, t('impact.history')), historyList,
-    emptyHistory, retryButton, moreButton);
+  let selectedHistoryTab: ImpactHistoryTab = options.historyTab ?? 'in-progress';
+  function selectHistoryTab(tab: ImpactHistoryTab): void {
+    selectedHistoryTab = tab;
+    options.onHistoryTabChange?.(tab);
+    updateHistoryTabState();
+    if (currentData) renderHistory(currentData);
+  }
+  for (const [tab, button] of Object.entries(historyTabButtons) as [ImpactHistoryTab, HTMLButtonElement][]) {
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-controls', historyPanel.id);
+    button.id = `impact-history-tab-${tab}`;
+    button.addEventListener('click', () => selectHistoryTab(tab));
+    button.addEventListener('keydown', (event) => {
+      const tabOrder: ImpactHistoryTab[] = ['in-progress', 'completed'];
+      let nextIndex = tabOrder.indexOf(selectedHistoryTab);
+      if (event.key === 'ArrowRight') nextIndex = (nextIndex + 1) % tabOrder.length;
+      else if (event.key === 'ArrowLeft') nextIndex = (nextIndex + tabOrder.length - 1) % tabOrder.length;
+      else if (event.key === 'Home') nextIndex = 0;
+      else if (event.key === 'End') nextIndex = tabOrder.length - 1;
+      else return;
+      event.preventDefault();
+      const nextTab = tabOrder[nextIndex];
+      selectHistoryTab(nextTab);
+      historyTabButtons[nextTab].focus();
+    });
+    historyTabs.appendChild(button);
+  }
+  append(historyPanel, historyList, emptyHistory, retryButton, moreButton);
+  append(historySection, makeElement('h2', undefined, t('impact.history')), historyTabs, historyPanel);
 
   append(page, heading, status, fixtureBanner, totals, reporterSection, cleanerSection,
     verificationSection, notificationsSection, historySection);
@@ -194,6 +234,17 @@ export function renderImpactPage(
   let restoreScrollPending = initialScrollTop > 0;
   let notificationItems: readonly ImpactNotification[] = options.notifications;
   let notificationState = options.notificationState;
+
+  function updateHistoryTabState(): void {
+    for (const [tab, button] of Object.entries(historyTabButtons) as [ImpactHistoryTab, HTMLButtonElement][]) {
+      const selected = tab === selectedHistoryTab;
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    }
+    historyPanel.setAttribute('aria-labelledby', `impact-history-tab-${selectedHistoryTab}`);
+    emptyHistory.textContent = t(selectedHistoryTab === 'completed'
+      ? 'impact.history.emptyCompleted' : 'impact.history.emptyInProgress');
+  }
 
   function setNotificationStatus(text: string): void {
     if (notificationsStatus.textContent !== text) notificationsStatus.textContent = text;
@@ -317,7 +368,8 @@ export function renderImpactPage(
   }
 
   function renderHistory(data: Impact): void {
-    const items = [...data.items].sort((left, right) => {
+    const items = data.items.filter((item) => selectedHistoryTab === 'completed'
+      ? item.report.status === 'RESOLVED' : item.report.status !== 'RESOLVED').sort((left, right) => {
       const dateDifference = Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt);
       return dateDifference || left.report.id.localeCompare(right.report.id);
     });
@@ -423,6 +475,7 @@ export function renderImpactPage(
   moreButton.addEventListener('click', () => { if (nextCursor) void load(nextCursor); });
   refreshNotificationsButton.addEventListener('click', () => options.onRefreshNotifications());
   renderNotifications();
+  updateHistoryTabState();
   void load();
 
   return {
