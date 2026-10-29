@@ -7,7 +7,7 @@ import {
   DemoRewardRedemptionReceiptSchema,
   DemoRewardVoucherListSchema,
 } from '../../../src/shared/contracts';
-import { PostgresTransactionDatabase } from '../../../src/worker/db/client';
+import { PostgresTransactionDatabase, type TransactionDatabase } from '../../../src/worker/db/client';
 import type { WorkerEnv } from '../../../src/worker/middleware/context';
 import { handleError } from '../../../src/worker/middleware/errors';
 import { apiSecurity } from '../../../src/worker/middleware/security';
@@ -73,11 +73,11 @@ async function createCatalogItem(pool: Pool, options: {
   return result.rows[0].id;
 }
 
-function createApp(pool: Pool) {
+function createApp(pool: Pool, database: TransactionDatabase = new PostgresTransactionDatabase(pool)) {
   const app = new Hono<WorkerEnv>();
   app.use('*', apiSecurity);
   app.route('/api', createDomainRoutes({
-    database: new PostgresTransactionDatabase(pool),
+    database,
     verify: async (token) => ({ uid: token }),
   }));
   app.onError((error, context) => handleError(error, context));
@@ -251,7 +251,23 @@ describe('atomic demo reward redemption', () => {
       const actor = 'reward-race-resident';
       await createUser(pool, actor, 40);
       const itemId = await createCatalogItem(pool, { costRp: 40 });
-      const app = createApp(pool);
+      const database = new PostgresTransactionDatabase(pool);
+      let claims = 0;
+      let releaseClaims!: () => void;
+      const bothClaimed = new Promise<void>((resolve) => { releaseClaims = resolve; });
+      const app = createApp(pool, {
+        withTransaction: (work) => database.withTransaction((client) => work({
+          query: async <Row extends Record<string, unknown>>(sql: string, parameters?: readonly unknown[]) => {
+            const result = await client.query<Row>(sql, parameters);
+            if (sql.includes('INSERT INTO idempotency_keys')) {
+              // Both claims hold the user's FK key-share lock before balance locking.
+              if (++claims === 2) releaseClaims();
+              await bothClaimed;
+            }
+            return result;
+          },
+        })),
+      });
       const responses = await Promise.all([
         redeem(app, actor, itemId, crypto.randomUUID(), 40),
         redeem(app, actor, itemId, crypto.randomUUID(), 40),

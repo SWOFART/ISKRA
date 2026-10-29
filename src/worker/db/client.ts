@@ -91,7 +91,7 @@ export class TransactionAbortedError extends Error {
   }
 }
 
-/** Locks each existing account once in a stable bytewise UID order to avoid lock-order deadlocks. */
+/** Serialize account updates without conflicting with foreign-key key-share locks on the unchanged UID. */
 export async function lockAccounts(client: CheckedOutClient, accountIds: readonly string[]): Promise<readonly string[]> {
   const uniqueIds = [...new Set(accountIds)];
   if (uniqueIds.some((id) => id.trim() === '')) {
@@ -100,7 +100,7 @@ export async function lockAccounts(client: CheckedOutClient, accountIds: readonl
   if (uniqueIds.length === 0) return [];
 
   const result = await client.query<{ id: string }>(
-    'SELECT id FROM users WHERE id = ANY($1::text[]) ORDER BY id COLLATE "C" FOR UPDATE',
+    'SELECT id FROM users WHERE id = ANY($1::text[]) ORDER BY id COLLATE "C" FOR NO KEY UPDATE',
     [uniqueIds],
   );
   if (result.rows.length !== uniqueIds.length) {
