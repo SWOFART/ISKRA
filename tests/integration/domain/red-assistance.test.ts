@@ -8,6 +8,7 @@ import type { WorkerEnv } from '../../../src/worker/middleware/context';
 import { handleError } from '../../../src/worker/middleware/errors';
 import { apiSecurity } from '../../../src/worker/middleware/security';
 import { createDomainRoutes } from '../../../src/worker/routes/domain';
+import type { ReportMediaResolver } from '../../../src/worker/services/report-context';
 import { withTestDatabase } from '../auth/postgres';
 
 const coreMigration = await readFile(new URL('../../../migrations/0001_p0_core.sql', import.meta.url), 'utf8');
@@ -55,9 +56,20 @@ async function createReport(
 
 function createApp(pool: Pool) {
   const app = new Hono<WorkerEnv>();
+  const reportMedia: ReportMediaResolver = {
+    async resolveAttachedPhotos(photos) {
+      return photos.map((photo) => ({
+        id: photo.id,
+        ordinal: photo.ordinal,
+        mediaUrl: `https://media.invalid/${photo.id}`,
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      }));
+    },
+  };
   app.use('*', apiSecurity);
   app.route('/api', createDomainRoutes({
     database: new PostgresTransactionDatabase(pool),
+    reportMedia,
     verify: async (token) => ({ uid: token }),
   }));
   app.onError(handleError);
@@ -80,6 +92,14 @@ describe('resident-owned Red assistance on PostgreSQL', () => {
       await installSchema(pool);
       await Promise.all(['owner', 'other'].map((id) => createUser(pool, id)));
       const reportId = await createReport(pool, 'owner');
+      await pool.query(
+        `INSERT INTO report_photos (
+           owner_user_id, report_id, purpose, state, object_key, ordinal, mime_type, byte_size,
+           sha256, upload_expires_at
+         ) VALUES ('owner', $1::uuid, 'REPORT', 'ATTACHED', $2, 0, 'image/jpeg', 128, $3,
+           now() + interval '15 minutes')`,
+        [reportId, `private/red-assistance/${crypto.randomUUID()}`, 'a'.repeat(64)],
+      );
       await pool.query(
         'INSERT INTO red_verified_contacts (city_id, locale, label, channel, value, source_label, source_url, verified_at, active) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), true)',
         ['heilbronn', 'de', 'Fixture contact', 'WEBSITE', 'https://example.invalid/contact',
