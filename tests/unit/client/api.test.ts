@@ -60,6 +60,47 @@ describe('client API transport', () => {
     expect(tokenProvider.getIdToken).toHaveBeenCalledExactlyOnceWith(false);
   });
 
+  it('uploads JPEG bytes through the same-origin authenticated API path from a signed ticket', async () => {
+    const photoId = '11111111-1111-4111-8111-111111111112';
+    const photo = new Blob([new Uint8Array([255, 216, 255, 217])], { type: 'image/jpeg' });
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(input).toBe(`/api/uploads/${photoId}/content?ticket=signed-capability`);
+      expect(init?.method).toBe('PUT');
+      expect(init?.body).toBe(photo);
+      expect(new Headers(init?.headers).get('Content-Type')).toBe('image/jpeg');
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer firebase-id-token');
+      return successResponse({ photoId, state: 'UPLOADED' }, 201);
+    });
+    const api = createClientApi({ mode: 'live', fetcher,
+      tokenProvider: { getIdToken: async () => 'firebase-id-token' } });
+
+    const result = await api.uploadPhoto({
+      photoId,
+      uploadUrl: `https://uploads.example.test/api/uploads/${photoId}/content?ticket=signed-capability`,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      maxBytes: 1_048_576,
+    }, photo);
+
+    expect(result.data).toEqual({ photoId, state: 'UPLOADED' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('rejects signed upload URLs that do not match their reserved photo ID', async () => {
+    const photoId = '11111111-1111-4111-8111-111111111112';
+    const photo = new Blob([new Uint8Array([255, 216, 255, 217])], { type: 'image/jpeg' });
+    const fetcher = vi.fn(async () => successResponse({ photoId, state: 'UPLOADED' }, 201));
+    const api = createClientApi({ mode: 'live', fetcher,
+      tokenProvider: { getIdToken: async () => 'firebase-id-token' } });
+
+    await expect(api.uploadPhoto({
+      photoId,
+      uploadUrl: 'https://uploads.example.test/api/uploads/11111111-1111-4111-8111-111111111113/content?ticket=signed-capability',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      maxBytes: 1_048_576,
+    }, photo)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it('stops protected requests before fetch when no Firebase token is available', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => successResponse({}));
     const api = createClientApi({ mode: 'live', fetcher, tokenProvider: { getIdToken: async () => null } });

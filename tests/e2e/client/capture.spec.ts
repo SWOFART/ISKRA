@@ -1,4 +1,5 @@
 import { expect, test } from '../fixtures';
+import fixtures from '../../fixtures/contracts/p0.json' with { type: 'json' };
 
 type CaptureTestState = {
   mode: 'allow' | 'denied';
@@ -62,9 +63,13 @@ async function enableCameraHarness(page: import('@playwright/test').Page): Promi
     HTMLVideoElement.prototype.play = () => Promise.resolve();
     Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', { configurable: true, get: () => 640 });
     Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', { configurable: true, get: () => 480 });
+    const nativeGetContext = HTMLCanvasElement.prototype.getContext;
     Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
       configurable: true,
-      value: () => ({ drawImage: () => undefined }),
+      value: function (this: HTMLCanvasElement, contextId: string, ...args: unknown[]) {
+        if (contextId === '2d') return { drawImage: () => undefined };
+        return Reflect.apply(nativeGetContext, this, [contextId, ...args]);
+      },
     });
     HTMLCanvasElement.prototype.toBlob = function (callback, type) {
       callback(new Blob([new Uint8Array([255, 216, 255, 217])], { type: type ?? 'image/jpeg' }));
@@ -74,7 +79,16 @@ async function enableCameraHarness(page: import('@playwright/test').Page): Promi
   });
 }
 
-async function signIn(page: import('@playwright/test').Page): Promise<void> {
+type ReportApiScenario = 'accept-running' | 'retake' | 'retry-analysis'
+  | 'retry-after-upload' | 'retry-after-photo-content' | 'retry-after-analysis'
+  | 'retry-after-tab-switch' | 'retry-after-in-flight-tab-switch' | 'retry-after-publication';
+
+async function signIn(
+  page: import('@playwright/test').Page,
+  locale: 'en' | 'de' = 'en',
+  beforeMap?: (token: string) => Promise<void>,
+): Promise<void> {
+  if (locale === 'de') await page.addInitScript(() => localStorage.setItem('iskra.locale', 'de'));
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const token = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({
     sub: 'capture-fixture-user', user_id: 'capture-fixture-user', aud: 'iskra-browser-test',
@@ -82,6 +96,14 @@ async function signIn(page: import('@playwright/test').Page): Promise<void> {
     iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600,
     firebase: { sign_in_provider: 'password' },
   })}.local-fixture-signature`;
+  await page.route('**/api/me/notifications*', async (route) => {
+    expect(route.request().headers().authorization).toMatch(/^Bearer .+/);
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], nextCursor: null }),
+    });
+  });
   await page.route('https://identitytoolkit.googleapis.com/**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(route.request().url().includes('accounts:lookup')
@@ -101,14 +123,225 @@ async function signIn(page: import('@playwright/test').Page): Promise<void> {
       }),
     });
   });
+  await page.route('**/api/me/impact*', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(fixtures.impact),
+  }));
   await page.goto('/impact');
-  await page.locator('.deferred-card').getByRole('button', { name: 'Sign in', exact: true }).click();
-  await page.getByLabel('Email', { exact: true }).fill(loginEmail);
-  await page.getByLabel('Password', { exact: true }).fill(loginPassword);
-  await page.locator('.auth-form').getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Your impact', exact: true })).toBeVisible();
-  await page.getByRole('tab', { name: 'Map', exact: true }).click();
+  const signInLabel = locale === 'de' ? 'Anmelden' : 'Sign in';
+  await page.locator('.deferred-card').getByRole('button', { name: signInLabel, exact: true }).click();
+  await page.getByLabel(locale === 'de' ? 'E-Mail' : 'Email', { exact: true }).fill(loginEmail);
+  await page.getByLabel(locale === 'de' ? 'Passwort' : 'Password', { exact: true }).fill(loginPassword);
+  await page.locator('.auth-form').getByRole('button', { name: signInLabel, exact: true }).click();
+  await expect(page.getByRole('heading', { name: locale === 'de' ? 'Dein Einfluss' : 'Your impact', exact: true })).toBeVisible();
+  await beforeMap?.(token);
+  await page.getByRole('tab', { name: locale === 'de' ? 'Karte' : 'Map', exact: true }).click();
   await expect(page.locator('.report-button')).toBeVisible();
+}
+
+async function installReportApi(
+  page: import('@playwright/test').Page,
+  token: string,
+  scenario: ReportApiScenario,
+  locale: 'en' | 'de' = scenario === 'retake' ? 'de' : 'en',
+) {
+  const photoIds: string[] = [];
+  const analysisRequests: { body: Record<string, unknown>; operationKey: string | undefined }[] = [];
+  let uploadRequests = 0;
+  let photoUploadRequests = 0;
+  let publicationRequest: Record<string, unknown> | null = null;
+  let publicationRequests = 0;
+  const publicationOperationKeys: (string | undefined)[] = [];
+  let analysisPolls = 0;
+  let signalDelayedAnalysisRequest: (() => void) | undefined;
+  let releaseDelayedAnalysisResponse: (() => void) | undefined;
+  const delayedAnalysisRequest = new Promise<void>((resolve) => { signalDelayedAnalysisRequest = resolve; });
+  const delayedAnalysisResponse = new Promise<void>((resolve) => { releaseDelayedAnalysisResponse = resolve; });
+  const response = (
+    route: import('@playwright/test').Route,
+    status: number,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ) => route.fulfill({
+    status,
+    contentType: 'application/json',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const rateLimitResponse = (route: import('@playwright/test').Route, retryAfterSeconds = 1) => response(route, 429, {
+    error: {
+      code: 'RATE_LIMITED',
+      message: 'Please wait before trying again.',
+      requestId: '11111111-1111-4111-8111-111111111123',
+      retryable: true,
+    },
+  }, { 'Retry-After': String(retryAfterSeconds) });
+  const acceptedResult = locale === 'de' ? {
+    decision: 'ACCEPT', route: 'RED', description: 'Scharfe Glasscherben am Bordstein.',
+    hazardLevel: 'URGENT', safetyMessage: 'Berühren Sie das scharfe Material nicht und halten Sie andere fern.',
+    reason: 'Das Foto zeigt sichtbaren Müll mit einer möglichen scharfen Gefahr.', confidence: 0.91,
+  } : {
+    decision: 'ACCEPT', route: 'RED', description: 'Hazardous litter near the curb.',
+    hazardLevel: 'URGENT', safetyMessage: 'Avoid touching the sharp material and keep others away.',
+    reason: 'The photo shows visible litter with a possible sharp hazard.', confidence: 0.91,
+  };
+  const checkAuth = (route: import('@playwright/test').Route) => {
+    expect(route.request().headers().authorization).toBe(`Bearer ${token}`);
+  };
+
+  await page.route('**/api/reports*', async (route) => {
+    checkAuth(route);
+    if (route.request().method() === 'GET') return response(route, 200, { items: [], nextCursor: null });
+    publicationRequest = route.request().postDataJSON() as Record<string, unknown>;
+    publicationRequests += 1;
+    publicationOperationKeys.push(route.request().headers()['idempotency-key']);
+    if (scenario === 'retry-after-publication' && publicationRequests === 1) return rateLimitResponse(route);
+    const reportId = '11111111-1111-4111-8111-111111111121';
+    const description = String(publicationRequest.description);
+    const report = {
+      id: reportId,
+      route: 'RED',
+      status: 'AWAITING_EXISTENCE',
+      location: { lat: 49.14, lng: 9.22 },
+      coverPhotoId: photoIds[0],
+      description,
+      existenceYesCount: 0,
+      resolutionYesCount: 0,
+      existenceVerifiedAt: null,
+      lastExistenceConfirmedAt: null,
+      version: 1,
+      updatedAt: '2026-10-28T12:00:00.000Z',
+      isDemo: false,
+      beforePhotos: photoIds.map((id, index) => ({
+        id,
+        ordinal: index + 1,
+        mediaUrl: `https://media.example.test/${id}?token=temporary`,
+        expiresAt: '2030-01-01T00:00:00.000Z',
+      })),
+      afterPhotos: [],
+      author: { id: 'capture-fixture-user', nickname: 'Camera Tester', avatar: 'leaf' },
+      cleaner: null,
+      currentStage: 'EXISTENCE',
+      openVoteStages: ['EXISTENCE'],
+      viewer: {
+        stages: {
+          EXISTENCE: { canVote: false, reason: 'SELF_VOTE', hasVoted: false },
+          RESOLUTION: { canVote: false, reason: 'STAGE_CLOSED', hasVoted: false },
+        },
+        canSubmitCleanup: false,
+      },
+    };
+    return response(route, 201, { report, rpAwarded: 5, balance: 5, balanceVersion: 1 });
+  });
+  await page.route('**/api/uploads', async (route) => {
+    checkAuth(route);
+    const request = route.request().postDataJSON() as { purpose: string; byteSize: number; ordinal: number };
+    expect(request.purpose).toBe('REPORT');
+    expect(request.byteSize).toBeGreaterThan(0);
+    uploadRequests += 1;
+    if (scenario === 'retry-after-upload' && uploadRequests === 1) return rateLimitResponse(route);
+    const photoId = `11111111-1111-4111-8111-1111111111${String(uploadRequests + 10).padStart(2, '0')}`;
+    photoIds.push(photoId);
+    return response(route, 201, {
+      photoId,
+      uploadUrl: `https://app.example.test/api/uploads/${photoId}/content?ticket=signed-${uploadRequests}`,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      maxBytes: 1_048_576,
+    });
+  });
+  await page.route('**/api/uploads/*/content?*', async (route) => {
+    checkAuth(route);
+    expect(route.request().method()).toBe('PUT');
+    expect(route.request().headers()['content-type']).toBe('image/jpeg');
+    expect(route.request().postDataBuffer()?.byteLength).toBeGreaterThan(0);
+    photoUploadRequests += 1;
+    if (scenario === 'retry-after-photo-content' && photoUploadRequests === 1) return rateLimitResponse(route);
+    const photoId = new URL(route.request().url()).pathname.split('/')[3];
+    return response(route, 201, { photoId, state: 'UPLOADED' });
+  });
+  await page.route('**/api/ai/analyze-report', async (route) => {
+    checkAuth(route);
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    expect(body.outputLocale).toBe(locale);
+    expect(Array.isArray(body.photoIds)).toBe(true);
+    expect(route.request().headers()['idempotency-key']).toBeTruthy();
+    analysisRequests.push({ body, operationKey: route.request().headers()['idempotency-key'] });
+    const analysisId = '11111111-1111-4111-8111-111111111122';
+    if (scenario === 'retry-after-analysis' && analysisRequests.length === 1) return rateLimitResponse(route);
+    if (scenario === 'retry-after-tab-switch' && analysisRequests.length === 1) return rateLimitResponse(route, 5);
+    if (scenario === 'retry-after-in-flight-tab-switch' && analysisRequests.length === 1) {
+      signalDelayedAnalysisRequest?.();
+      await delayedAnalysisResponse;
+      return rateLimitResponse(route, 5);
+    }
+    if (scenario === 'retry-analysis' && analysisRequests.length === 1) {
+      return response(route, 202, {
+        analysisId,
+        status: 'FAILED',
+        error: {
+          code: 'AI_TIMEOUT',
+          message: 'Analysis timed out. Retry with the same photos.',
+          requestId: '11111111-1111-4111-8111-111111111123',
+          retryable: true,
+        },
+      });
+    }
+    if (scenario === 'retake') {
+      return response(route, 202, {
+        analysisId,
+        status: 'READY',
+        result: {
+          decision: 'RETAKE', reasonCode: 'INSUFFICIENT_EVIDENCE',
+          reason: 'Das Motiv ist unscharf.', instruction: 'Nehmen Sie eine klare Nahaufnahme auf.',
+        },
+        expiresAt: '2030-01-01T00:00:00.000Z',
+      });
+    }
+    if (scenario === 'accept-running' && analysisRequests.length === 1) {
+      return response(route, 202, { analysisId, status: 'RUNNING' });
+    }
+    return response(route, 202, {
+      analysisId,
+      status: 'READY',
+      result: acceptedResult,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    });
+  });
+  await page.route('**/api/ai/analyses/*', async (route) => {
+    checkAuth(route);
+    analysisPolls += 1;
+    return response(route, 200, {
+      analysisId: '11111111-1111-4111-8111-111111111122',
+      status: 'READY',
+      result: acceptedResult,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    });
+  });
+  return {
+    photoIds,
+    analysisRequests,
+    get uploadRequests() { return uploadRequests; },
+    get photoUploadRequests() { return photoUploadRequests; },
+    get publicationRequest() { return publicationRequest; },
+    get publicationRequests() { return publicationRequests; },
+    publicationOperationKeys,
+    get analysisPolls() { return analysisPolls; },
+    waitForDelayedAnalysisRequest: () => delayedAnalysisRequest,
+    releaseDelayedAnalysisResponse: () => releaseDelayedAnalysisResponse?.(),
+  };
+}
+
+async function submitOneReportPhoto(page: import('@playwright/test').Page, locale: 'en' | 'de') {
+  await page.locator('.report-button').click();
+  const camera = page.getByRole('dialog', { name: locale === 'de' ? 'Fotos für Meldung aufnehmen' : 'Capture report photos' });
+  await camera.getByRole('button', { name: locale === 'de' ? 'Foto aufnehmen' : 'Take photo', exact: true }).click();
+  await camera.getByRole('button', { name: locale === 'de' ? 'Mit Fotos fortfahren' : 'Continue with photos' }).click();
+  const dialog = page.getByRole('dialog', { name: locale === 'de' ? 'Fotos bereit für den nächsten Schritt' : 'Photos ready for the next step' });
+  await dialog.getByRole('button', { name: locale === 'de' ? 'Frischen Standort abrufen' : 'Get fresh location' }).click();
+  await expect(dialog).toContainText(locale === 'de' ? 'Frischer Standort erfasst' : 'Fresh location captured');
+  await dialog.getByRole('button', { name: locale === 'de' ? 'Fotos hochladen und prüfen' : 'Upload and assess photos' }).click();
+  return dialog;
 }
 
 async function captureState(page: import('@playwright/test').Page): Promise<CaptureTestState> {
@@ -153,7 +386,7 @@ test('captures at most five camera photos, supports retake and explicit discard 
   const handoff = page.getByRole('dialog', { name: 'Photos ready for the next step' });
   await expect(dialog).toBeHidden();
   await expect(handoff).toBeVisible();
-  await expect(handoff).toContainText('5 photos were handed to this session and remain in memory.');
+  await expect(handoff).toContainText('5 photos are ready. Get a fresh location, then submit them for assessment.');
   await expect(handoff.locator('.photo-capture-preview')).toHaveCount(5);
   expect((await captureState(page)).locationRequests).toBe(0);
   await expect.poll(async () => (await captureState(page)).stopped).toBe(1);
@@ -241,4 +474,278 @@ test('explains denied and unsupported camera access and permits retry without a 
   await dialog.locator('.photo-capture-close').click();
   await page.getByRole('alertdialog', { name: 'Leave photo capture?' })
     .getByRole('button', { name: 'Discard and exit' }).click();
+});
+
+test('uploads, analyzes, previews and publishes an urgent RED report without opening the report sheet', async ({ page }) => {
+  await enableCameraHarness(page);
+  const browserErrors: string[] = [];
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+  page.on('console', (message) => { if (message.type() === 'error') browserErrors.push(message.text()); });
+  page.on('response', (response) => {
+    if (response.status() >= 500) browserErrors.push(`${response.status()} ${response.url()}`);
+  });
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'accept-running'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  await expect(dialog.locator('.report-assessment-reason')).toContainText('The photo shows visible litter with a possible sharp hazard.');
+  await expect(dialog.locator('.report-route-value')).toHaveText('Red');
+  await expect(dialog.locator('.report-route-value')).toBeVisible();
+  await expect(dialog.locator('.report-safety-guidance')).toHaveText('Avoid touching the sharp material and keep others away.');
+  await expect(dialog.locator('.report-analysis-status')).not.toContainText(/\d+%/);
+  const description = dialog.getByLabel('Factual description');
+  await expect(description).toHaveValue('Hazardous litter near the curb.');
+  await description.fill('Sharp broken glass beside the curb.');
+  await dialog.getByRole('button', { name: 'Publish report' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('.map-notice')).toContainText('5 RP credited now; 15 RP pending after verification (20 RP total).');
+  await expect(page.locator('.report-sheet')).toBeHidden();
+  const marker = page.locator('.map-marker--highlighted');
+  await expect(marker).toBeVisible();
+  await expect(marker).toHaveAttribute('aria-label', /Newly published report\. Red route/);
+  const markerCenter = await marker.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const map = element.closest('.map-viewport')!.getBoundingClientRect();
+    return { x: box.x + box.width / 2 - map.x, y: box.y + box.height / 2 - map.y, width: map.width, height: map.height };
+  });
+  expect(markerCenter.x).toBeGreaterThan(markerCenter.width * 0.35);
+  expect(markerCenter.x).toBeLessThan(markerCenter.width * 0.65);
+  expect(markerCenter.y).toBeGreaterThan(markerCenter.height * 0.3);
+  expect(markerCenter.y).toBeLessThan(markerCenter.height * 0.7);
+  expect(apiState?.uploadRequests).toBe(1);
+  expect(apiState?.analysisRequests).toHaveLength(1);
+  expect(apiState?.analysisPolls).toBe(1);
+  expect(apiState?.publicationRequest).toEqual({
+    analysisId: '11111111-1111-4111-8111-111111111122',
+    description: 'Sharp broken glass beside the curb.',
+  });
+  expect((await captureState(page)).stopped).toBe(1);
+  expect(browserErrors).toEqual([]);
+});
+
+test('shows localized RETAKE guidance without a route or publication', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'de', async (token) => { apiState = await installReportApi(page, token, 'retake'); });
+  const dialog = await submitOneReportPhoto(page, 'de');
+  await expect(dialog.locator('.report-analysis-status')).toContainText('Neue Fotos sind erforderlich.');
+  await expect(dialog.locator('.report-retake-guidance')).toContainText('Nehmen Sie eine klare Nahaufnahme auf.');
+  await expect(dialog.locator('.report-route-value')).toBeHidden();
+  await expect(dialog.getByRole('button', { name: 'Meldung veröffentlichen' })).toBeHidden();
+  expect(apiState?.publicationRequest).toBeNull();
+});
+
+test('publishes an accepted report with German preview and reward copy', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'de', async (token) => { apiState = await installReportApi(page, token, 'accept-running', 'de'); });
+  const dialog = await submitOneReportPhoto(page, 'de');
+  await expect(dialog.locator('.report-assessment-reason')).toContainText('Das Foto zeigt sichtbaren Müll mit einer möglichen scharfen Gefahr.');
+  await expect(dialog.locator('.report-route-value')).toHaveText('Rot');
+  await expect(dialog.locator('.report-safety-guidance'))
+    .toHaveText('Berühren Sie das scharfe Material nicht und halten Sie andere fern.');
+  const description = dialog.getByLabel('Sachliche Beschreibung');
+  await expect(description).toHaveValue('Scharfe Glasscherben am Bordstein.');
+  await description.fill('Scharfe Glasscherben neben dem Bordstein.');
+  await dialog.getByRole('button', { name: 'Meldung veröffentlichen' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('.map-notice'))
+    .toContainText('Veröffentlicht. Jetzt 5 RP gutgeschrieben; 15 RP nach der Prüfung ausstehend (20 RP insgesamt).');
+  const marker = page.locator('.map-marker--highlighted');
+  await expect(marker).toHaveAttribute('aria-label', /Neue Meldung veröffentlicht\. Route Rot/);
+  expect(apiState?.publicationRequest).toEqual({
+    analysisId: '11111111-1111-4111-8111-111111111122',
+    description: 'Scharfe Glasscherben neben dem Bordstein.',
+  });
+});
+
+test('retries a technical analysis failure with the retained uploaded photo and a fresh operation key', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-analysis'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  await expect(dialog.locator('.report-analysis-status')).toContainText('The photo assessment took too long. Your photos are retained; try again.');
+  await dialog.getByRole('button', { name: 'Retry assessment with these photos' }).click();
+  await expect(dialog.locator('.report-safety-guidance')).toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.uploadRequests).toBe(1);
+  expect(apiState?.analysisRequests).toHaveLength(2);
+  expect(apiState?.analysisRequests[1].body.photoIds).toEqual(apiState?.analysisRequests[0].body.photoIds);
+  expect(apiState?.analysisRequests[1].operationKey).not.toBe(apiState?.analysisRequests[0].operationKey);
+});
+
+test('honors Retry-After before retrying a failed photo upload', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-upload'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  const retryButton = dialog.getByRole('button', { name: 'Retry photo upload' });
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await expect(retryButton).toBeDisabled();
+  await retryButton.dispatchEvent('click');
+  expect(apiState?.uploadRequests).toBe(1);
+  await expect(retryButton).toBeEnabled();
+  await retryButton.click();
+  await expect(dialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.uploadRequests).toBe(2);
+});
+
+test('honors Retry-After before retrying a failed JPEG upload', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-photo-content'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  const retryButton = dialog.getByRole('button', { name: 'Retry photo upload' });
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await expect(retryButton).toBeDisabled();
+  await retryButton.dispatchEvent('click');
+  expect(apiState?.uploadRequests).toBe(1);
+  expect(apiState?.photoUploadRequests).toBe(1);
+  await expect(retryButton).toBeEnabled();
+  await retryButton.click();
+  await expect(dialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.uploadRequests).toBe(1);
+  expect(apiState?.photoUploadRequests).toBe(2);
+});
+
+test('honors Retry-After before retrying a failed analysis', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-analysis'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  const retryButton = dialog.getByRole('button', { name: 'Retry assessment with these photos' });
+  const analyzeButton = dialog.getByRole('button', { name: 'Upload and assess photos' });
+  const locationButton = dialog.getByRole('button', { name: 'Refresh location' });
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await expect(retryButton).toBeDisabled();
+  await expect(analyzeButton).toBeDisabled();
+  await expect(locationButton).toBeDisabled();
+  await retryButton.dispatchEvent('click');
+  await analyzeButton.dispatchEvent('click');
+  expect(apiState?.analysisRequests).toHaveLength(1);
+  await expect(retryButton).toBeEnabled();
+  await expect(locationButton).toBeEnabled();
+  await locationButton.click();
+  await expect(dialog.locator('.photo-capture-location-status')).toContainText('Fresh location captured');
+  await retryButton.click();
+  await expect(dialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.analysisRequests).toHaveLength(2);
+  expect(apiState?.analysisRequests[1].operationKey).not.toBe(apiState?.analysisRequests[0].operationKey);
+});
+
+test('keeps Retry-After active after editing photos and reopening submission', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-analysis'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await dialog.getByRole('button', { name: 'Edit photos' }).click();
+  const camera = page.getByRole('dialog', { name: 'Capture report photos' });
+  await expect(camera).toBeVisible();
+  await camera.getByRole('button', { name: 'Continue with photos' }).click();
+  const reopenedDialog = page.getByRole('dialog', { name: 'Photos ready for the next step' });
+  await expect(reopenedDialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  const locationButton = reopenedDialog.getByRole('button', { name: 'Get fresh location' });
+  await expect(locationButton).toBeDisabled();
+  await locationButton.dispatchEvent('click');
+  expect(apiState?.analysisRequests).toHaveLength(1);
+  expect((await captureState(page)).locationRequests).toBe(1);
+  await expect(locationButton).toBeEnabled();
+  await locationButton.click();
+  await expect(reopenedDialog.locator('.photo-capture-location-status'))
+    .toContainText('Fresh location captured');
+  await reopenedDialog.getByRole('button', { name: 'Upload and assess photos' }).click();
+  await expect(reopenedDialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.analysisRequests).toHaveLength(2);
+});
+
+test('keeps Retry-After active after switching away from and back to Map', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-tab-switch'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await dialog.getByRole('button', { name: 'Discard photos and exit' }).click();
+  await page.getByRole('tab', { name: 'My Impact' }).click();
+  await page.getByRole('tab', { name: 'Map' }).click();
+  await page.locator('.report-button').click();
+  const camera = page.getByRole('dialog', { name: 'Capture report photos' });
+  await camera.getByRole('button', { name: 'Take photo', exact: true }).click();
+  await camera.getByRole('button', { name: 'Continue with photos' }).click();
+  const reopenedDialog = page.getByRole('dialog', { name: 'Photos ready for the next step' });
+  await expect(reopenedDialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  const locationButton = reopenedDialog.getByRole('button', { name: 'Get fresh location' });
+  await expect(locationButton).toBeDisabled();
+  await locationButton.dispatchEvent('click');
+  expect(apiState?.analysisRequests).toHaveLength(1);
+  expect((await captureState(page)).locationRequests).toBe(1);
+  await expect(locationButton).toBeEnabled();
+  await locationButton.click();
+  await expect(reopenedDialog.locator('.photo-capture-location-status'))
+    .toContainText('Fresh location captured');
+  await reopenedDialog.getByRole('button', { name: 'Upload and assess photos' }).click();
+  await expect(reopenedDialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.analysisRequests).toHaveLength(2);
+});
+
+test('keeps Retry-After active when an analysis response arrives after leaving Map', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => {
+    apiState = await installReportApi(page, token, 'retry-after-in-flight-tab-switch');
+  });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  await apiState?.waitForDelayedAnalysisRequest();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/impact$/);
+  const analysisResponse = page.waitForResponse((response) => response.url().endsWith('/api/ai/analyze-report'));
+  apiState?.releaseDelayedAnalysisResponse();
+  await analysisResponse;
+  await page.getByRole('tab', { name: 'Map' }).click();
+  await page.locator('.report-button').click();
+  const camera = page.getByRole('dialog', { name: 'Capture report photos' });
+  await camera.getByRole('button', { name: 'Take photo', exact: true }).click();
+  await camera.getByRole('button', { name: 'Continue with photos' }).click();
+  const reopenedDialog = page.getByRole('dialog', { name: 'Photos ready for the next step' });
+  await expect(reopenedDialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  const locationButton = reopenedDialog.getByRole('button', { name: 'Get fresh location' });
+  await expect(locationButton).toBeDisabled();
+  await locationButton.dispatchEvent('click');
+  expect(apiState?.analysisRequests).toHaveLength(1);
+  expect((await captureState(page)).locationRequests).toBe(1);
+  await expect(locationButton).toBeEnabled();
+  await locationButton.click();
+  await expect(reopenedDialog.locator('.photo-capture-location-status'))
+    .toContainText('Fresh location captured');
+  await reopenedDialog.getByRole('button', { name: 'Upload and assess photos' }).click();
+  await expect(reopenedDialog.locator('.report-safety-guidance'))
+    .toHaveText('Avoid touching the sharp material and keep others away.');
+  expect(apiState?.analysisRequests).toHaveLength(2);
+});
+
+test('honors Retry-After before retrying publication', async ({ page }) => {
+  await enableCameraHarness(page);
+  let apiState: Awaited<ReturnType<typeof installReportApi>> | undefined;
+  await signIn(page, 'en', async (token) => { apiState = await installReportApi(page, token, 'retry-after-publication'); });
+  const dialog = await submitOneReportPhoto(page, 'en');
+  const description = dialog.getByLabel('Factual description');
+  await description.fill('Sharp broken glass beside the curb.');
+  const retryButton = dialog.getByRole('button', { name: 'Retry publication' });
+  await dialog.getByRole('button', { name: 'Publish report' }).click();
+  await expect(dialog.locator('.report-analysis-status')).toHaveText('Please wait before retrying.');
+  await expect(retryButton).toBeDisabled();
+  await description.fill('Updated sharp glass location beside the curb.');
+  await retryButton.dispatchEvent('click');
+  expect(apiState?.publicationRequests).toBe(1);
+  await expect(retryButton).toBeEnabled();
+  await retryButton.click();
+  await expect(dialog).toBeHidden();
+  expect(apiState?.publicationRequests).toBe(2);
+  expect(apiState?.publicationOperationKeys[1]).not.toBe(apiState?.publicationOperationKeys[0]);
+  expect(apiState?.publicationRequest).toMatchObject({
+    description: 'Updated sharp glass location beside the curb.',
+  });
 });

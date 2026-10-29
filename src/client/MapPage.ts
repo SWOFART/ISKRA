@@ -1,4 +1,5 @@
-import { ReportDetailSchema, ReportListSchema, type ErrorCode, type Photo, type Point, type ReportSummary, type Route } from '../shared/contracts';
+import { POLICY, ReportDetailSchema, ReportListSchema, ReportSummarySchema,
+  type ErrorCode, type Photo, type Point, type ReportSummary, type Route } from '../shared/contracts';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { ApiClientError, createClientApi } from './api';
@@ -6,6 +7,7 @@ import { clientDesign, type SupportedLocale } from './designTokens';
 import { errorMessageKey, formatDateTime, formatNumber, type MessageKey, type MessageValues } from './i18n';
 import { cityViewport, clusterReports, viewportForReports, type GeoBounds } from './mapModel';
 import { renderPhotoCapture, type CapturedPhoto, type CaptureStage } from './PhotoCapture';
+import { renderReportSubmission, type ReportSubmissionView } from './ReportSubmission';
 import { renderReportSheet } from './ReportSheet';
 import {
   captureFreshCleanupLocation,
@@ -232,6 +234,8 @@ export function renderMapPage(
   let needsVerification = pageState.needsVerification;
   let includeResolved = pageState.includeResolved;
   let selectedReportId = pageState.selectedReportId;
+  let highlightedReportId: string | null = null;
+  let highlightTimer: ReturnType<typeof setTimeout> | undefined;
   let expandedClusterReportIds = pageState.expandedClusterReportIds;
   const needsVerificationButton = makeButton(t('map.filter.needsVerification'), 'map-filter-button');
   needsVerificationButton.setAttribute('aria-pressed', String(needsVerification));
@@ -314,6 +318,7 @@ export function renderMapPage(
   appendElements(page, mapArea, listPanel);
 
   let reports: ReportSummary[] = [];
+  let highlightedReport: ReportSummary | null = null;
   let externallyOpenedReport: ReportSummary | null = null;
   let detailLoadGeneration = 0;
   const reportSheet = renderReportSheet({
@@ -353,11 +358,67 @@ export function renderMapPage(
   };
   const photoCapture = renderPhotoCapture({
     t,
-    onContinue: (photos, stage) => showCaptureHandoff(photos, stage, captureTarget),
+    onContinue: (photos, stage) => {
+      if (stage === 'report') reportSubmission.open(photos);
+      else showCaptureHandoff(photos, stage, captureTarget);
+    },
     onExit: () => reportButton.focus(),
     onVisibilityChange: setCaptureModalInert,
   });
   page.appendChild(photoCapture.element);
+  const reportSubmission = renderReportSubmission({
+    api,
+    t,
+    locale,
+    onEditPhotos: () => photoCapture.open('report'),
+    onDiscard: () => photoCapture.discard(),
+    onVisibilityChange: setCaptureModalInert,
+    onPublished: (result) => {
+      const published = result.data.report;
+      const report = ReportSummarySchema.parse({
+        id: published.id,
+        route: published.route,
+        status: published.status,
+        location: published.location,
+        coverPhotoId: published.coverPhotoId,
+        description: published.description,
+        existenceYesCount: published.existenceYesCount,
+        resolutionYesCount: published.resolutionYesCount,
+        existenceVerifiedAt: published.existenceVerifiedAt,
+        lastExistenceConfirmedAt: published.lastExistenceConfirmedAt,
+        version: published.version,
+        updatedAt: published.updatedAt,
+        isDemo: published.isDemo,
+      });
+      highlightedReport = report;
+      reports = [report, ...reports.filter(({ id }) => id !== report.id)];
+      highlightedReportId = report.id;
+      selectedReportId = null;
+      pageState.selectedReportId = null;
+      expandedClusterReportIds = null;
+      pageState.expandedClusterReportIds = null;
+      reportSheet.dismiss();
+      mapNotice.textContent = t(result.data.rpAwarded === POLICY.reporterInitialRp
+        ? 'capture.publishedReward' : 'capture.publishedReplay', {
+        credited: POLICY.reporterInitialRp,
+        total: POLICY.reporterTotalRp,
+        pending: POLICY.reporterFinalRp,
+      });
+      if (result.provenance.mode === 'fixture') mapNotice.textContent += ` ${result.provenance.label}`;
+      mapNotice.hidden = false;
+      photoCapture.discard();
+      fitMapToReports([report]);
+      renderReports();
+      if (highlightTimer !== undefined) clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => {
+        if (highlightedReportId !== report.id) return;
+        highlightedReportId = null;
+        highlightTimer = undefined;
+        renderReports();
+      }, 8000);
+    },
+  });
+  page.appendChild(reportSubmission.element);
 
   const captureHandoff = makeElement('section', 'photo-capture-handoff');
   captureHandoff.hidden = true;
@@ -595,17 +656,24 @@ export function renderMapPage(
   }
 
   function renderReports(): void {
-    const visibleReports = reports.filter((report) => report.id === selectedReportId
+    const visibleReports = reports.filter((report) => report.id === selectedReportId || report.id === highlightedReportId
       || (selectedRoutes.has(report.route) && (includeResolved || report.status !== 'RESOLVED')));
     const mapWidth = mapViewport.clientWidth || 1000;
     const mapHeight = mapViewport.clientHeight || 700;
-    const clusters = mapInstance && mapReady
-      ? clusterReports(visibleReports, cityViewport(clientDesign.map.center), 54, mapWidth, mapHeight,
-        (location) => {
-          if (!mapInstance?.getBounds().contains([location.lng, location.lat])) return null;
-          const point = mapInstance.project([location.lng, location.lat]);
-          return { x: point.x, y: point.y };
-        })
+    const projectLocation = mapInstance && mapReady
+      ? (location: Point) => {
+        if (!mapInstance?.getBounds().contains([location.lng, location.lat])) return null;
+        const point = mapInstance.project([location.lng, location.lat]);
+        return { x: point.x, y: point.y };
+      }
+      : undefined;
+    const clusters = projectLocation
+      ? [
+        ...clusterReports(visibleReports.filter(({ id }) => id !== highlightedReportId),
+          cityViewport(clientDesign.map.center), 54, mapWidth, mapHeight, projectLocation),
+        ...clusterReports(visibleReports.filter(({ id }) => id === highlightedReportId),
+          cityViewport(clientDesign.map.center), 54, mapWidth, mapHeight, projectLocation),
+      ]
       : [];
     markerLayer.replaceChildren();
     reportList.replaceChildren();
@@ -616,9 +684,10 @@ export function renderMapPage(
       const mixedRouteClass = clusterRoutes.length === 1
         ? `map-marker--${clusterRoutes[0].toLowerCase()}`
         : 'map-marker--mixed';
+      const highlighted = cluster.reports.some(({ id }) => id === highlightedReportId);
       const marker = makeButton(
         cluster.reports.length > 1 ? formatNumber(locale, cluster.reports.length) : '•',
-        `map-marker ${cluster.reports.length > 1 ? 'map-marker--cluster' : ''} ${mixedRouteClass}`,
+        `map-marker ${cluster.reports.length > 1 ? 'map-marker--cluster' : ''} ${mixedRouteClass}${highlighted ? ' map-marker--highlighted' : ''}`,
       );
       const marginX = (19 / mapWidth) * 100;
       const marginY = (19 / mapHeight) * 100;
@@ -628,7 +697,7 @@ export function renderMapPage(
       marker.style.top = `${top}%`;
       marker.setAttribute('aria-label', cluster.reports.length > 1
         ? t('map.clusterLabel', { count: cluster.reports.length, routes: routeSummary })
-        : t('map.markerLabel', {
+        : t(highlighted ? 'map.newlyPublishedMarker' : 'map.markerLabel', {
           route: routeLabel(cluster.reports[0].route, t),
           status: statusLabel(cluster.reports[0], t),
         }));
@@ -771,6 +840,9 @@ export function renderMapPage(
         else nextReports.set(externallyOpenedReport.id, externallyOpenedReport);
       }
       reports = [...nextReports.values()];
+      if (highlightedReport && !nextReports.has(highlightedReport.id)) {
+        reports = [highlightedReport, ...reports];
+      }
       if (!reports.some(({ id }) => id === selectedReportId)) {
         selectedReportId = null;
         pageState.selectedReportId = null;
@@ -923,6 +995,8 @@ export function renderMapPage(
     mapInstance = null;
     mapReady = false;
     reportSheet.dispose();
+    reportSubmission.dispose();
+    if (highlightTimer !== undefined) clearTimeout(highlightTimer);
     handoffPhotos = [];
     handoffLocationBinding = null;
     handoffTarget = undefined;

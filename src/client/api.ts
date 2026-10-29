@@ -5,11 +5,13 @@ import {
   PublishRequestSchema,
   PublicReportDetailSchema,
   ReportListSchema,
+  UploadResultSchema,
+  UploadTicketSchema,
   ReportSummarySchema,
   UuidSchema,
   type ErrorCode,
 } from '../shared/contracts';
-import type { Schema } from '../shared/schema';
+import type { Infer, Schema } from '../shared/schema';
 import type { OperationKeyScope } from './operationKey';
 
 export const DEVELOPMENT_FIXTURE_LABEL = 'DEVELOPMENT FIXTURE — NOT LIVE DATA';
@@ -82,6 +84,7 @@ export interface ApiRequest<T> {
   auth?: ApiAuth;
   body?: unknown;
   bodySchema?: Schema<unknown>;
+  rawBody?: Blob;
   operation?: OperationKeyScope;
   requiresOperationKey?: boolean;
   acceptedStatuses?: readonly number[];
@@ -290,10 +293,16 @@ async function parseP0Fixture(request: FixtureRequest): Promise<FixtureResponse>
     return { status: 201, body: fixtures.cleanupPending };
   }
   if (request.method === 'POST' && path === '/uploads') {
-    return { status: 201, body: fixtures.uploadTicket };
+    const photoId = crypto.randomUUID();
+    return { status: 201, body: {
+      ...fixtures.uploadTicket,
+      photoId,
+      uploadUrl: `https://iskra.invalid/api/uploads/${photoId}/content?ticket=synthetic`,
+    } };
   }
   if (request.method === 'PUT' && /^\/uploads\/[0-9a-f-]+\/content$/i.test(path)) {
-    return { status: 200, body: fixtures.uploadResult };
+    const photoId = path.split('/')[2];
+    return { status: 201, body: { ...fixtures.uploadResult, photoId } };
   }
   if (request.method === 'POST' && path === '/ai/analyze-report') {
     return { status: 200, body: fixtures.reportAccepted };
@@ -348,10 +357,18 @@ export function createClientApi(options: CreateClientApiOptions) {
     if (input.body !== undefined && !input.bodySchema) {
       throw new TypeError('JSON request bodies require a shared request schema.');
     }
+    if (input.rawBody && (input.body !== undefined || input.bodySchema || method !== 'PUT')) {
+      throw new TypeError('Raw request bodies are only supported for schema-validated upload PUTs.');
+    }
 
-    const body = input.bodySchema ? input.bodySchema.parse(input.body) : undefined;
+    const body = input.rawBody ?? (input.bodySchema ? input.bodySchema.parse(input.body) : undefined);
     const headers = new Headers({ Accept: 'application/json' });
-    if (body !== undefined) headers.set('Content-Type', 'application/json');
+    if (input.rawBody) {
+      if (input.rawBody.type !== 'image/jpeg' || input.rawBody.size < 1) {
+        throw new TypeError('Raw upload bodies must be non-empty JPEG images.');
+      }
+      headers.set('Content-Type', 'image/jpeg');
+    } else if (body !== undefined) headers.set('Content-Type', 'application/json');
     if (input.operation) headers.set('Idempotency-Key', UuidSchema.parse(input.operation.key));
 
     if (mode === 'fixture') {
@@ -391,7 +408,7 @@ export function createClientApi(options: CreateClientApiOptions) {
     const init: RequestInit = {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: input.rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
       signal: input.signal,
     };
     const url = `${apiBasePath}${path}`;
@@ -441,5 +458,36 @@ export function createClientApi(options: CreateClientApiOptions) {
     return parseSuccess(response.status, payload, input.responseSchema, provenance);
   }
 
-  return { request, mode };
+  async function uploadPhoto(ticketInput: unknown, photo: Blob): Promise<ApiResult<Infer<typeof UploadResultSchema>>> {
+    const ticket = UploadTicketSchema.parse(ticketInput);
+    if (photo.type !== 'image/jpeg' || photo.size < 1 || photo.size > ticket.maxBytes) {
+      throw new TypeError('Photo does not match the upload ticket size and JPEG requirements.');
+    }
+    let uploadUrl: URL;
+    try {
+      uploadUrl = new URL(ticket.uploadUrl);
+    } catch (cause) {
+      throw invalidResponse(undefined, cause);
+    }
+    const expectedPath = `${apiBasePath}/uploads/${ticket.photoId}/content`;
+    if (uploadUrl.protocol !== 'https:' || uploadUrl.username || uploadUrl.password || uploadUrl.hash
+      || uploadUrl.pathname !== expectedPath || uploadUrl.searchParams.size !== 1
+      || uploadUrl.searchParams.getAll('ticket').length !== 1 || !uploadUrl.searchParams.get('ticket')) {
+      throw invalidResponse(undefined, new TypeError('Upload URL does not match the expected same-origin ticket.'));
+    }
+    const path = `${uploadUrl.pathname.slice(apiBasePath.length)}${uploadUrl.search}`;
+    const result = await request({
+      path,
+      method: 'PUT',
+      rawBody: photo,
+      responseSchema: UploadResultSchema,
+      acceptedStatuses: [200, 201],
+    });
+    if (result.data.photoId !== ticket.photoId) {
+      throw invalidResponse(result.status, new TypeError('Upload response does not match its ticket.'));
+    }
+    return result;
+  }
+
+  return { request, uploadPhoto, mode };
 }
