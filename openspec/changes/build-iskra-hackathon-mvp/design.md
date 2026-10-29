@@ -240,6 +240,8 @@ On 2026-10-29, the user explicitly authorized serial implementation of the B-own
 
 On 2026-10-29, after PR #143 was merged, the user explicitly ordered issues #61 and #62 to be combined and implemented on one A-owned UI branch. This authorizes only these two serially implemented client tasks despite missing genuine M3 evidence and the full 9.1 admission checkpoint; they depend on #60, #55 and #47, which are integrated. It does not mark 8.1, genuine M3 or 9.1 complete, establish A/C capacity, admit #57/#59 or any other P1 work, authorize deployment/public release, or unfreeze shared contracts. Keep the canonical task checkboxes pending until the integrated outcomes are verified and B updates `tasks.md`.
 
+On 2026-10-29, after staging Rewards returned HTTP 500, the user directed the #61 catalog, balance and voucher UI to use a browser-local mock without Rewards API dependencies. It is guest-accessible, starts with 45 demo RP, uses the illustrative 5/15/40 RP catalog, and stores mock receipts only in this browser. The local state does not sync to an account and has no real value. Existing B-owned Rewards endpoints remain separate; this UI override does not verify or activate the staging database, mark M3 complete, or authorize deployment/public release.
+
 ## Acceptance Traceability
 
 | Plan requirement | Spec / owner | Evidence to attach at gate |
