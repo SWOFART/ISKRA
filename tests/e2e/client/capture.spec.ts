@@ -96,6 +96,14 @@ async function signIn(
     iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600,
     firebase: { sign_in_provider: 'password' },
   })}.local-fixture-signature`;
+  await page.route('**/api/me/notifications*', async (route) => {
+    expect(route.request().headers().authorization).toMatch(/^Bearer .+/);
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], nextCursor: null }),
+    });
+  });
   await page.route('https://identitytoolkit.googleapis.com/**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(route.request().url().includes('accounts:lookup')
@@ -182,10 +190,6 @@ async function installReportApi(
     expect(route.request().headers().authorization).toBe(`Bearer ${token}`);
   };
 
-  await page.route('**/api/me/notifications*', async (route) => {
-    checkAuth(route);
-    return response(route, 200, { items: [], nextCursor: null });
-  });
   await page.route('**/api/reports*', async (route) => {
     checkAuth(route);
     if (route.request().method() === 'GET') return response(route, 200, { items: [], nextCursor: null });
